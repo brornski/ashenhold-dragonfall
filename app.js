@@ -31,9 +31,10 @@
     treeSkillPoints: $("treeSkillPoints"), levelUp: $("levelUpBanner"), levelUpKicker: $("levelUpKicker"),
     weaponRack: $("weaponRack"), weaponHudName: $("weaponHudName"), treeWeaponName: $("treeWeaponName"),
     levelUpTitle: $("levelUpTitle"), levelUpCopy: $("levelUpCopy"), interactionText: $("interactionText"),
-    waveHud: $("waveHud"), waveNumber: $("waveNumber"), waveProgress: $("waveProgressBar"), waveEnemyCount: $("waveEnemyCount"),
-    sideQuestTitle: $("sideQuestTitle"), sideQuestObjective: $("sideQuestObjective"), finalWave: $("finalWave"),
-    realmLabel: $("realmLabel"), combatText: $("combatText"), crosshair: $("crosshair"), biomeTag: $("biomeTag")
+    strongholdHud: $("strongholdHud"), strongholdNumber: $("strongholdNumber"), strongholdProgress: $("strongholdProgressBar"), strongholdStatus: $("strongholdStatus"),
+    sideQuestTitle: $("sideQuestTitle"), sideQuestObjective: $("sideQuestObjective"), finalStrongholds: $("finalStrongholds"),
+    realmLabel: $("realmLabel"), combatText: $("combatText"), crosshair: $("crosshair"), biomeTag: $("biomeTag"),
+    titleRealmName: $("titleRealmName"), titleSeed: $("titleSeed"), titleStrongholds: $("titleStrongholds"), titleWardenLevel: $("titleWardenLevel")
   };
 
   if (!window.THREE) {
@@ -55,7 +56,7 @@
   const persistenceDisabled = testMode && !launchParams.has("test-save");
   const REALM_KEY = "ashenhold-realm-v1";
   const RUN_SAVE_KEY = "ashenhold-active-run-v1";
-  const WORLD_LAYOUT_VERSION = 5;
+  const WORLD_LAYOUT_VERSION = 6;
   const BIOMES = {
     snowy: { name: "FROSTBOUND WILDS", textureId: "snow", relief: 1.05, base: 2.6, fog: 0x869ca6, fogDensity: .00195, ground: 0x718087, cliff: 0x7d898d, grass: 0x50625c, grassStrength: .42, frost: 0xc9d4d5, frostStart: 16, water: 0x315663, waterLevel: -3.2, waterOpacity: .62, sky: 0xb2c5ce, sun: 0xffead2, sunIntensity: 1.22, hemi: 0xa9bdc4, exposure: 1.1, skyZenith: 0x6b87a0, skyHorizon: 0xdfe9ec, skyGlow: 0xdceef4, stoneTint: 0xcfdde2, particleSize: 1.4, particleOpacity: .5, particleFall: .55, particleCount: 1 },
     jungle: { name: "VERDANT RUINS", textureId: "jungle", relief: .72, base: 3.2, fog: 0x1b352c, fogDensity: .00305, ground: 0x344a32, cliff: 0x465448, grass: 0x284b2d, grassStrength: 1.0, frost: 0x7a8a76, frostStart: 125, water: 0x1e514c, waterLevel: -2.4, waterOpacity: .72, sky: 0x71968d, sun: 0xffd5a7, sunIntensity: 1.12, hemi: 0x759a82, exposure: 1.02, skyZenith: 0x1d3a33, skyHorizon: 0x7fae8f, skyGlow: 0xe8c87a, stoneTint: 0x718a64, particleSize: 1.05, particleOpacity: .38, particleFall: .7, particleCount: .9 },
@@ -211,12 +212,14 @@
   let platforms = [];
   let verticalRouteReports = [];
   let biomePropsReport = { kind: "none", total: 0, byKind: {} };
+  let importedModelInstances = 0;
   let groundEnemies = [];
   let experienceRunes = [];
   let chests = [];
   let dragonSouls = [];
   let runesCollected = 0;
   let strongholds = [];
+  let worldSpawnFailures = 0;
   let outpostsDiscovered = 0;
   let runeHinted = false;
   const visualAssets = {};
@@ -249,6 +252,10 @@
 
   function freshMastery() {
     return WEAPON_IDS.reduce((result, id) => { result[id] = { level: 1, xp: 0 }; return result; }, {});
+  }
+
+  function freshRelicBonuses() {
+    return { damage: 0, health: 0, regen: 0, sprint: 0, stamina: 0, critDamage: 0 };
   }
 
   const player = {
@@ -295,6 +302,10 @@
     moving: false,
     sprinting: false,
     superSprinting: false,
+    sprintLatch: false,
+    superSprintLatch: false,
+    sprintExhausted: false,
+    stormstrideTimer: 0,
     jumpTime: 0,
     attackVariant: 0,
     worldSplitterAttack: -1,
@@ -310,6 +321,7 @@
     runXp: 0,
     runSkillPoints: 0,
     runSkills: {},
+    relicBonuses: freshRelicBonuses(),
     modelRoot: null,
     modelMixer: null,
     modelActions: {},
@@ -539,6 +551,17 @@
       ]
     },
     {
+      id: "stride", title: "THE STRIDE", kicker: "SPRINT & STORM MOTION", rune: ">",
+      copy: "Break the horizon with escalating speed, endurance, and lightning.", nodes: [
+        defineSkill("gale_pace", "GALE PACE", "+15% sprint speed and +10% super-sprint speed per rank.", { maxRank: 3 }),
+        defineSkill("tempest_pace", "TEMPEST PACE", "+25% super-sprint speed per rank.", { maxRank: 3, requiresRanks: { gale_pace: 3 }, requiredLevel: 6 }),
+        defineSkill("marathon", "MARATHON", "Reduce sprint and super-sprint stamina drain by 25% per rank.", { maxRank: 2 }),
+        defineSkill("second_lungs", "SECOND LUNGS", "+30% stamina regeneration while sprinting per rank.", { maxRank: 2, requiresRanks: { marathon: 1 } }),
+        defineSkill("stormlaunch", "STORMLAUNCH", "Engaging super sprint releases a damaging knockback shockwave.", { requiresRanks: { tempest_pace: 2 }, cost: 2 }),
+        defineSkill("stormstride", "STORMSTRIDE", "+25% super-sprint speed and leave a damaging lightning trail.", { requiresAll: ["stormlaunch"], requiresRanks: { tempest_pace: 3 }, requiredLevel: 12, cost: 3 })
+      ]
+    },
+    {
       id: "run_offense", title: "RUN: FURY", kicker: "TEMPORARY CONSTELLATION", rune: "+", scope: "run",
       copy: "Power that lasts until victory or death.", nodes: [
         defineSkill("run_damage", "BLOODSHARP", "+6% damage per rank this run.", { scope: "run", maxRank: 3 }),
@@ -553,7 +576,7 @@
         defineSkill("run_vigor", "BORROWED VIGOR", "+15 maximum health per rank this run.", { scope: "run", maxRank: 3 }),
         defineSkill("run_endurance", "DEEP RESERVE", "+12 maximum stamina per rank this run.", { scope: "run", maxRank: 3, requiresRanks: { run_vigor: 2 } }),
         defineSkill("run_guard", "REALM GUARD", "Take 5% less damage per rank this run.", { scope: "run", maxRank: 2, requiresAny: ["run_vigor", "run_endurance"], cost: 2 }),
-        defineSkill("run_rebirth", "PHOENIX OATH", "Second Wind refreshes at the next wave.", { scope: "run", requiresRanks: { run_guard: 2 }, cost: 3 })
+        defineSkill("run_rebirth", "PHOENIX OATH", "Second Wind refreshes after clearing a stronghold.", { scope: "run", requiresRanks: { run_guard: 2 }, cost: 3 })
       ]
     },
     {
@@ -586,15 +609,22 @@
     return Math.max(0, Math.floor(Number(source[id]) || 0));
   }
   function hasSkill(id) { return skillRank(id) > 0; }
-  function maxHealth() { return 100 + (player.level - 1) * 4 + skillRank("vitality") * 12 + skillRank("bastion") * 10 + skillRank("run_vigor") * 15; }
-  function maxStamina() { return 100 + (player.level - 1) * 2 + skillRank("endurance") * 10 + skillRank("run_endurance") * 12; }
+  function relicBonus(id) { return Math.max(0, Number(player.relicBonuses && player.relicBonuses[id]) || 0); }
+  function maxHealth() {
+    const base = 100 + (player.level - 1) * 4 + skillRank("vitality") * 12 + skillRank("bastion") * 10 + skillRank("run_vigor") * 15;
+    return Math.round(base * (1 + relicBonus("health") / 100));
+  }
+  function maxStamina() {
+    const base = 100 + (player.level - 1) * 2 + skillRank("endurance") * 10 + skillRank("run_endurance") * 12;
+    return Math.round(base * (1 + relicBonus("stamina") / 100));
+  }
   function weaponDamageMultiplier(id) {
     const focus = id === "blade" ? skillRank("blade_focus") : id === "bow" ? skillRank("marksman") : id === "axe" ? skillRank("axe_focus") : skillRank("staff_focus");
     const arsenal = hasSkill("arsenal_master") ? WEAPON_IDS.reduce((sum, weaponId) => sum + masteryFor(weaponId).level - 1, 0) * .006 : 0;
     const combo = elapsed < player.comboExpires ? Math.min(player.comboHits, 5) * skillRank("battle_focus") * .012 : 0;
     const rampage = player.rampageTime > 0 && hasSkill("run_rampage") ? .16 : 0;
     const bloodPact = id === "axe" && hasSkill("blood_pact") && player.health < maxHealth() * .4 ? .28 : 0;
-    return 1 + (masteryFor(id).level - 1) * .055 + skillRank("edge") * .06 + focus * .07 + skillRank("run_damage") * .06 + skillRank("run_slayer") * .05 + arsenal + combo + rampage + bloodPact;
+    return (1 + (masteryFor(id).level - 1) * .055 + skillRank("edge") * .06 + focus * .07 + skillRank("run_damage") * .06 + skillRank("run_slayer") * .05 + arsenal + combo + rampage + bloodPact) * (1 + relicBonus("damage") / 100);
   }
   function attackSpeedMultiplier(id) {
     const speed = skillRank("fury") * .06 + skillRank("run_haste") * .05 + (id === "bow" ? skillRank("quickdraw") * .06 : 0) + (id === "blade" ? skillRank("blade_dance") * .04 : 0);
@@ -618,7 +648,7 @@
       const saved = JSON.parse(window.localStorage.getItem(SAVE_KEY) || "null");
       if (!saved || typeof saved !== "object") return;
       const saveVersion = Math.floor(Number(saved.version) || 0);
-      if (saveVersion > 5) {
+      if (saveVersion > 6) {
         console.warn("Progression save uses a newer schema (v" + saveVersion + "); leaving it untouched");
         return;
       }
@@ -650,6 +680,12 @@
           player.skills[id] = clamp(migratedRank, 0, node.maxRank || 1);
         });
       }
+      player.relicBonuses = freshRelicBonuses();
+      if (saved.relicBonuses && typeof saved.relicBonuses === "object") {
+        Object.keys(player.relicBonuses).forEach((id) => {
+          player.relicBonuses[id] = clamp(Number(saved.relicBonuses[id]) || 0, 0, 500);
+        });
+      }
     } catch (error) {
       console.warn("Progression save could not be loaded", error);
     }
@@ -665,11 +701,12 @@
     try {
       const activeMastery = masteryFor();
       window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-        version: 5,
+        version: 6,
         level: player.level, xp: player.xp, skillPoints: player.skillPoints,
         prestige: player.prestige, realmDepth: player.realmDepth,
         activeWeapon: player.activeWeapon, mastery: player.mastery,
-        weaponLevel: activeMastery.level, weaponXp: activeMastery.xp, skills: player.skills
+        weaponLevel: activeMastery.level, weaponXp: activeMastery.xp, skills: player.skills,
+        relicBonuses: player.relicBonuses
       }));
     } catch (error) {
       console.warn("Progression save could not be written", error);
@@ -698,6 +735,10 @@
         chests: chests.filter((chest) => chest.opened).map((chest) => chest.id),
         deadDragons: dragons.filter((dragon) => dragon.dead).map((dragon) => dragon.name),
         strongholds: strongholds.filter((stronghold) => stronghold.cleared).map((stronghold) => stronghold.id),
+        handledStrongholdMembers: groundEnemies.filter((enemy) => enemy.tamed && enemy.spawnKey).map((enemy) => enemy.spawnKey),
+        companions: groundEnemies.filter((enemy) => enemy.tamed && !enemy.dead).slice(0, 2).map((enemy) => ({
+          kind: enemy.kind, name: enemy.originalName || enemy.name.replace(/^BONDED\s+/, ""), health: enemy.health
+        })),
         rngState: encounterRng.state
       }
     };
@@ -730,7 +771,10 @@
 
   function applySavedStrongholds(saved) {
     const clearedIds = saved && saved.world && Array.isArray(saved.world.strongholds) ? saved.world.strongholds : [];
-    strongholds.forEach((stronghold) => { stronghold.cleared = clearedIds.indexOf(stronghold.id) !== -1; });
+    strongholds.forEach((stronghold) => {
+      stronghold.cleared = clearedIds.indexOf(stronghold.id) !== -1;
+      updateStrongholdMarker(stronghold);
+    });
   }
 
   function restoreActiveRun(saved) {
@@ -795,6 +839,17 @@
     });
     if (bossSpawned && questStage >= 2 && !dragons.some((dragon) => dragon.boss)) spawnBoss(true);
     applySavedStrongholds(saved);
+    const savedCompanions = Array.isArray(saved.world.companions) ? saved.world.companions.slice(0, 2) : [];
+    savedCompanions.forEach((companion, index) => {
+      if (companion.kind !== "warg" && companion.kind !== "biomeLight") return;
+      const angle = player.root.rotation.y + (index ? 1.1 : -1.1);
+      const x = clamp(player.root.position.x + Math.sin(angle) * 4, -HALF_WORLD, HALF_WORLD);
+      const z = clamp(player.root.position.z + Math.cos(angle) * 4, -HALF_WORLD, HALF_WORLD);
+      const enemy = createGroundEnemy(companion.kind, x, z, ambientDifficulty());
+      enemy.originalName = typeof companion.name === "string" ? companion.name.slice(0, 80) : enemy.name;
+      enemy.health = clamp(Number(companion.health) || enemy.maxHealth * .6, 1, enemy.maxHealth);
+      tameEnemy(enemy, true, true);
+    });
     const savedRngState = Number(saved.world.rngState) || (saved.director ? Number(saved.director.rngState) : 0);
     encounterRng.state = savedRngState ? savedRngState >>> 0 : ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0;
     activeRunId = saved.runId || activeRunId;
@@ -1029,6 +1084,7 @@
     player.activeWeapon = "blade";
     player.mastery = freshMastery();
     player.skills = {};
+    player.relicBonuses = freshRelicBonuses();
     equipWeapon("blade", true);
     player.health = maxHealth();
     player.stamina = maxStamina();
@@ -1305,6 +1361,7 @@
         lightpost: graveyard + "lightpost-single.glb"
       });
     }
+    visualAssets.modelPaths = Object.assign({}, modelPaths);
     const loader = new THREE.GLTFLoader();
     const entries = Object.entries(modelPaths);
     const loaded = await Promise.allSettled(entries.map((entry) => loader.loadAsync(entry[1])));
@@ -1354,6 +1411,10 @@
       resize();
       updateCamera(1, true);
       await delay(120);
+      if (ui.titleRealmName) ui.titleRealmName.textContent = biome.name;
+      if (ui.titleSeed) ui.titleSeed.textContent = String(realm.seed);
+      if (ui.titleStrongholds) ui.titleStrongholds.textContent = String(strongholds.length);
+      if (ui.titleWardenLevel) ui.titleWardenLevel.textContent = String(player.level);
       state = "title";
       game.dataset.state = state;
       if (pendingRunState && ui.enter) ui.enter.querySelector("span").textContent = "CONTINUE SAVED RUN";
@@ -1970,6 +2031,7 @@
       meshIndex += 1;
     });
     scene.add(root);
+    importedModelInstances += 1;
     if (collider) addCollider(
       x, z, collider.hx, collider.hz, rotation || 0,
       groundY + (collider.minY || 0), groundY + (collider.maxY || collider.height || 12)
@@ -2011,6 +2073,7 @@
       object.receiveShadow = true;
     });
     scene.add(root);
+    importedModelInstances += 1;
     return { root, baseY };
   }
 
@@ -2027,7 +2090,7 @@
     const minY = baseY - 1;
     const maxY = baseY + Math.min(height, 6);
     const center = poiLocalToWorld(x, z, rotation, offsetX || 0, offsetZ || 0);
-    const gap = clamp(doorGap || 1.8, 0, Math.max(0, halfX * 2 - 1.2));
+    const gap = clamp(Math.max(2.4, doorGap || 2.6), 0, Math.max(0, halfX * 2 - 1.2));
     const segments = [
       { lx: 0, lz: -halfZ + thickness / 2, hx: halfX, hz: thickness / 2 },
       { lx: -halfX + thickness / 2, lz: 0, hx: thickness / 2, hz: halfZ },
@@ -2481,6 +2544,33 @@
     return mesh;
   }
 
+  function createStrongholdMarker(stronghold) {
+    const material = new THREE.MeshBasicMaterial({ color: 0xe26b3f, transparent: true, opacity: .42, side: THREE.DoubleSide, depthWrite: false });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(2.15, 2.28, 36), material);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(stronghold.x, surfaceHeightAt(stronghold.x, stronghold.z, 999) + .06, stronghold.z);
+    scene.add(ring);
+    stronghold.marker = ring;
+    stronghold.markerMaterial = material;
+  }
+
+  function decorateStrongholdSite(stronghold, salt) {
+    const models = visualAssets.models || {};
+    const choices = stronghold.kind === "camp" ? ["crateBig", "weaponrack", "tent"]
+      : stronghold.kind === "ruin" || stronghold.kind === "shrine" || stronghold.kind === "graveyard" ? ["dngColumn", "statueColumnDamaged", "crateOpen"]
+      : ["flagRed", "bannerRed", "crateBig", "weaponrack"];
+    const available = choices.filter((key) => models[key]);
+    if (!available.length) return;
+    const count = isCoarse ? 1 : stronghold.kind === "keep" || stronghold.kind === "fort" ? 4 : 2;
+    for (let index = 0; index < count; index += 1) {
+      const key = available[Math.floor(seeded(salt + 90 + index * 5) * available.length)];
+      const angle = seeded(salt + 91 + index * 5) * Math.PI * 2;
+      const radius = 3.8 + seeded(salt + 92 + index * 5) * 3.4;
+      const scale = key.indexOf("dng") === 0 ? POI_SCALES.dungeon : key.indexOf("statue") === 0 ? POI_SCALES.nature : key.indexOf("banner") === 0 ? POI_SCALES.town : POI_SCALES.medieval;
+      placePackModel(key, stronghold.x + Math.cos(angle) * radius, stronghold.z + Math.sin(angle) * radius, scale, seeded(salt + 93 + index * 5) * Math.PI * 2, {});
+    }
+  }
+
   // Strongholds are world gen: every fort, settlement, ascent summit and the keep registers once,
   // with seeded garrison spots ringed around its center (extra light/golem slots cover level scaling).
   function registerStronghold(id, name, kind, x, z) {
@@ -2495,6 +2585,7 @@
     for (let i = 0; i < base.light + 4; i += 1) plan.push("biomeLight");
     const ring = STRONGHOLD_RINGS[kind] || STRONGHOLD_RINGS.hamlet;
     plan.forEach((type, index) => {
+      let placed = false;
       for (let attempt = 0; attempt < 6; attempt += 1) {
         const angle = seeded(salt + index * 7 + attempt * 37 + 1) * Math.PI * 2;
         const distance = ring[0] + seeded(salt + index * 7 + attempt * 37 + 2) * (ring[1] - ring[0]);
@@ -2505,10 +2596,14 @@
         if (Math.abs(terrainHeight(gx + 1.5, gz) - gy) + Math.abs(terrainHeight(gx, gz + 1.5) - gy) > .9) continue;
         if (hitsCollider(gx, gz, .9, gy, gy + 3.4)) continue;
         stronghold.spots.push({ type, x: gx, z: gz, roll: seeded(salt + index * 7 + attempt * 37 + 3) });
+        placed = true;
         break;
       }
+      if (!placed) worldSpawnFailures += 1;
     });
     strongholds.push(stronghold);
+    createStrongholdMarker(stronghold);
+    decorateStrongholdSite(stronghold, salt);
     return stronghold;
   }
 
@@ -2890,7 +2985,10 @@
       id: "chest-poi-" + index, name: spot.name, xp: spot.xp, x: spot.x, z: spot.z
     })));
     const bandMaterial = new THREE.MeshStandardMaterial({ color: 0x2e3436, roughness: .58, metalness: .7, envMapIntensity: .35 });
+    const powerTypes = ["damage", "health", "regen", "sprint", "stamina", "critDamage"];
     definitions.forEach((definition, index) => {
+      const powerType = powerTypes[Math.floor(seeded(worldLayout.salt + 9300 + index * 17) * powerTypes.length)];
+      const powerAmount = 1 + Math.floor(seeded(worldLayout.salt + 9301 + index * 17) * 3);
       const root = new THREE.Group();
       root.name = definition.name;
       const bodyMaterial = woodMaterial.clone();
@@ -2917,7 +3015,8 @@
       scene.add(root);
       chests.push({
         id: definition.id, name: definition.name, xp: definition.xp,
-        root, lid, lockMaterial, marker, opened: false, openTime: 0, phase: index * 1.71
+        root, lid, lockMaterial, marker, opened: false, openTime: 0, phase: index * 1.71,
+        powerUp: { type: powerType, amount: powerAmount }
       });
     });
   }
@@ -2944,17 +3043,26 @@
     if (!chest || chest.opened || state !== "playing") return false;
     chest.opened = true;
     chest.openTime = .01;
+    const oldMaximumHealth = maxHealth();
+    const oldMaximumStamina = maxStamina();
+    const power = chest.powerUp || { type: "damage", amount: 1 };
+    player.relicBonuses[power.type] = clamp(relicBonus(power.type) + power.amount, 0, 500);
     grantXp(chest.xp);
     grantRunXp(Math.round(chest.xp * .72), "RELIC CHEST");
-    player.health = Math.min(maxHealth(), player.health + 25);
+    player.health = Math.min(maxHealth(), player.health + 25 + Math.max(0, maxHealth() - oldMaximumHealth));
+    player.stamina = Math.min(maxStamina(), player.stamina + Math.max(0, maxStamina() - oldMaximumStamina));
     player.shout = Math.min(100, player.shout + 20);
+    spawnChestPowerDrop(chest, power);
     createShockwave(chest.root.position.clone().add(new THREE.Vector3(0, .15, 0)), 9, .8, 0xe8b45a);
     audio.discover();
     spawnCombatText(chest.root.position, "+" + chest.xp + " XP", "xp");
     spawnCombatText(player.root.position, "+25", "heal");
-    showProgressionBanner("RELIC CHEST OPENED", chest.name, "+" + chest.xp + " WARDEN XP");
+    const powerNames = { damage: "DAMAGE", health: "MAX HEALTH", regen: "REGENERATION", sprint: "SPRINT SPEED", stamina: "MAX STAMINA", critDamage: "CRITICAL DAMAGE" };
+    showProgressionBanner("PERMANENT POWER ABSORBED", chest.name, "+" + power.amount + "% " + powerNames[power.type] + " · +" + chest.xp + " XP");
+    showMessage("PERMANENT +" + power.amount + "% " + powerNames[power.type], "#f6cf72");
     chest.marker.material.opacity = .12;
     chest.lockMaterial.visible = false;
+    saveProgression(true);
     markRunDirty(true);
     return true;
   }
@@ -3819,14 +3927,14 @@
 
     let actions = {};
     let animationState = "";
-    if ((type === "biomeLight" || type === "biomeHeavy") && visualAssets.models && visualAssets.models[type]) {
-      const source = visualAssets.models[type];
-      const profile = type === "biomeHeavy" ? worldProfile.heavyEnemy : worldProfile.lightEnemy;
+    if ((type === "biomeLight" || type === "biomeHeavy" || type === "golem") && visualAssets.models && visualAssets.models[type === "golem" ? "biomeHeavy" : type]) {
+      const source = visualAssets.models[type === "golem" ? "biomeHeavy" : type];
+      const profile = type === "biomeHeavy" || type === "golem" ? worldProfile.heavyEnemy : worldProfile.lightEnemy;
       const model = THREE.SkeletonUtils ? THREE.SkeletonUtils.clone(source.scene) : source.scene.clone(true);
       model.name = profile[1];
-      model.scale.setScalar(profile[3]);
+      model.scale.setScalar(profile[3] * (type === "golem" ? 1.38 : 1));
       model.rotation.y = Math.PI;
-      const tint = new THREE.Color(profile[4]);
+      const tint = type === "golem" ? importedStoneTint.clone().multiplyScalar(.72) : new THREE.Color(profile[4]);
       model.traverse((object) => {
         if (!object.isMesh && !object.isSkinnedMesh) return;
         object.castShadow = !isCoarse;
@@ -3849,7 +3957,9 @@
         death: findClip(/^Death$/i) || idleClip
       };
       Object.keys(clips).forEach((id) => { if (clips[id]) actions[id] = mixer.clipAction(clips[id]); });
-      stats = type === "biomeHeavy"
+      stats = type === "golem"
+        ? { name: realm.biome.toUpperCase() + " GUARDIAN", rank: "STRONGHOLD COLOSSUS", health: 125, damage: 16, speed: 4.4, range: 3.2, cooldown: 2.05, hitRadius: 2.3, xp: 105, heal: 14 }
+        : type === "biomeHeavy"
         ? { name: profile[1], rank: profile[2], health: 118, damage: 15, speed: 5.3, range: 2.9, cooldown: 1.9, hitRadius: 1.85, xp: 108, heal: 12 }
         : { name: profile[1], rank: profile[2], health: 62, damage: 9, speed: 7.7, range: 2.5, cooldown: 1.35, hitRadius: 1.35, xp: 66, heal: 8 };
     } else if (type === "warg" && visualAssets.models && visualAssets.models.warg) {
@@ -3927,9 +4037,10 @@
       attackTimer: 0, attackDelivered: false, walkCycle: encounterRandom() * 10, hitRadius: stats.hitRadius,
       xpReward: Math.round(stats.xp * (1 + tier * .08)), healthReward: stats.heal,
       boss: false, elite: type === "golem" || type === "biomeHeavy", dead: false, deathTime: 0, engaged: true,
-      tier, threat, strongholdId: null,
+      tier, threat, strongholdId: null, strongholdHandled: false,
       actions, animationState, lastDamageSource: null, lastWeaponId: null, hitStun: 0, phase: encounterRandom() * Math.PI * 2,
-      impulse: new THREE.Vector3(), telegraph: null, bleedStacks: 0, bleedTime: 0, slowTime: 0
+      impulse: new THREE.Vector3(), telegraph: null, bleedStacks: 0, bleedTime: 0, slowTime: 0,
+      tamed: false, tameReady: false, tameProgress: 0, tameMarker: null
     };
     setEnemyAction(enemy, "idle", true);
     root.traverse((object) => { if (object.isMesh || object.isSkinnedMesh) object.userData.dragon = enemy; });
@@ -3956,18 +4067,211 @@
   }
 
   function updateStrongholdUI() {
-    if (!ui.waveHud) return;
+    if (!ui.strongholdHud) return;
     const total = strongholds.length;
     const cleared = strongholds.filter((stronghold) => stronghold.cleared).length;
     const nearest = nearestUnclearedStronghold();
-    ui.waveHud.classList.toggle("active", state === "playing");
-    ui.waveNumber.textContent = cleared + " / " + total;
-    ui.waveProgress.style.width = (total ? clamp(cleared / total * 100, 0, 100) : 0) + "%";
-    ui.waveEnemyCount.textContent = nearest ? "CLEAR " + nearest.name : cleared >= total ? "THE WORLD-BURNER AWAITS" : "CLEAR ALL TO FACE VHAROK";
+    ui.strongholdHud.classList.toggle("active", state === "playing");
+    ui.strongholdNumber.textContent = cleared + " / " + total;
+    ui.strongholdProgress.style.width = (total ? clamp(cleared / total * 100, 0, 100) : 0) + "%";
+    ui.strongholdStatus.textContent = nearest ? "CLEAR " + nearest.name : cleared >= total ? "THE WORLD-BURNER AWAITS" : "CLEAR ALL TO FACE VHAROK";
+  }
+
+  function strongholdAliveCount(stronghold) {
+    return stronghold.members.filter((enemy) => !enemy.dead && !enemy.tamed && !enemy.strongholdHandled).length;
+  }
+
+  function allStrongholdsCleared() {
+    return strongholds.length > 0 && strongholds.every((stronghold) => stronghold.cleared);
+  }
+
+  function updateStrongholdMarker(stronghold) {
+    if (!stronghold || !stronghold.markerMaterial) return;
+    stronghold.markerMaterial.color.setHex(stronghold.cleared ? 0x67d6b1 : 0xe26b3f);
+    stronghold.markerMaterial.opacity = stronghold.cleared ? .16 : .42;
+    if (stronghold.marker) stronghold.marker.scale.setScalar(stronghold.cleared ? .82 : 1);
+  }
+
+  function clearStronghold(stronghold, grantRewards) {
+    if (!stronghold || stronghold.cleared) return false;
+    stronghold.cleared = true;
+    updateStrongholdMarker(stronghold);
+    const reward = STRONGHOLD_BONUSES[stronghold.kind] || STRONGHOLD_BONUSES.hamlet;
+    if (grantRewards !== false) {
+      grantXp(reward.xp);
+      if (reward.runXp) grantRunXp(reward.runXp, "STRONGHOLD");
+      if (reward.weaponXp) grantWeaponXp(reward.weaponXp, player.activeWeapon);
+      player.health = Math.min(maxHealth(), player.health + Math.round(maxHealth() * reward.heal));
+      player.shout = Math.min(100, player.shout + reward.shout);
+      if (reward.stamina) player.stamina = maxStamina();
+      if (hasSkill("run_rebirth") && !player.secondWindReady) {
+        player.secondWindReady = true;
+        showMessage("PHOENIX OATH RESTORED", "#e7b17a");
+      }
+      showLocation(stronghold.name, "STRONGHOLD CLEARED");
+      showProgressionBanner("STRONGHOLD CLEARED", stronghold.name, "+" + reward.xp + " WARDEN XP · " + Math.round(reward.heal * 100) + "% HEALTH RESTORED");
+      spawnCombatText(new THREE.Vector3(stronghold.x, surfaceHeightAt(stronghold.x, stronghold.z, 999), stronghold.z), "+" + reward.xp + " XP", "xp");
+      audio.discover();
+    }
+    updateStrongholdUI();
+    minimapRefreshTimer = 0;
+    markRunDirty(true);
+    if (allStrongholdsCleared() && questStage < 3) showMessage("ALL STRONGHOLDS CLEARED · VHAROK STILL LIVES", "#9fe4cb");
+    checkRunCompletion();
+    return true;
+  }
+
+  function spawnChestPowerDrop(chest, power) {
+    const colors = { damage: 0xef6d45, health: 0xe54f67, regen: 0x70d7ad, sprint: 0x69cde0, stamina: 0xe6c05e, critDamage: 0xc68cf0 };
+    const material = new THREE.MeshStandardMaterial({ color: colors[power.type] || 0xe8b45a, emissive: colors[power.type] || 0xe8b45a, emissiveIntensity: 1.8, transparent: true, opacity: 1, roughness: .2, metalness: .3 });
+    const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(.42 + power.amount * .06, 0), material);
+    mesh.position.copy(chest.root.position).add(new THREE.Vector3(0, 1.4, 0));
+    scene.add(mesh);
+    effects.push({ mesh, life: 1.15, maxLife: 1.15, grow: 1.9, type: "powerup", peakOpacity: 1 });
+  }
+
+  function handleStrongholdMember(enemy) {
+    if (!enemy || !enemy.strongholdId || enemy.strongholdHandled) return;
+    enemy.strongholdHandled = true;
+    const stronghold = strongholds.find((item) => item.id === enemy.strongholdId);
+    if (stronghold && strongholdAliveCount(stronghold) === 0) clearStronghold(stronghold, true);
+  }
+
+  function clearStrongholdById(id) {
+    const stronghold = strongholds.find((item) => item.id === id);
+    if (!stronghold || stronghold.cleared) return false;
+    const living = stronghold.members.filter((enemy) => !enemy.dead && !enemy.tamed);
+    living.forEach((enemy) => {
+      enemy.lastDamageSource = "weapon";
+      enemy.lastWeaponId = player.activeWeapon;
+      killDragon(enemy);
+    });
+    if (!living.length) clearStronghold(stronghold, true);
+    return stronghold.cleared;
+  }
+
+  function isTameableEnemy(enemy) {
+    return Boolean(enemy && !enemy.dead && !enemy.tamed && (enemy.kind === "warg" || enemy.kind === "biomeLight"));
+  }
+
+  function setEnemyTameReady(enemy) {
+    if (!isTameableEnemy(enemy) || enemy.tameReady) return;
+    enemy.tameReady = true;
+    const material = new THREE.MeshBasicMaterial({ color: 0x79e7d0, transparent: true, opacity: .65, side: THREE.DoubleSide, depthWrite: false });
+    const marker = new THREE.Mesh(new THREE.RingGeometry(Math.max(.85, enemy.hitRadius * .62), Math.max(.95, enemy.hitRadius * .72), 30), material);
+    marker.rotation.x = -Math.PI / 2;
+    marker.position.y = .08;
+    enemy.root.add(marker);
+    enemy.tameMarker = marker;
+    showMessage(enemy.name + "'S WILL IS BROKEN · PRESS E TO TAME", "#80ead5");
+  }
+
+  function nearestTameCandidate(maxDistance) {
+    if (!player.root) return null;
+    const maximum = maxDistance == null ? 11 : maxDistance;
+    return groundEnemies.filter((enemy) => isTameableEnemy(enemy)
+      && (enemy.tameReady || (enemy.slowTime > 0 && enemy.health / enemy.maxHealth <= .5))
+      && distance2D(player.root.position, enemy.root.position) <= maximum)
+      .sort((a, b) => distance2D(player.root.position, a.root.position) - distance2D(player.root.position, b.root.position))[0] || null;
+  }
+
+  function tameEnemy(enemy, silent, skipStrongholdHandling) {
+    if (!enemy || enemy.dead || enemy.tamed) return false;
+    if (!silent && groundEnemies.filter((item) => item.tamed && !item.dead).length >= 2) {
+      showMessage("YOUR BOND CAN HOLD ONLY TWO COMPANIONS", "#91a5ad");
+      return false;
+    }
+    enemy.tamed = true;
+    enemy.tameReady = false;
+    enemy.engaged = false;
+    enemy.camp = null;
+    enemy.attackTimer = 0;
+    enemy.attackCooldown = .4;
+    enemy.bleedTime = 0;
+    enemy.bleedStacks = 0;
+    enemy.slowTime = 0;
+    enemy.health = Math.max(enemy.health, Math.round(enemy.maxHealth * .6));
+    clearEnemyTelegraph(enemy);
+    if (!enemy.tameMarker) {
+      const material = new THREE.MeshBasicMaterial({ color: 0x79e7d0, transparent: true, opacity: .48, side: THREE.DoubleSide, depthWrite: false });
+      enemy.tameMarker = new THREE.Mesh(new THREE.RingGeometry(Math.max(.85, enemy.hitRadius * .62), Math.max(.95, enemy.hitRadius * .72), 30), material);
+      enemy.tameMarker.rotation.x = -Math.PI / 2;
+      enemy.tameMarker.position.y = .08;
+      enemy.root.add(enemy.tameMarker);
+    } else {
+      enemy.tameMarker.material.color.setHex(0x79e7d0);
+      enemy.tameMarker.material.opacity = .48;
+    }
+    enemy.originalName = enemy.originalName || enemy.name;
+    enemy.name = "BONDED " + enemy.originalName;
+    if (!skipStrongholdHandling) handleStrongholdMember(enemy);
+    if (lockedTarget === enemy) lockedTarget = null;
+    if (nearestTarget === enemy) nearestTarget = null;
+    if (!silent) {
+      grantRunXp(35, "BEAST BOND");
+      showProgressionBanner("ENEMY TAMED", enemy.name, "Bonded companions fight beside you and empower your sprint");
+      audio.discover();
+      markRunDirty(true);
+    }
+    return true;
+  }
+
+  function bondedPaceBonus() {
+    return Math.min(.45, groundEnemies.filter((enemy) => enemy.tamed && !enemy.dead)
+      .reduce((sum, enemy) => sum + (enemy.kind === "warg" ? .3 : .16), 0));
+  }
+
+  function updateTamedEnemy(enemy, dt) {
+    clearEnemyTelegraph(enemy);
+    enemy.attackCooldown = Math.max(0, enemy.attackCooldown - dt);
+    enemy.attackTimer = Math.max(0, enemy.attackTimer - dt);
+    const hostiles = allEnemies().filter((target) => !target.dead && distance2D(target.root.position, enemy.root.position) < 28)
+      .sort((a, b) => distance2D(a.root.position, enemy.root.position) - distance2D(b.root.position, enemy.root.position));
+    const target = hostiles[0] || null;
+    const playerDistance = distance2D(enemy.root.position, player.root.position);
+    if (!target && playerDistance > 55) {
+      const yaw = player.root.rotation.y;
+      const x = player.root.position.x + Math.sin(yaw) * 3;
+      const z = player.root.position.z + Math.cos(yaw) * 3;
+      if (canPlayerOccupy(x, z, enemy.hitRadius * .4, player.root.position.y)) enemy.root.position.set(x, surfaceHeightAt(x, z, player.root.position.y + 1), z);
+    }
+    const goal = target ? target.root.position : player.root.position.clone().add(new THREE.Vector3(Math.sin(player.root.rotation.y) * 3.5, 0, Math.cos(player.root.rotation.y) * 3.5));
+    const dx = goal.x - enemy.root.position.x;
+    const dz = goal.z - enemy.root.position.z;
+    const distance = Math.hypot(dx, dz);
+    const stopDistance = target ? enemy.attackRange : 3.2;
+    let moving = false;
+    if (distance > stopDistance && distance > .01) {
+      const direction = new THREE.Vector3(dx / distance, 0, dz / distance);
+      const speed = enemy.speed * (target ? .95 : 1.08);
+      const nextX = enemy.root.position.x + direction.x * speed * dt;
+      const nextZ = enemy.root.position.z + direction.z * speed * dt;
+      if (!hitsCollider(nextX, nextZ, enemy.hitRadius * .4, enemy.root.position.y, enemy.root.position.y + 3.6)) {
+        enemy.root.position.x = nextX;
+        enemy.root.position.z = nextZ;
+      }
+      enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-direction.x, -direction.z), dt * 9);
+      enemy.walkCycle += dt * enemy.speed * 1.8;
+      moving = true;
+    } else if (target && enemy.attackCooldown <= 0) {
+      enemy.attackCooldown = enemy.attackInterval;
+      enemy.attackTimer = .5;
+      enemy.root.rotation.y = Math.atan2(-(target.root.position.x - enemy.root.position.x), -(target.root.position.z - enemy.root.position.z));
+      damageDragon(target, Math.max(4, Math.round(enemy.damage * .72)), false, "companion", enemy.kind === "warg" ? "blade" : "staff");
+      createShockwave(target.root.position.clone(), 2.2, .16, 0x79e7d0);
+    }
+    enemy.root.position.y = surfaceHeightAt(enemy.root.position.x, enemy.root.position.z, enemy.root.position.y + 1);
+    animateGroundEnemy(enemy, dt, moving);
   }
 
   function disposeGroundEnemy(enemy) {
     clearEnemyTelegraph(enemy);
+    if (enemy.tameMarker) {
+      if (enemy.tameMarker.parent) enemy.tameMarker.parent.remove(enemy.tameMarker);
+      enemy.tameMarker.geometry.dispose();
+      enemy.tameMarker.material.dispose();
+      enemy.tameMarker = null;
+    }
     if (enemy.mixer) {
       enemy.mixer.stopAllAction();
       enemy.mixer.uncacheRoot(enemy.modelRoot);
@@ -4061,6 +4365,14 @@
 
   function updateGroundEnemies(dt, idle) {
     groundEnemies.forEach((enemy) => {
+      const renderDistance = isCoarse ? 175 : 275;
+      const playerDistance = player.root ? distance2D(enemy.root.position, player.root.position) : 0;
+      enemy.root.visible = enemy.tamed || playerDistance <= renderDistance;
+      if (!enemy.root.visible && !enemy.dead) {
+        clearEnemyTelegraph(enemy);
+        enemy.attackTimer = 0;
+        return;
+      }
       if (enemy.dead) {
         clearEnemyTelegraph(enemy);
         enemy.deathTime += dt;
@@ -4075,6 +4387,7 @@
         return;
       }
       if (idle) { if (enemy.mixer) enemy.mixer.update(dt * .2); return; }
+      if (enemy.tamed) { updateTamedEnemy(enemy, dt); return; }
       enemy.hitStun = Math.max(0, enemy.hitStun - dt);
       enemy.slowTime = Math.max(0, (enemy.slowTime || 0) - dt);
       if (enemy.bleedTime > 0) {
@@ -4178,11 +4491,12 @@
 
   function interact() {
     if (state !== "playing") return false;
-    return collectExperienceRune(nearestExperienceRune(11)) || collectDragonSoul(nearestDragonSoul(11)) || openChest(nearestChest(11));
+    const tameCandidate = nearestTameCandidate(11);
+    return (tameCandidate ? tameEnemy(tameCandidate) : false) || collectExperienceRune(nearestExperienceRune(11)) || collectDragonSoul(nearestDragonSoul(11)) || openChest(nearestChest(11));
   }
 
 
-  function resetActors() {
+  function resetActors(savedRun) {
     dragons.forEach((dragon) => { clearDragonFireTelegraph(dragon); scene.remove(dragon.root); dragon.root.traverse((object) => { if (object.geometry && object.geometry.dispose) object.geometry.dispose(); }); });
     groundEnemies.forEach((enemy) => { scene.remove(enemy.root); disposeGroundEnemy(enemy); });
     bolts.forEach((bolt) => { scene.remove(bolt.mesh); bolt.mesh.traverse((object) => { if (object.geometry) object.geometry.dispose(); if (object.material) object.material.dispose(); }); });
@@ -4205,6 +4519,7 @@
     // Garrisons are world gen: seeded spots from registerStronghold, spawned with level-scaled
     // count and promotions, with the encounter RNG stream restored so combat stays deterministic.
     const garrisonRngState = encounterRng.state;
+    const handledMemberKeys = new Set(savedRun && savedRun.world && Array.isArray(savedRun.world.handledStrongholdMembers) ? savedRun.world.handledStrongholdMembers : []);
     strongholds.forEach((stronghold) => {
       stronghold.members = [];
       if (stronghold.cleared) return;
@@ -4218,8 +4533,11 @@
         .concat(stronghold.spots.filter((spot) => spot.type === "biomeLight").slice(0, base.light + countBonus)
           .map((spot) => ({ x: spot.x, z: spot.z, type: spot.roll < promoteRoll ? "biomeHeavy" : "biomeLight" })));
       plan.forEach((spot) => {
+        const spawnKey = stronghold.id + ":" + Math.round(spot.x * 10) + ":" + Math.round(spot.z * 10);
+        if (handledMemberKeys.has(spawnKey)) return;
         const enemy = createGroundEnemy(spot.type, spot.x, spot.z, threat);
         enemy.strongholdId = stronghold.id;
+        enemy.spawnKey = spawnKey;
         enemy.camp = { x: stronghold.x, z: stronghold.z, radius: stronghold.kind === "keep" ? 40 : 30 };
         enemy.name = stronghold.name + " " + enemy.name;
         stronghold.members.push(enemy);
@@ -4255,17 +4573,23 @@
     outpostsDiscovered = 0;
     runeHinted = false;
     encounterRng.state = ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0;
-    strongholds.forEach((stronghold) => { stronghold.cleared = false; stronghold.members = []; });
+    strongholds.forEach((stronghold) => { stronghold.cleared = false; stronghold.members = []; updateStrongholdMarker(stronghold); });
     if (resumeSave) applySavedStrongholds(resumeSave);
     resetExperienceRunes();
     resetChests();
-    resetActors();
+    resetActors(resumeSave);
     player.health = maxHealth();
     player.stamina = maxStamina();
     player.shout = 0;
     player.vertical = 0;
     player.velocityY = 0;
     player.grounded = true;
+    player.sprintLatch = false;
+    player.superSprintLatch = false;
+    player.sprintExhausted = false;
+    player.sprinting = false;
+    player.superSprinting = false;
+    player.stormstrideTimer = 0;
     player.attackCooldown = 0;
     player.attackTime = 0;
     player.queuedWeapon = null;
@@ -4378,9 +4702,10 @@
     player.resonanceTime = Math.max(0, player.resonanceTime - dt);
     player.rampageTime = Math.max(0, player.rampageTime - dt);
     if (elapsed >= player.comboExpires) player.comboHits = 0;
-    const staminaRecovery = (player.moving ? 16 : 25) * (1 + skillRank("endurance") * .06);
-    player.stamina = Math.min(maxStamina(), player.stamina + staminaRecovery * dt);
-    if (elapsed - player.lastDamage > 10) player.health = Math.min(maxHealth(), player.health + 1.8 * (hasSkill("immortal_warden") && player.health < maxHealth() * .4 ? 2 : 1) * dt);
+    if (elapsed - player.lastDamage > 10) {
+      const healthRecovery = 1.8 * (1 + relicBonus("regen") / 100) * (hasSkill("immortal_warden") && player.health < maxHealth() * .4 ? 2 : 1);
+      player.health = Math.min(maxHealth(), player.health + healthRecovery * dt);
+    }
 
     let inputX = 0;
     let inputZ = 0;
@@ -4393,38 +4718,63 @@
     const magnitude = Math.hypot(inputX, inputZ);
     let moving = magnitude > .08;
     player.moving = moving;
-    player.sprinting = false;
-    player.superSprinting = false;
+    const wasSuperSprinting = player.superSprinting;
+    const touchSuperSprint = isCoarse && magnitude > .92;
+    const wantsSuperSprint = moving && (keys.has("control") || touchSuperSprint);
+    const wantsSprint = moving && (wantsSuperSprint || keys.has("shift") || (isCoarse && magnitude > .68) || magnitude > 1.15);
+    if (player.stamina <= 0) player.sprintExhausted = true;
+    if (player.sprintExhausted && player.stamina >= 10) player.sprintExhausted = false;
+    if (!wantsSprint || player.sprintExhausted) player.sprintLatch = false;
+    else if (!player.sprintLatch && player.stamina > 8) player.sprintLatch = true;
+    else if (player.sprintLatch && player.stamina <= 2) player.sprintLatch = false;
+    if (!wantsSuperSprint || player.sprintExhausted) player.superSprintLatch = false;
+    else if (!player.superSprintLatch && player.stamina > 12) player.superSprintLatch = true;
+    else if (player.superSprintLatch && player.stamina <= 5) player.superSprintLatch = false;
+    if (player.superSprintLatch) player.sprintLatch = true;
+    player.superSprinting = moving && player.dodgeTime <= 0 && player.superSprintLatch;
+    player.sprinting = moving && player.dodgeTime <= 0 && (player.sprintLatch || player.superSprinting);
+    const staminaRecovery = (moving ? 16 : 25) * (1 + skillRank("endurance") * .06) * (1 + relicBonus("regen") / 100)
+      * (player.sprinting ? 1 + skillRank("second_lungs") * .3 : 1);
+    player.stamina = Math.min(maxStamina(), player.stamina + staminaRecovery * dt);
+    if (!wasSuperSprinting && player.superSprinting && hasSkill("stormlaunch")) triggerStormlaunch();
 
     if (player.dodgeTime > 0) {
       moving = true;
       const dodgeProgress = clamp(player.dodgeElapsed / .58, 0, 1);
       const dodgeSpeed = lerp(21, 7.5, dodgeProgress);
-      movePlayer(player.dodgeDirection.x * dodgeSpeed * dt, player.dodgeDirection.z * dodgeSpeed * dt);
+      const moved = movePlayer(player.dodgeDirection.x * dodgeSpeed * dt, player.dodgeDirection.z * dodgeSpeed * dt);
       player.root.rotation.y = rotateToward(player.root.rotation.y, Math.atan2(-player.dodgeDirection.x, -player.dodgeDirection.z), dt * 18);
-      player.distance += dodgeSpeed * dt;
+      player.distance += moved;
     } else if (moving) {
       inputX /= Math.max(1, magnitude);
       inputZ /= Math.max(1, magnitude);
       const forward = new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
       const right = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
       const direction = forward.multiplyScalar(inputZ).add(right.multiplyScalar(inputX)).normalize();
-      const touchSuperSprint = isCoarse && magnitude > .92;
-      const superSprinting = (keys.has("control") || touchSuperSprint) && player.stamina > 5;
-      const sprinting = (superSprinting || keys.has("shift") || (isCoarse && magnitude > .68) || magnitude > 1.15) && player.stamina > 2;
-      player.sprinting = sprinting;
-      player.superSprinting = superSprinting;
-      const speed = superSprinting ? 25.5 * (1 + skillRank("windstep") * .055) : sprinting ? 17.2 : 7.8;
-      if (superSprinting) player.stamina = Math.max(0, player.stamina - 34 * (1 - skillRank("windstep") * .09) * dt);
-      else if (sprinting) player.stamina = Math.max(0, player.stamina - 21 * dt);
+      const superSprinting = player.superSprinting;
+      const sprinting = player.sprinting;
+      const sprintPower = 1 + skillRank("gale_pace") * .15 + relicBonus("sprint") / 100 + bondedPaceBonus();
+      const superPower = 1 + skillRank("windstep") * .055 + skillRank("gale_pace") * .1 + skillRank("tempest_pace") * .25 + (hasSkill("stormstride") ? .25 : 0) + relicBonus("sprint") / 100 + bondedPaceBonus();
+      const speed = superSprinting ? 25.5 * superPower : sprinting ? 17.2 * sprintPower : 7.8;
+      const marathonEfficiency = clamp(1 - skillRank("marathon") * .25, .35, 1);
+      if (superSprinting) player.stamina = Math.max(0, player.stamina - 34 * marathonEfficiency * (1 - skillRank("windstep") * .09) * dt);
+      else if (sprinting) player.stamina = Math.max(0, player.stamina - 21 * marathonEfficiency * dt);
+      if (player.stamina <= 0) {
+        player.sprintExhausted = true;
+        player.sprintLatch = false;
+        player.superSprintLatch = false;
+        player.sprinting = false;
+        player.superSprinting = false;
+      }
       const dx = direction.x * speed * dt;
       const dz = direction.z * speed * dt;
-      movePlayer(dx, dz);
-      player.distance += Math.hypot(dx, dz);
+      player.distance += movePlayer(dx, dz);
       const desiredRotation = Math.atan2(-direction.x, -direction.z);
       player.root.rotation.y = rotateToward(player.root.rotation.y, desiredRotation, dt * (superSprinting ? 14 : sprinting ? 11 : 9));
       player.walkCycle += dt * (superSprinting ? 24 : sprinting ? 17.5 : 9.2);
     }
+
+    updateStormstrideTrail(dt);
 
     const currentY = player.root.position.y;
     const landingHeight = surfaceHeightAt(player.root.position.x, player.root.position.z, currentY);
@@ -4445,7 +4795,8 @@
         player.jumpTime = 0;
       } else player.root.position.y = nextY;
     } else player.root.position.y = landingHeight;
-    if (player.grounded && player.root.position.y > biome.waterLevel + .35 && !hitsCollider(player.root.position.x, player.root.position.z, .7, player.root.position.y, player.root.position.y + 2.1)) player.lastSafePosition.copy(player.root.position);
+    recoverPlayerFromCollision();
+    if (player.grounded && player.root.position.y > biome.waterLevel + .35 && !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + 2.1)) player.lastSafePosition.copy(player.root.position);
     player.vertical = Math.max(0, player.root.position.y - terrainHeight(player.root.position.x, player.root.position.z));
     camera.fov = lerp(camera.fov, player.superSprinting ? 76 : player.sprinting ? 69 : 62, 1 - Math.pow(.002, dt));
     camera.updateProjectionMatrix();
@@ -4462,18 +4813,70 @@
     updateQuest();
   }
 
+  function triggerStormlaunch() {
+    const origin = player.root.position.clone();
+    createShockwave(origin, 6, .38, 0x8adcf5);
+    allEnemies().filter((enemy) => !enemy.dead && distance2D(enemy.root.position, origin) <= 6).forEach((enemy) => {
+      damageDragon(enemy, 12, true, "stormlaunch", "staff");
+      if (enemy.impulse) {
+        const away = enemy.root.position.clone().sub(origin).setY(0).normalize();
+        enemy.impulse.addScaledVector(away, enemy.elite ? 4 : 8);
+      }
+    });
+    audio.tone(92, 240, .14, "sawtooth", .018);
+  }
+
+  function updateStormstrideTrail(dt) {
+    if (!player.superSprinting || !hasSkill("stormstride")) {
+      player.stormstrideTimer = 0;
+      return;
+    }
+    player.stormstrideTimer -= dt;
+    if (player.stormstrideTimer > 0) return;
+    player.stormstrideTimer = .25;
+    const origin = player.root.position.clone();
+    createShockwave(origin, 4, .28, 0x78cfff);
+    const targets = allEnemies().filter((enemy) => !enemy.dead && distance2D(enemy.root.position, origin) <= 4);
+    targets.forEach((enemy) => damageDragon(enemy, 7, false, "stormstride", "staff"));
+    if (targets[0]) createLightningArc(origin.clone().add(new THREE.Vector3(0, .35, 0)), targets[0].root.position.clone().add(new THREE.Vector3(0, 1, 0)), 0x8adcf5);
+  }
+
   function movePlayer(dx, dz) {
-    const radius = .8;
-    const footY = player.root.position.y;
-    const candidateX = clamp(player.root.position.x + dx, -HALF_WORLD, HALF_WORLD);
-    if (canPlayerOccupy(candidateX, player.root.position.z, radius, footY)) player.root.position.x = candidateX;
-    const candidateZ = clamp(player.root.position.z + dz, -HALF_WORLD, HALF_WORLD);
-    if (canPlayerOccupy(player.root.position.x, candidateZ, radius, footY)) player.root.position.z = candidateZ;
+    const radius = .72;
+    const startX = player.root.position.x;
+    const startZ = player.root.position.z;
+    const distance = Math.hypot(dx, dz);
+    const steps = Math.max(1, Math.ceil(distance / .28));
+    const stepX = dx / steps;
+    const stepZ = dz / steps;
+    for (let index = 0; index < steps; index += 1) {
+      const footY = player.root.position.y;
+      const candidateX = clamp(player.root.position.x + stepX, -HALF_WORLD, HALF_WORLD);
+      const candidateZ = clamp(player.root.position.z + stepZ, -HALF_WORLD, HALF_WORLD);
+      if (canPlayerOccupy(candidateX, candidateZ, radius, footY)) {
+        player.root.position.x = candidateX;
+        player.root.position.z = candidateZ;
+      } else {
+        const xOpen = canPlayerOccupy(candidateX, player.root.position.z, radius, footY);
+        const zOpen = canPlayerOccupy(player.root.position.x, candidateZ, radius, footY);
+        if (xOpen && zOpen) {
+          if (Math.abs(stepX) >= Math.abs(stepZ)) player.root.position.x = candidateX;
+          else player.root.position.z = candidateZ;
+        } else if (xOpen) player.root.position.x = candidateX;
+        else if (zOpen) player.root.position.z = candidateZ;
+      }
+      if (player.grounded) {
+        const surface = surfaceHeightAt(player.root.position.x, player.root.position.z, player.root.position.y + 1.05);
+        if (surface - player.root.position.y <= .92) player.root.position.y = surface;
+      }
+    }
+    return Math.hypot(player.root.position.x - startX, player.root.position.z - startZ);
   }
 
   function hitsCollider(x, z, radius, footY, topY) {
     const actorBottom = Number.isFinite(footY) ? footY + .08 : -Infinity;
     const actorTop = Number.isFinite(topY) ? topY : Number.isFinite(footY) ? footY + 2.15 : Infinity;
+    const collisionRadius = Math.max(.04, radius - .055);
     return colliders.some((box) => {
       if (actorBottom >= box.maxY - .025 || actorTop <= box.minY + .025) return false;
       const dx = x - box.x;
@@ -4486,7 +4889,7 @@
       const nearestZ = clamp(localZ, -box.hz, box.hz);
       const offsetX = localX - nearestX;
       const offsetZ = localZ - nearestZ;
-      return offsetX * offsetX + offsetZ * offsetZ < radius * radius;
+      return offsetX * offsetX + offsetZ * offsetZ < collisionRadius * collisionRadius;
     });
   }
 
@@ -4496,7 +4899,7 @@
     const currentSurface = surfaceHeightAt(player.root.position.x, player.root.position.z, footY + .9);
     const nextSurface = surfaceHeightAt(x, z, footY + .9);
     const step = nextSurface - currentSurface;
-    if (step > .82) return false;
+    if (step > .92) return false;
     const terrain = terrainHeight(x, z);
     const supportedAboveWater = nextSurface > terrain + .35;
     if (!supportedAboveWater && terrain <= biome.waterLevel + .35) return false;
@@ -4506,6 +4909,27 @@
       Math.abs(terrainHeight(x, z + sample) - terrainHeight(x, z - sample))
     ) / (sample * 2);
     return supportedAboveWater || slope <= 1.18;
+  }
+
+  function recoverPlayerFromCollision() {
+    if (!player.root || !player.grounded || !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + 2.1)) return false;
+    const originX = player.root.position.x;
+    const originZ = player.root.position.z;
+    for (let ring = 1; ring <= 5; ring += 1) {
+      const radius = ring * .38;
+      for (let index = 0; index < 16; index += 1) {
+        const angle = index / 16 * Math.PI * 2;
+        const x = clamp(originX + Math.cos(angle) * radius, -HALF_WORLD, HALF_WORLD);
+        const z = clamp(originZ + Math.sin(angle) * radius, -HALF_WORLD, HALF_WORLD);
+        if (!canPlayerOccupy(x, z, .68, player.root.position.y)) continue;
+        player.root.position.x = x;
+        player.root.position.z = z;
+        player.root.position.y = surfaceHeightAt(x, z, player.root.position.y + 1.05);
+        return true;
+      }
+    }
+    player.root.position.copy(player.lastSafePosition);
+    return true;
   }
 
   function rotateToward(current, target, amount) {
@@ -4796,7 +5220,7 @@
     });
   }
 
-  function allEnemies() { return dragons.concat(groundEnemies); }
+  function allEnemies() { return dragons.concat(groundEnemies.filter((enemy) => !enemy.tamed)); }
 
   function createWeaponProjectile(weaponId, weapon) {
     const material = new THREE.MeshBasicMaterial({ color: weapon.color, transparent: true, opacity: .96 });
@@ -5086,7 +5510,7 @@
   }
 
   function damageDragon(dragon, amount, heavy, source, weaponId) {
-    if (dragon.dead) return;
+    if (dragon.dead || dragon.tamed) return;
     const damageSource = source || "weapon";
     let finalAmount = amount;
     let criticalHit = false;
@@ -5098,7 +5522,7 @@
     if (forcedCritical) player.forceNextCritical = false;
     if (forcedCritical || (criticalChance > 0 && encounterRandom() < criticalChance)) {
       criticalHit = true;
-      finalAmount *= 1.65;
+      finalAmount *= 1.65 * (1 + relicBonus("critDamage") / 100);
     }
     if (damageSource === "weapon" && player.swapEmpowered) {
       finalAmount *= 1 + skillRank("swift_change") * .12;
@@ -5112,11 +5536,19 @@
         dragon.bleedTime = 4;
       }
     }
-    if (damageSource === "weapon" && weaponId === "staff" && dragon.kind !== "dragon" && skillRank("frost_nova") && distance2D(dragon.root.position, player.root.position) < 9) dragon.slowTime = 1.4 + skillRank("frost_nova") * .55;
+    if (damageSource === "weapon" && weaponId === "staff" && dragon.kind !== "dragon") {
+      dragon.slowTime = Math.max(dragon.slowTime || 0, .95 + skillRank("frost_nova") * .55);
+      if (skillRank("frost_nova") && distance2D(dragon.root.position, player.root.position) < 9) dragon.slowTime = Math.max(dragon.slowTime, 1.4 + skillRank("frost_nova") * .55);
+    }
     finalAmount = Math.max(1, Math.round(finalAmount));
     const appliedDamage = Math.min(dragon.health, finalAmount);
     dragon.engaged = true;
     dragon.health -= finalAmount;
+    if (dragon.health > 0 && isTameableEnemy(dragon) && damageSource === "weapon") {
+      if (weaponId === "staff") dragon.tameProgress += 30;
+      if (criticalHit) dragon.tameProgress += 55;
+      if (dragon.tameProgress >= 100 || dragon.health / dragon.maxHealth <= .5 && (criticalHit || weaponId === "staff" && dragon.slowTime > 0)) setEnemyTameReady(dragon);
+    }
     hitStopRemaining = Math.max(hitStopRemaining, heavy ? .085 : .06);
     cameraTrauma = Math.min(1, cameraTrauma + (heavy ? .32 : .18));
     if (dragon.kind !== "dragon") {
@@ -5193,10 +5625,7 @@
     spawnCombatText(dragon.root.position, "+" + xpGain + " XP", "xp");
     spawnCombatText(player.root.position, "+" + heal, "heal");
     if (isDragon) audio.dragon(); else audio.hit();
-    if (dragon.isAmbient && enemyDirector.phase === "combat") {
-      enemyDirector.defeated = Math.min(enemyDirector.target, enemyDirector.defeated + 1);
-      updateAssaultUI();
-    }
+    if (!isDragon) handleStrongholdMember(dragon);
     if (dragon.boss && isDragon) winGame();
     else if (isDragon && questStage >= 1 && player.dragonKills >= 3 && !bossSpawned) spawnBoss();
     updateQuestUI();
@@ -5283,6 +5712,11 @@
       const progress = 1 - effect.life / effect.maxLife;
       const scale = effect.type === "lightning" || effect.type === "streak" ? 1 : effect.type === "ring" ? lerp(1, effect.grow, progress) : lerp(1, effect.grow, Math.sqrt(progress));
       effect.mesh.scale.setScalar(scale);
+      if (effect.type === "powerup") {
+        effect.mesh.position.y += dt * 1.35;
+        effect.mesh.rotation.y += dt * 5;
+        effect.mesh.rotation.x += dt * 2.4;
+      }
       effect.mesh.material.opacity = Math.max(0, (1 - progress) * (effect.peakOpacity == null ? .8 : effect.peakOpacity));
     });
     effects = effects.filter((effect) => {
@@ -5293,6 +5727,11 @@
 
   function updateWorldDecor(dt) {
     if (sky) sky.rotation.y += dt * .0013;
+    strongholds.forEach((stronghold, index) => {
+      if (!stronghold.marker || !stronghold.markerMaterial) return;
+      stronghold.marker.rotation.z += dt * (stronghold.cleared ? .08 : .22);
+      stronghold.markerMaterial.opacity = stronghold.cleared ? .12 : .34 + Math.sin(elapsed * 2 + index) * .1;
+    });
     updateExperienceRunes(dt);
     updateDragonSouls(dt);
     updateChests(dt);
@@ -5423,8 +5862,9 @@
       ui.questObjective.innerHTML = "<i></i> Slay Vharok the World-Burner";
       ui.questProgress.textContent = "The final dragon circles Ashenhold Keep.";
     } else {
-      ui.questObjective.innerHTML = "<i></i> Ashenhold is free";
-      ui.questProgress.textContent = "The northern sky belongs to the living.";
+      const cleared = strongholds.filter((stronghold) => stronghold.cleared).length;
+      ui.questObjective.innerHTML = "<i></i> Break the realm strongholds";
+      ui.questProgress.textContent = "Strongholds cleared: " + cleared + " / " + strongholds.length;
     }
     if (runesCollected < experienceRunes.length || outpostsDiscovered < 3) {
       ui.sideQuestTitle.textContent = "SIDE QUEST · RUNES & BASTIONS";
@@ -5467,6 +5907,7 @@
     outpostDiscovered: { color: "#d5c4a1" },
     outpostHidden: { color: "rgba(128,151,157,.5)" },
     poi: { color: "#7dcfad" },
+    companion: { color: "#79e7d0" },
     objective: { color: "#e66f36", core: "#ffffff" },
     player: { color: "#efe6d0" }
   };
@@ -5481,11 +5922,8 @@
       const boss = dragons.find((dragon) => dragon.boss && !dragon.dead);
       return boss ? { position: boss.root.position, label: boss.name, kind: "boss" } : { position: RUINS, label: "ASHENHOLD KEEP", kind: "keep" };
     }
-    if (enemyDirector.phase === "combat") {
-      const wave = groundEnemies.filter((enemy) => enemy.isAmbient && !enemy.dead).sort((a,b) => a.root.position.distanceTo(player.root.position) - b.root.position.distanceTo(player.root.position));
-      if (wave.length) return { position: wave[0].root.position, label: "SURVIVE THE ASSAULT", kind: "assault" };
-    }
-    return null;
+    const stronghold = nearestUnclearedStronghold();
+    return stronghold ? { position: new THREE.Vector3(stronghold.x, surfaceHeightAt(stronghold.x, stronghold.z, 999), stronghold.z), label: "CLEAR " + stronghold.name, kind: "stronghold" } : null;
   }
 
   const combatTextPool = [];
@@ -5523,11 +5961,12 @@
     ui.shout.style.width = player.shout + "%";
     ui.shout.parentElement.setAttribute("aria-valuenow", String(Math.round(player.shout)));
     ui.shoutMeter.classList.toggle("ready", player.shout >= 100);
-    const nearbyRune = nearestExperienceRune(11);
-    const nearbySoul = nearbyRune ? null : nearestDragonSoul(11);
-    const nearbyChest = (nearbyRune || nearbySoul) ? null : nearestChest(11);
-    ui.interaction.classList.toggle("visible", Boolean(nearbyRune || nearbySoul || nearbyChest));
-    ui.interactionText.textContent = nearbyRune ? "Absorb Rune · +" + nearbyRune.xp + " XP" : nearbySoul ? "Absorb Dragon Soul · +" + nearbySoul.xp + " XP" : nearbyChest ? "Open Relic Chest · +" + nearbyChest.xp + " XP" : "Absorb Rune";
+    const nearbyTame = nearestTameCandidate(11);
+    const nearbyRune = nearbyTame ? null : nearestExperienceRune(11);
+    const nearbySoul = (nearbyTame || nearbyRune) ? null : nearestDragonSoul(11);
+    const nearbyChest = (nearbyTame || nearbyRune || nearbySoul) ? null : nearestChest(11);
+    ui.interaction.classList.toggle("visible", Boolean(nearbyTame || nearbyRune || nearbySoul || nearbyChest));
+    ui.interactionText.textContent = nearbyTame ? "Tame " + nearbyTame.name + " · Bonded Pace" : nearbyRune ? "Absorb Rune · +" + nearbyRune.xp + " XP" : nearbySoul ? "Absorb Dragon Soul · +" + nearbySoul.xp + " XP" : nearbyChest ? "Open Relic Chest · Permanent Power" : "Absorb Rune";
     validateTargetLock();
     if (targetScanTimer <= 0) {
       if (!lockedTarget) nearestTarget = findTargetDragon();
@@ -5630,6 +6069,9 @@
     });
     landmarks.filter((landmark) => landmark.poi ? landmark.discovered : landmark.outpost || landmark.revealed).forEach((landmark) => {
       const point = toMap(landmark.position);
+      const stronghold = strongholds.find((item) => item.id === landmark.id || Math.hypot(item.x - landmark.position.x, item.z - landmark.position.z) < 3);
+      mapContext.save();
+      if (stronghold && stronghold.cleared) mapContext.globalAlpha = .28;
       if (landmark.poi) {
         mapContext.fillStyle = MARKER_STYLES.poi.color;
         mapContext.fillRect(point.x - 2.5, point.y - 1, 5, 3.5);
@@ -5639,10 +6081,12 @@
         mapContext.lineTo(point.x + 3.5, point.y - 1);
         mapContext.closePath();
         mapContext.fill();
+        mapContext.restore();
         return;
       }
       mapContext.fillStyle = landmark.discovered ? MARKER_STYLES.outpostDiscovered.color : landmark.revealed ? MARKER_STYLES.poi.color : MARKER_STYLES.outpostHidden.color;
       mapContext.fillRect(point.x - 2.5, point.y - 2.5, 5, 5);
+      mapContext.restore();
     });
     allEnemies().forEach((enemy) => {
       if (enemy.dead) return;
@@ -5669,6 +6113,16 @@
         mapContext.arc(point.x, point.y, 2.2, 0, Math.PI * 2);
         mapContext.fill();
       }
+    });
+    groundEnemies.filter((enemy) => enemy.tamed && !enemy.dead).forEach((enemy) => {
+      const point = toMap(enemy.root.position);
+      if (point.x < 0 || point.x > size || point.y < 0 || point.y > size) return;
+      mapContext.fillStyle = MARKER_STYLES.companion.color;
+      mapContext.beginPath();
+      mapContext.arc(point.x, point.y, 3.1, 0, Math.PI * 2);
+      mapContext.fill();
+      mapContext.strokeStyle = "rgba(255,255,255,.7)";
+      mapContext.stroke();
     });
     const objective = currentObjective();
     if (objective) {
@@ -5756,7 +6210,7 @@
     const baseCopy = endingCopy || (victory ? "Vharok is dead. Dawn returns to the ruined kingdom." : "The World-Burner still rules the northern sky.");
     ui.endCopy.textContent = baseCopy + (prepared ? " Next realm: " + BIOMES[prepared.biome].name + " · BIOME " + (REALM_LADDER.indexOf(prepared.biome) + 1) + " OF " + REALM_LADDER.length + "." : "");
     ui.finalKills.textContent = player.kills;
-    ui.finalWave.textContent = enemyDirector.wave;
+    ui.finalStrongholds.textContent = strongholds.filter((stronghold) => stronghold.cleared).length + "/" + strongholds.length;
     ui.finalDistance.textContent = Math.round(player.distance) + "m";
     ui.finalExplored.textContent = Math.min(100, Math.round(discoveredCells.size / 520 * 100)) + "%";
     ui.end.classList.add("active");
@@ -5766,7 +6220,7 @@
   }
 
   function checkRunCompletion() {
-    if (runResolving || questStage !== 3 || !enemyDirector.completed) return false;
+    if (runResolving || questStage !== 3 || !allStrongholdsCleared()) return false;
     runResolving = true;
     state = "resolving";
     game.dataset.state = state;
@@ -5774,7 +6228,7 @@
     player.prestige += 1;
     saveProgression(true);
     clearActiveRun();
-    window.setTimeout(() => endGame(true, "The five-wave assault and its World-Burner are defeated. A harder realm has been forged."), 700);
+    window.setTimeout(() => endGame(true, "Every stronghold has fallen and the World-Burner is dead. A harder realm has been forged."), 700);
     return true;
   }
 
@@ -5782,7 +6236,10 @@
     questStage = 3;
     updateQuestUI();
     markRunDirty(true);
-    if (!checkRunCompletion()) showProgressionBanner("WORLD-BURNER SLAIN", "FINISH THE ASSAULT", "Complete all five waves to conquer this realm");
+    if (!checkRunCompletion()) {
+      const remaining = strongholds.filter((stronghold) => !stronghold.cleared).length;
+      showProgressionBanner("WORLD-BURNER SLAIN", "BREAK THE STRONGHOLDS", "Clear " + remaining + " remaining location" + (remaining === 1 ? "" : "s") + " to conquer this realm");
+    }
   }
 
   function update(dt) {
@@ -5793,7 +6250,6 @@
     updatePlayer(dt);
     updateDragons(dt, false);
     updateGroundEnemies(dt, false);
-    updateEnemyDirector(dt);
     updateProjectiles(dt);
     updateEffects(dt);
     updateWorldDecor(dt);
@@ -6013,18 +6469,24 @@
       runSkills: Object.assign({}, player.runSkills), skillBranches: skillTree.length,
       skillNodes: skillTree.reduce((sum, branch) => sum + branch.nodes.length, 0),
       questStage, dragonsAlive: dragons.filter((dragon) => !dragon.dead).length,
-      groundEnemiesAlive: groundEnemies.filter((enemy) => !enemy.dead).length,
-      wave: enemyDirector.wave, maxWaves: enemyDirector.maxWaves,
-      wavePhase: enemyDirector.phase, waveTimer: enemyDirector.timer,
-      waveActive: enemyDirector.phase === "combat", assaultCompleted: enemyDirector.completed,
-      waveDefeated: enemyDirector.defeated, waveSpawned: enemyDirector.spawned, waveTotal: enemyDirector.target,
+      groundEnemiesAlive: groundEnemies.filter((enemy) => !enemy.dead && !enemy.tamed).length,
+      companions: groundEnemies.filter((enemy) => !enemy.dead && enemy.tamed).map((enemy) => ({ name: enemy.name, kind: enemy.kind, health: enemy.health })),
+      bondedPace: bondedPaceBonus(),
+      strongholds: {
+        cleared: strongholds.filter((stronghold) => stronghold.cleared).length,
+        total: strongholds.length,
+        list: strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), cleared: stronghold.cleared }))
+      },
       runesCollected, totalRunes: experienceRunes.length,
       chestsOpened: chests.filter((chest) => chest.opened).length, totalChests: chests.length,
+      relicBonuses: Object.assign({}, player.relicBonuses),
       souls: dragonSouls.filter((soul) => !soul.claimed).length,
       realm: { biome: realm.biome, name: biome.name, seed: realm.seed, next: nextRealm },
       world: {
         size: WORLD_SIZE, waterLevel: biome.waterLevel, platforms: platforms.length,
         importedModels: visualAssets.models ? Object.keys(visualAssets.models).length : 0,
+        importedModelInstances,
+        modelSlots: visualAssets.modelPaths ? Object.keys(visualAssets.modelPaths) : [],
         grassInstances: grassField ? grassField.count : 0,
         props: { kind: biomePropsReport.kind, total: biomePropsReport.total, byKind: Object.assign({}, biomePropsReport.byKind) },
         outpostsDiscovered,
@@ -6037,12 +6499,12 @@
         routeReports: verticalRouteReports.map((report) => Object.assign({}, report)),
         layoutForts: worldLayout.forts.map((fort) => ({ x: Math.round(fort[0] * 10) / 10, z: Math.round(fort[1] * 10) / 10, name: fort[4] })),
         pois: (worldLayout.pois || []).map((poi) => ({ kind: poi.kind, name: poi.name, x: Math.round(poi.x), z: Math.round(poi.z) })),
-        spawnFailures: enemyDirector.spawnFailures
+        spawnFailures: worldSpawnFailures
       },
       combat: {
         dodging: player.dodgeTime > 0, dodgeElapsed: player.dodgeElapsed, locked: lockedTarget ? lockedTarget.name : null,
-        sprintPose: player.sprintPoseWeight || 0,
-        hitStopRemaining, threat: enemyDirector.threat, lightningArcs: effects.filter((effect) => effect.type === "lightning").length
+        sprintPose: player.sprintPoseWeight || 0, sprintLatch: player.sprintLatch, superSprintLatch: player.superSprintLatch, sprintExhausted: player.sprintExhausted, secondWindReady: player.secondWindReady,
+        hitStopRemaining, threat: ambientDifficulty(), lightningArcs: effects.filter((effect) => effect.type === "lightning").length
       },
       quality: { scale: qualityScale, pixelRatio: renderer ? renderer.getPixelRatio() : 1 },
       camera: {
@@ -6053,7 +6515,8 @@
       dragonForwardDot: firstDragonForwardAlignment(),
       renderer: renderer ? renderer.info.render : null,
       rendererMemory: renderer ? renderer.info.memory : null
-    })
+    }),
+    modelCatalog: () => Object.assign({}, visualAssets.modelPaths || {})
   };
 
   if (testMode) {
@@ -6064,6 +6527,35 @@
         player.root.position.z = clamp(z, -HALF_WORLD, HALF_WORLD);
         player.root.position.y = terrainHeight(player.root.position.x, player.root.position.z);
         updateCamera(1, true);
+      },
+      moveBy: (dx, dz) => movePlayer(Number(dx) || 0, Number(dz) || 0),
+      setStamina: (value) => { player.stamina = clamp(Number(value) || 0, 0, maxStamina()); },
+      collisionState: () => ({ blocked: hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + 2.1), x: player.root.position.x, y: player.root.position.y, z: player.root.position.z }),
+      collisionRecoveryProbe: () => {
+        const savedPosition = player.root.position.clone();
+        const savedSafePosition = player.lastSafePosition.clone();
+        const savedGrounded = player.grounded;
+        let sample = null;
+        for (let index = 0; index < colliders.length && !sample; index += 1) {
+          const box = colliders[index];
+          if (!Number.isFinite(box.x) || !Number.isFinite(box.z) || !Number.isFinite(box.hx) || !Number.isFinite(box.hz)) continue;
+          if (Math.abs(box.x) > HALF_WORLD - 4 || Math.abs(box.z) > HALF_WORLD - 4) continue;
+          const terrainY = terrainHeight(box.x, box.z);
+          const floorY = Number.isFinite(box.minY) ? Math.max(terrainY, box.minY + .05) : terrainY;
+          const footY = Number.isFinite(box.maxY) ? Math.min(floorY, box.maxY - .16) : floorY;
+          if (hitsCollider(box.x, box.z, .68, footY, footY + 2.1)) sample = { box, footY };
+        }
+        if (!sample) return { available: false, colliders: colliders.length };
+        player.root.position.set(sample.box.x, sample.footY, sample.box.z);
+        player.grounded = true;
+        const blockedBefore = hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + 2.1);
+        const recovered = recoverPlayerFromCollision();
+        const blockedAfter = hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + 2.1);
+        const displacement = Math.hypot(player.root.position.x - sample.box.x, player.root.position.z - sample.box.z);
+        player.root.position.copy(savedPosition);
+        player.lastSafePosition.copy(savedSafePosition);
+        player.grounded = savedGrounded;
+        return { available: true, colliders: colliders.length, blockedBefore, recovered, blockedAfter, displacement };
       },
       placeDragon: (distance, height, offsetX) => {
         const dragon = dragons.find((item) => !item.dead && !item.boss);
@@ -6090,8 +6582,6 @@
       toggleTargetLock,
       jump,
       interact,
-      startWave: () => { enemyDirector.timer = 0; updateEnemyDirector(.01); },
-      skipIntermission: () => { enemyDirector.timer = 0; updateEnemyDirector(.01); },
       placeEnemy: (type, distance, health) => {
         const offset = new THREE.Vector3(0, 0, -(distance == null ? 4 : distance)).applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraYaw);
         const enemy = createGroundEnemy(type || "draugr", player.root.position.x + offset.x, player.root.position.z + offset.z, ambientDifficulty());
@@ -6107,19 +6597,21 @@
         lockedTarget = null;
         nearestTarget = null;
       },
-      defeatWave: () => groundEnemies.filter((enemy) => enemy.isAmbient && !enemy.dead).forEach((enemy) => { enemy.lastDamageSource = "weapon"; enemy.lastWeaponId = player.activeWeapon; killDragon(enemy); }),
-      completeCurrentWave: () => {
-        groundEnemies.filter((enemy) => enemy.isAmbient && !enemy.dead).forEach((enemy) => { enemy.dead = true; scene.remove(enemy.root); disposeGroundEnemy(enemy); });
-        groundEnemies = groundEnemies.filter((enemy) => !enemy.isAmbient);
-        enemyDirector.spawned = enemyDirector.target;
-        enemyDirector.defeated = enemyDirector.target;
-        updateEnemyDirector(.01);
+      prepareNearestTame: () => {
+        const enemy = groundEnemies.filter((item) => isTameableEnemy(item)).sort((a, b) => distance2D(a.root.position, player.root.position) - distance2D(b.root.position, player.root.position))[0];
+        if (!enemy) return false;
+        enemy.health = Math.min(enemy.health, enemy.maxHealth * .45);
+        enemy.slowTime = 2;
+        setEnemyTameReady(enemy);
+        return true;
       },
+      strongholdDebug: () => strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), total: stronghold.members.length, cleared: stronghold.cleared })),
+      clearStronghold: clearStrongholdById,
       setQuestComplete: () => { questStage = 3; bossSpawned = true; updateQuestUI(); },
       objectiveInfo: () => currentObjective(),
       collectNearestRune: () => collectExperienceRune(nearestExperienceRune(9999)),
       soulPositions: () => dragonSouls.filter((soul) => !soul.claimed).map((soul) => ({ x: soul.root.position.x, z: soul.root.position.z, xp: soul.xp, grounded: soul.grounded })),
-      chestPositions: () => chests.filter((chest) => !chest.opened).map((chest) => ({ x: chest.root.position.x, z: chest.root.position.z, xp: chest.xp })),
+      chestPositions: () => chests.filter((chest) => !chest.opened).map((chest) => ({ x: chest.root.position.x, z: chest.root.position.z, xp: chest.xp, powerUp: Object.assign({}, chest.powerUp) })),
       aimPoint: () => {
         const aim = computeCrosshairAim(160);
         const direction = new THREE.Vector3(-Math.sin(cameraYaw) * Math.cos(cameraPitch), -Math.sin(cameraPitch), -Math.cos(cameraYaw) * Math.cos(cameraPitch)).normalize();
@@ -6147,7 +6639,7 @@
       endRun: (victory) => endGame(Boolean(victory)),
       shoutReady: () => { player.shout = 100; },
       damagePlayer,
-      enemyDebug: () => groundEnemies.map((enemy) => ({ name: enemy.name, kind: enemy.kind, health: enemy.health, telegraph: Boolean(enemy.telegraph), animation: enemy.animationState, threat: enemy.threat, camp: Boolean(enemy.camp), x: enemy.root.position.x, y: enemy.root.position.y, z: enemy.root.position.z, impulse: enemy.impulse ? enemy.impulse.length() : 0 })),
+      enemyDebug: () => groundEnemies.map((enemy) => ({ name: enemy.name, kind: enemy.kind, health: enemy.health, telegraph: Boolean(enemy.telegraph), animation: enemy.animationState, threat: enemy.threat, camp: Boolean(enemy.camp), strongholdId: enemy.strongholdId, tamed: enemy.tamed, tameReady: enemy.tameReady, tameProgress: enemy.tameProgress, x: enemy.root.position.x, y: enemy.root.position.y, z: enemy.root.position.z, impulse: enemy.impulse ? enemy.impulse.length() : 0 })),
       poiDebug: () => poiDebugInfo.map((info) => ({ kind: info.kind, name: info.name, chests: info.chests, guards: info.guards, collidersAdded: info.collidersAdded })),
       forceEnemyAttack: () => {
         const enemy = groundEnemies.find((item) => !item.dead && !item.camp) || groundEnemies.find((item) => !item.dead);
@@ -6183,6 +6675,7 @@
         if (mastery) Object.keys(mastery).forEach((id) => { if (player.mastery[id]) player.mastery[id].level = clamp(Number(mastery[id]) || 1, 1, MAX_WEAPON_LEVEL); });
         updateProgressionUI();
       },
+      respawnActors: () => { resetActors(); return strongholds.reduce((sum, stronghold) => sum + strongholdAliveCount(stronghold), 0); },
       setSkillForTest: (id, rank) => {
         const node = skillById.get(id);
         if (!node) return false;
@@ -6192,6 +6685,7 @@
         return true;
       },
       forceCritical: () => { player.forceNextCritical = true; },
+      modelCatalog: () => Object.assign({}, visualAssets.modelPaths || {}),
       skillSchema: () => skillTree.map((branch) => ({ id: branch.id, scope: branch.scope || "permanent", nodes: branch.nodes.map((node) => ({ id: node.id, scope: node.scope, maxRank: node.maxRank, cost: node.cost, requiredMastery: node.requiredMastery || null })) })),
       platformProbe: () => {
         const platform = platforms[0];

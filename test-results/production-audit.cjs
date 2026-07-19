@@ -77,7 +77,10 @@ async function boot(context, biome, seed, diagnostics, suffix) {
         pbr: first.snapshot.world.pbrBiomeMaterial,
         titleVantageDry: first.snapshot.position.y > first.snapshot.world.waterLevel + 1,
         activeModelsLoaded: first.snapshot.world.importedModels >= 17,
+        denseImportedWorld: first.snapshot.world.importedModelInstances >= 120,
         biomeEnemyRendered: Boolean(enemy && first.snapshot.world.biomeEnemyNames.includes(enemy.name)),
+        locationGarrisons: first.snapshot.strongholds.total >= 12 && first.snapshot.strongholds.list.every((stronghold) => stronghold.alive >= 3),
+        expandedPois: first.snapshot.world.pois.length >= 8,
         routesValid: first.snapshot.world.routeReports.length === 2 && first.snapshot.world.routeReports.every((route) => route.valid),
         platformWalkable: Boolean(platform && platform.moved > .25 && Math.abs(platform.surface - platform.top) < .01 && platform.blocksBelow && !platform.blocksAbove),
         differentSeedGeometry: layoutsDiffer && terrainCorrelation < .999
@@ -113,6 +116,9 @@ async function boot(context, biome, seed, diagnostics, suffix) {
     test.purchaseSkill("vitality");
     test.purchaseSkill("run_damage");
     test.purchaseSkill("run_damage");
+    const chest = test.chestPositions()[0];
+    test.teleport(chest.x, chest.z);
+    for (let attempt = 0; attempt < 3 && window.ashenholdGame.snapshot().chestsOpened === 0; attempt += 1) test.interact();
     test.teleport(42, 118);
     test.collectNearestRune();
     test.saveRun();
@@ -133,10 +139,13 @@ async function boot(context, biome, seed, diagnostics, suffix) {
     continueLabel,
     checks: {
       booleanMigration: migrated.skillRanks.vitality === 1 && migrated.skillRanks.edge === 1,
+      relicMigration: Object.values(migrated.relicBonuses).every((value) => value === 0),
       specificWeaponGate: wrongWeaponGate === false && ranked.correctWeaponGate === true,
       rankedPurchases: ranked.snapshot.skillRanks.vitality === 3 && ranked.snapshot.runSkills.run_damage === 2,
-      activeRunWritten: Boolean(ranked.saved && ranked.saved.status === "active" && ranked.saved.layoutVersion === 5),
-      activeRunRestored: restored.realm.seed === 737373 && restored.runesCollected === ranked.snapshot.runesCollected && restored.runSkills.run_damage === 2 && Math.abs(restored.position.x - ranked.snapshot.position.x) < .1,
+      sprintTreePresent: migrated.skillBranches >= 12 && migrated.skillNodes >= 66,
+      permanentChestPower: Object.values(ranked.snapshot.relicBonuses).some((value) => value > 0) && JSON.stringify(restored.relicBonuses) === JSON.stringify(ranked.snapshot.relicBonuses),
+      activeRunWritten: Boolean(ranked.saved && ranked.saved.status === "active" && ranked.saved.layoutVersion === 6 && Array.isArray(ranked.saved.world.strongholds)),
+      activeRunRestored: restored.realm.seed === 737373 && restored.runesCollected === ranked.snapshot.runesCollected && restored.chestsOpened === ranked.snapshot.chestsOpened && restored.runSkills.run_damage === 2 && Math.abs(restored.position.x - ranked.snapshot.position.x) < .1,
       continueAffordance: /CONTINUE/.test(continueLabel)
     }
   };
@@ -231,33 +240,70 @@ async function boot(context, biome, seed, diagnostics, suffix) {
   combat.checks.worldSplitterPulse = combat.capstones.worldSplitter.length === 2 && combat.capstones.worldSplitter[1].health < 500 && combat.capstones.worldSplitter[1].impulse > 1;
   await combatPage.close();
 
-  const wavesPage = await context.newPage();
-  instrument(wavesPage, "waves", diagnostics);
-  await wavesPage.goto(BASE + "?test&biome=snowy&seed=929292", { waitUntil: "domcontentloaded", timeout: 90000 });
-  await wavesPage.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
-  const waves = await wavesPage.evaluate(() => {
+  const strongholdsPage = await context.newPage();
+  instrument(strongholdsPage, "strongholds", diagnostics);
+  await strongholdsPage.goto(BASE + "?test&biome=snowy&seed=929292", { waitUntil: "domcontentloaded", timeout: 90000 });
+  await strongholdsPage.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
+  const strongholds = await strongholdsPage.evaluate(() => {
     const test = window.__ASHENHOLD_TEST__;
     test.start();
-    test.setQuestComplete();
-    const targets = [];
-    for (let wave = 1; wave <= 5; wave += 1) {
-      test.skipIntermission();
-      targets.push(window.ashenholdGame.snapshot().waveTotal);
-      test.completeCurrentWave();
-    }
-    const completion = window.ashenholdGame.snapshot();
-    test.skipIntermission();
-    const afterExtraStart = window.ashenholdGame.snapshot();
-    return { targets, completion, afterExtraStart };
+    const base = window.ashenholdGame.snapshot();
+    const first = test.strongholdDebug()[0];
+    test.clearStronghold(first.id);
+    const afterClear = window.ashenholdGame.snapshot();
+    test.setSkillResources(16, 30, 0);
+    const scaledAlive = test.respawnActors();
+    const scaled = window.ashenholdGame.snapshot();
+    test.clearGroundEnemies();
+    test.placeEnemy("warg", 4, 40);
+    const tamePrepared = test.prepareNearestTame();
+    test.interact();
+    const tamed = window.ashenholdGame.snapshot();
+    test.setSkillForTest("gale_pace", 3);
+    test.setSkillForTest("tempest_pace", 3);
+    test.setSkillForTest("marathon", 2);
+    test.setSkillForTest("second_lungs", 2);
+    test.setSkillForTest("stormlaunch", 1);
+    test.setSkillForTest("stormstride", 1);
+    test.teleport(0, 182);
+    test.setStamina(100);
+    return { base, first, afterClear, scaledAlive, scaled, tamePrepared, tamed };
   });
-  await wavesPage.waitForFunction(() => window.ashenholdGame.snapshot().state === "ended", null, { timeout: 5000 });
-  waves.ended = await wavesPage.evaluate(() => window.ashenholdGame.snapshot());
-  waves.checks = {
-    exactTargets: JSON.stringify(waves.targets) === JSON.stringify([4, 6, 8, 10, 12]),
-    fiveWaveCap: waves.completion.wave === 5 && waves.completion.maxWaves === 5 && waves.afterExtraStart.wave === 5,
-    unifiedVictory: waves.completion.assaultCompleted && waves.completion.questStage === 3 && waves.ended.state === "ended"
+  const sprintStartPosition = await strongholdsPage.evaluate(() => window.ashenholdGame.snapshot().position);
+  await strongholdsPage.keyboard.down("Control");
+  await strongholdsPage.keyboard.down("KeyW");
+  await strongholdsPage.evaluate(() => window.__ASHENHOLD_TEST__.step(.25));
+  strongholds.intenseSprint = await strongholdsPage.evaluate(() => window.ashenholdGame.snapshot());
+  await strongholdsPage.evaluate(() => { window.__ASHENHOLD_TEST__.setStamina(4); window.__ASHENHOLD_TEST__.step(.08); });
+  strongholds.lowStamina = await strongholdsPage.evaluate(() => window.ashenholdGame.snapshot());
+  await strongholdsPage.evaluate(() => { window.__ASHENHOLD_TEST__.setStamina(1); window.__ASHENHOLD_TEST__.step(.08); });
+  strongholds.exhausted = await strongholdsPage.evaluate(() => window.ashenholdGame.snapshot());
+  await strongholdsPage.keyboard.up("KeyW");
+  await strongholdsPage.keyboard.up("Control");
+  strongholds.intenseSprintDistance = Math.hypot(strongholds.intenseSprint.position.x - sprintStartPosition.x, strongholds.intenseSprint.position.z - sprintStartPosition.z);
+  strongholds.beforeVictory = await strongholdsPage.evaluate(() => {
+    const test = window.__ASHENHOLD_TEST__;
+    test.setQuestComplete();
+    const objective = test.objectiveInfo();
+    test.strongholdDebug().forEach((stronghold) => test.clearStronghold(stronghold.id));
+    return { objective, snapshot: window.ashenholdGame.snapshot() };
+  });
+  await strongholdsPage.waitForFunction(() => window.ashenholdGame.snapshot().state === "ended", null, { timeout: 6000 });
+  strongholds.ended = await strongholdsPage.evaluate(() => window.ashenholdGame.snapshot());
+  strongholds.checks = {
+    locationCount: strongholds.base.strongholds.total >= 12,
+    garrisonsSpawned: strongholds.base.strongholds.list.every((stronghold) => stronghold.alive >= 3),
+    levelScaling: strongholds.scaledAlive > strongholds.base.strongholds.list.reduce((sum, stronghold) => sum + stronghold.alive, 0) - strongholds.first.alive,
+    clearBonus: strongholds.afterClear.strongholds.cleared === 1 && (strongholds.afterClear.level > strongholds.base.level || strongholds.afterClear.xp !== strongholds.base.xp),
+    strongholdObjective: Boolean(strongholds.beforeVictory.objective && /^CLEAR /.test(strongholds.beforeVictory.objective.label)),
+    taming: strongholds.tamePrepared && strongholds.tamed.companions.length === 1 && strongholds.tamed.bondedPace >= .3,
+    sprintTree: strongholds.base.skillBranches >= 12 && strongholds.base.skillNodes >= 66,
+    intenseSprint: strongholds.intenseSprint.superSprinting && strongholds.intenseSprintDistance > 12,
+    staminaHysteresis: !strongholds.lowStamina.superSprinting && strongholds.lowStamina.sprinting && !strongholds.exhausted.superSprinting && !strongholds.exhausted.sprinting,
+    noWaveDirectorState: !("wave" in strongholds.base) && !("wavePhase" in strongholds.base),
+    unifiedVictory: strongholds.beforeVictory.snapshot.strongholds.cleared === strongholds.beforeVictory.snapshot.strongholds.total && strongholds.ended.questStage === 3 && strongholds.ended.state === "ended"
   };
-  await wavesPage.close();
+  await strongholdsPage.close();
 
   const mobileContext = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
   const mobilePage = await mobileContext.newPage();
@@ -290,15 +336,15 @@ async function boot(context, biome, seed, diagnostics, suffix) {
     uniqueEnemyRosters: new Set(realmMatrix.map((realm) => realm.enemyModels.join("/"))).size === 6,
     progression: Object.values(progression.checks).every(Boolean),
     combat: Object.values(combat.checks).every(Boolean),
-    waves: Object.values(waves.checks).every(Boolean),
+    strongholds: Object.values(strongholds.checks).every(Boolean),
     mobile: Object.values(mobile.checks).every(Boolean),
     noConsoleErrors: diagnostics.errors.length === 0,
     noConsoleWarnings: diagnostics.warnings.length === 0,
     noHttpFailures: diagnostics.http.length === 0
   };
-  const report = { generatedAt: new Date().toISOString(), checks, realmMatrix, progression, combat, waves, mobile, diagnostics };
+  const report = { generatedAt: new Date().toISOString(), checks, realmMatrix, progression, combat, strongholds, mobile, diagnostics };
   fs.writeFileSync("test-results/production-audit.json", JSON.stringify(report, null, 2));
-  console.log(JSON.stringify({ checks, realmChecks: realmMatrix.map((realm) => ({ biome: realm.biome, correlation: realm.terrainCorrelation, checks: realm.checks })), progression: progression.checks, combat: combat.checks, waves: waves.checks, mobile: mobile.checks, diagnostics }, null, 2));
+  console.log(JSON.stringify({ checks, realmChecks: realmMatrix.map((realm) => ({ biome: realm.biome, correlation: realm.terrainCorrelation, checks: realm.checks })), progression: progression.checks, combat: combat.checks, strongholds: strongholds.checks, mobile: mobile.checks, diagnostics }, null, 2));
   await context.close();
   await browser.close();
   if (Object.values(checks).some((value) => !value)) process.exit(1);

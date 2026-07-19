@@ -58,29 +58,28 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   await page.evaluate(() => window.__ASHENHOLD_TEST__.interact());
   const afterRune = await page.evaluate(() => window.ashenholdGame.snapshot());
 
-  await page.evaluate(() => {
-    window.__ASHENHOLD_TEST__.teleport(0, 182);
-    window.__ASHENHOLD_TEST__.skipIntermission();
-    window.__ASHENHOLD_TEST__.step(.12);
+  const strongholdResult = await page.evaluate(() => {
+    const test = window.__ASHENHOLD_TEST__;
+    const before = window.ashenholdGame.snapshot();
+    const first = test.strongholdDebug()[0];
+    const healthBefore = before.health;
+    test.clearStronghold(first.id);
+    const after = window.ashenholdGame.snapshot();
+    return {
+      total: before.strongholds.total,
+      baseAlive: first.alive,
+      clearedBefore: before.strongholds.cleared,
+      clearedAfter: after.strongholds.cleared,
+      healthBefore,
+      healthAfter: after.health,
+      xpChanged: after.level > before.level || after.xp !== before.xp,
+      objective: test.objectiveInfo()
+    };
   });
-  const waveOne = await page.evaluate(() => window.ashenholdGame.snapshot());
-  await page.screenshot({ path: "test-results/assault-wave-latest.png", fullPage: true });
-  for (let i = 0; i < 14; i += 1) {
-    await page.evaluate(() => {
-      window.__ASHENHOLD_TEST__.step(.8);
-      window.__ASHENHOLD_TEST__.defeatWave();
-      window.__ASHENHOLD_TEST__.step(.08);
-    });
-    const phase = await page.evaluate(() => window.ashenholdGame.snapshot().wavePhase);
-    if (phase === "intermission") break;
-  }
-  const betweenWaves = await page.evaluate(() => window.ashenholdGame.snapshot());
-  await page.evaluate(() => window.__ASHENHOLD_TEST__.skipIntermission());
-  const waveTwo = await page.evaluate(() => window.ashenholdGame.snapshot());
+  await page.screenshot({ path: "test-results/stronghold-latest.png", fullPage: true });
 
   const beforeDragon = await page.evaluate(() => window.ashenholdGame.snapshot());
   await page.evaluate(() => {
-    window.__ASHENHOLD_TEST__.completeCurrentWave();
     window.__ASHENHOLD_TEST__.teleport(0, 182);
     window.__ASHENHOLD_TEST__.equipWeapon("blade", true);
     window.__ASHENHOLD_TEST__.placeDragon(4, 1.5, 0);
@@ -111,6 +110,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     if (!spots.length) return { found: 0 };
     test.teleport(spots[0].x, spots[0].z);
     const before = window.ashenholdGame.snapshot();
+    const powerBefore = before.relicBonuses[spots[0].powerUp.type];
     if (before.health > 45) test.damagePlayer(35, "CHEST TEST");
     const damaged = window.ashenholdGame.snapshot().health;
     test.interact();
@@ -122,13 +122,26 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
       opened: after.chestsOpened === before.chestsOpened + 1,
       healed: after.health > damaged,
       xpChanged: after.level > before.level || after.xp !== before.xp,
+      powerUp: spots[0].powerUp,
+      permanentPower: after.relicBonuses[spots[0].powerUp.type] === powerBefore + spots[0].powerUp.amount,
       openedCount: after.chestsOpened
     };
   });
   const routeWalkability = await page.evaluate(() => window.ashenholdGame.snapshot().world.routeReports);
+  const collisionRecovery = await page.evaluate(() => window.__ASHENHOLD_TEST__.collisionRecoveryProbe());
   const biomeProps = await page.evaluate(() => window.ashenholdGame.snapshot().world.props);
+  const modelCatalog = await page.evaluate(() => window.ashenholdGame.modelCatalog());
   const poiInfo = await page.evaluate(() => ({ pois: window.ashenholdGame.snapshot().world.pois, debug: window.__ASHENHOLD_TEST__.poiDebug() }));
   const legendCount = await page.evaluate(() => document.querySelectorAll("#mapLegend > *").length);
+  const tamingResult = await page.evaluate(() => {
+    const test = window.__ASHENHOLD_TEST__;
+    test.teleport(0, 182);
+    test.placeEnemy("warg", 4, 30);
+    const prepared = test.prepareNearestTame();
+    test.interact();
+    const after = window.ashenholdGame.snapshot();
+    return { prepared, companions: after.companions, bondedPace: after.bondedPace };
+  });
 
   await page.evaluate(() => window.__ASHENHOLD_TEST__.teleport(-115, 70));
   const jumpStart = await page.evaluate(() => window.ashenholdGame.snapshot().position.y);
@@ -145,6 +158,31 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   await page.keyboard.down("KeyW");
   await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.35));
   const superSprint = await page.evaluate(() => window.ashenholdGame.snapshot());
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.setStamina(4));
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.08));
+  const lowStaminaSprint = await page.evaluate(() => window.ashenholdGame.snapshot());
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.setStamina(1));
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.08));
+  const exhaustedSprint = await page.evaluate(() => window.ashenholdGame.snapshot());
+  await page.keyboard.up("KeyW");
+  await page.keyboard.up("Control");
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.02));
+  await page.evaluate(() => {
+    const test = window.__ASHENHOLD_TEST__;
+    test.setSkillForTest("gale_pace", 3);
+    test.setSkillForTest("tempest_pace", 3);
+    test.setSkillForTest("marathon", 2);
+    test.setSkillForTest("second_lungs", 2);
+    test.setSkillForTest("stormlaunch", 1);
+    test.setSkillForTest("stormstride", 1);
+    test.setStamina(100);
+    test.teleport(0, 182);
+  });
+  const intenseSprintStart = await page.evaluate(() => window.ashenholdGame.snapshot().position);
+  await page.keyboard.down("Control");
+  await page.keyboard.down("KeyW");
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.25));
+  const intenseSprint = await page.evaluate(() => window.ashenholdGame.snapshot());
   await page.keyboard.up("KeyW");
   await page.keyboard.up("Control");
 
@@ -154,10 +192,16 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   await page.evaluate(() => window.__ASHENHOLD_TEST__.swapShoulder());
   const leftShoulder = await page.evaluate(() => { window.__ASHENHOLD_TEST__.step(.3); return window.ashenholdGame.snapshot().camera; });
   const finalPlaying = await page.evaluate(() => window.ashenholdGame.snapshot());
-  await page.evaluate(() => window.__ASHENHOLD_TEST__.endRun(false));
+  await page.evaluate(() => {
+    const test = window.__ASHENHOLD_TEST__;
+    test.setQuestComplete();
+    test.strongholdDebug().forEach((stronghold) => test.clearStronghold(stronghold.id));
+  });
+  await page.waitForFunction(() => window.ashenholdGame.snapshot().state === "ended", null, { timeout: 6000 });
   const ended = await page.evaluate(() => window.ashenholdGame.snapshot());
 
   const sprintDistance = Math.hypot(superSprint.position.x - sprintStart.x, superSprint.position.z - sprintStart.z);
+  const intenseSprintDistance = Math.hypot(intenseSprint.position.x - intenseSprintStart.x, intenseSprint.position.z - intenseSprintStart.z);
   const checks = {
     booted: titleSnapshot.state === "title",
     correctRealm: titleSnapshot.realm.biome === "jungle" && titleSnapshot.realm.seed === 424242,
@@ -166,18 +210,20 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     importedModels: titleSnapshot.world.importedModels >= 15,
     biomeGrass: titleSnapshot.world.grassInstances >= 1200,
     platforms: titleSnapshot.world.platforms >= 10,
-    expandedSkillTrees: titleSnapshot.skillBranches >= 11 && titleSnapshot.skillNodes >= 60,
+    expandedSkillTrees: titleSnapshot.skillBranches >= 12 && titleSnapshot.skillNodes >= 66,
     overShoulderCamera: initial.camera.overShoulder && initial.camera.shoulderSide === "right" && initial.camera.playerScreen.x < -.08,
     bladeKilledCloseEnemy: afterBlade.kills >= initial.kills + 1,
     bowKilledLongEnemy: afterBow.kills >= afterBlade.kills + 1,
     crosshairFindsTarget: Boolean(aimOnEnemy.target),
     crosshairConverges: aimClear.rayDistance < .6,
-    runeGrantsXpOnly: afterRune.runesCollected === beforeRune.runesCollected + 1 && afterRune.wave === 0 && (afterRune.level > beforeRune.level || afterRune.xp > beforeRune.xp),
-    automaticWaveOne: waveOne.wave === 1 && waveOne.waveActive && waveOne.waveTotal === 4 && waveOne.waveSpawned >= 1,
-    intermissionTimer: betweenWaves.wavePhase === "intermission" && betweenWaves.wave === 1 && betweenWaves.waveTimer > 6,
-    waveTwoAutomatic: waveTwo.wave === 2 && waveTwo.waveActive && waveTwo.waveTotal === 6,
+    runeGrantsXpOnly: afterRune.runesCollected === beforeRune.runesCollected + 1 && afterRune.strongholds.cleared === beforeRune.strongholds.cleared && (afterRune.level > beforeRune.level || afterRune.xp > beforeRune.xp),
+    strongholdsPresent: strongholdResult.total >= 8,
+    garrisonsSpawned: titleSnapshot.strongholds.list.some((stronghold) => stronghold.alive >= 3),
+    clearGrantsBonus: strongholdResult.clearedAfter === strongholdResult.clearedBefore + 1 && strongholdResult.xpChanged,
     higherJump: jumpPeak - jumpStart > 4.5,
     superSprint: superSprint.superSprinting && sprintDistance > 7,
+    sprintHysteresis: !lowStaminaSprint.superSprinting && lowStaminaSprint.sprinting && !exhaustedSprint.superSprinting && !exhaustedSprint.sprinting,
+    intenseSprintTree: intenseSprint.superSprinting && intenseSprintDistance > sprintDistance,
     cameraOrbit: Math.abs(afterLook.yaw - beforeLook.yaw) > Math.PI * 1.5,
     cameraPitchResponds: afterLook.pitch < beforeLook.pitch,
     shoulderSwap: leftShoulder.shoulderSide === "left" && leftShoulder.shoulderOffset < 0,
@@ -186,21 +232,25 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     dragonGrantsXp: afterDragon.level > beforeDragon.level || afterDragon.xp !== beforeDragon.xp,
     soulAbsorbGrantsXp: Boolean(soulAbsorb.absorbed && soulAbsorb.xpChanged),
     combatTextRenders: combatTextCount > 0,
-    chestGrantsRewards: Boolean(chestResult.found >= 5 && chestResult.opened && chestResult.healed && chestResult.xpChanged),
+    chestGrantsRewards: Boolean(chestResult.found >= 5 && chestResult.opened && chestResult.healed && chestResult.xpChanged && chestResult.permanentPower),
     routesWalkable: routeWalkability.length === 2 && routeWalkability.every((route) => route.valid),
+    collisionRecovery: Boolean(collisionRecovery.available && collisionRecovery.colliders > 30 && collisionRecovery.blockedBefore && collisionRecovery.recovered && !collisionRecovery.blockedAfter && collisionRecovery.displacement > .1),
     biomePropsPresent: Boolean(biomeProps && biomeProps.total > 0 && biomeProps.kind),
-    poisPresent: Boolean(poiInfo.pois && poiInfo.pois.length >= 5 && poiInfo.debug && poiInfo.debug.every((poi) => poi.collidersAdded > 0)),
-    poiChestsExist: initial.totalChests >= 9,
+    modelCatalogExposed: Boolean(modelCatalog.warden && modelCatalog.biomeLight && modelCatalog.tower && Object.keys(modelCatalog).length >= 40),
+    poisPresent: Boolean(poiInfo.pois && poiInfo.pois.length >= 8 && poiInfo.debug && poiInfo.debug.every((poi) => poi.collidersAdded > 0)),
+    poiChestsExist: initial.totalChests >= 13,
+    enemyTaming: Boolean(tamingResult.prepared && tamingResult.companions.length === 1 && tamingResult.bondedPace >= .3),
     sprintPoseEngages: Boolean(superSprint.combat && superSprint.combat.sprintPose > .5),
     minimapLegend: legendCount >= 10,
     dragonFacesForward: finalPlaying.dragonForwardDot == null || finalPlaying.dragonForwardDot > 0.5,
+    strongholdVictory: ended.state === "ended" && ended.questStage === 3 && ended.strongholds.cleared === ended.strongholds.total,
     nextRealmPrepared: ended.state === "ended" && ended.realm.next && ended.realm.next.biome !== ended.realm.biome,
     noConsoleErrors: consoleErrors.length === 0,
     noConsoleWarnings: consoleWarnings.length === 0,
     noPageErrors: pageErrors.length === 0,
     noFailedRequests: failedRequests.length === 0
   };
-  const report = { checks, jump: { start: jumpStart, peak: jumpPeak, height: jumpPeak - jumpStart }, sprintDistance, titleSnapshot, initial, afterBlade, afterBow, aimOnEnemy, aimClear, beforeRune, afterRune, waveOne, betweenWaves, waveTwo, afterDragon, soulAbsorb, combatTextCount, chestResult, routeWalkability, biomeProps, poiInfo, legendCount, superSprint, finalPlaying, ended, consoleErrors, consoleWarnings, pageErrors, failedRequests };
+  const report = { checks, jump: { start: jumpStart, peak: jumpPeak, height: jumpPeak - jumpStart }, sprintDistance, intenseSprintDistance, titleSnapshot, initial, afterBlade, afterBow, aimOnEnemy, aimClear, beforeRune, afterRune, strongholdResult, afterDragon, soulAbsorb, combatTextCount, chestResult, routeWalkability, collisionRecovery, modelCatalog, biomeProps, poiInfo, tamingResult, legendCount, superSprint, lowStaminaSprint, exhaustedSprint, intenseSprint, finalPlaying, ended, consoleErrors, consoleWarnings, pageErrors, failedRequests };
   console.log(JSON.stringify(report, null, 2));
   await browser.close();
   if (Object.values(checks).some((value) => !value)) process.exit(1);

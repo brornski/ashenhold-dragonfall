@@ -110,11 +110,11 @@
       <div class="enemy-bar"><i id="dragonHealthBar"></i></div>
     </section>
 
-    <section id="waveHud" class="wave-hud" aria-label="Enemy assault status">
-      <small>ENEMY ASSAULT</small>
-      <strong>WAVE <span id="waveNumber">1</span></strong>
-      <div><i id="waveProgressBar"></i></div>
-      <b id="waveEnemyCount">0 ENEMIES REMAIN</b>
+    <section id="strongholdHud" class="stronghold-hud" aria-label="Stronghold campaign status">
+      <small>REALM CONQUEST</small>
+      <strong><span id="strongholdNumber">0 / 0</span> SECURED</strong>
+      <div><i id="strongholdProgressBar"></i></div>
+      <b id="strongholdStatus">LOCATING STRONGHOLDS</b>
     </section>
 
     <div id="interactionHint" class="interaction-hint"><kbd>E</kbd><span id="interactionText">Absorb Rune</span></div>
@@ -129,7 +129,7 @@
     <aside class="controls-card">
       <p><kbd>WASD</kbd> Move</p><p><kbd>SHIFT</kbd> Sprint</p><p><kbd>CTRL</kbd> Super Sprint</p><p><kbd>SPACE</kbd> High Jump</p>
       <p><kbd>CLICK</kbd> Attack</p><p><kbd>ALT / RMB</kbd> Dodge</p><p><kbd>TAB / MMB</kbd> Lock</p><p><kbd>1—4</kbd> Weapons</p><p><kbd>WHEEL</kbd> Camera</p>
-      <p><kbd>Q</kbd> Shout</p><p><kbd>E</kbd> Interact</p><p><kbd>C</kbd> Shoulder</p><p><kbd>K</kbd> Skills</p><p><kbd>ESC</kbd> Pause</p>
+      <p><kbd>Q</kbd> Shout</p><p><kbd>E</kbd> Interact / Tame</p><p><kbd>C</kbd> Shoulder</p><p><kbd>K</kbd> Skills</p><p><kbd>ESC</kbd> Pause</p>
     </aside>
 
     <section id="mobileControls" class="mobile-controls" aria-label="Touch controls">
@@ -155,15 +155,40 @@
     <section id="titleScreen" class="screen title-screen">
       <div class="title-smoke" aria-hidden="true"></div>
       <div class="title-card">
-        <p class="eyebrow"><span></span>A THIRD-PERSON OPEN WORLD<span></span></p>
-        <p id="realmLabel" class="realm-label">PROCEDURAL REALM</p>
-        <h1><small>ASHENHOLD</small>DRAGONFALL</h1>
-        <p>Cross a seed-forged vertical realm every run, master four weapons through eight permanent and three temporary constellations, survive five escalating enemy waves, reclaim lost forts, and hunt the World-Burner.</p>
-        <button id="enterButton" class="primary-button" type="button"><span>ENTER THE OPEN WORLD</span><kbd>ENTER</kbd></button>
-        <div class="feature-row">
-          <span><i>◈</i> Six changing biomes</span><span><i>⚔</i> Four weapon masteries</span><span><i>△</i> 3D dragon hunts</span>
+        <div class="title-brandline">
+          <span class="title-sigil" aria-hidden="true"><i></i><b></b></span>
+          <p class="eyebrow"><span></span>A SEED-FORGED DARK FANTASY<span></span></p>
         </div>
-        <small class="title-note">Click the world to capture the mouse • Headphones recommended</small>
+        <div class="title-grid">
+          <div class="title-main">
+            <p id="realmLabel" class="realm-label">PROCEDURAL REALM</p>
+            <h1><small>ASHENHOLD</small>DRAGONFALL</h1>
+            <p class="title-lead">Break enemy-held strongholds across a living open realm. Master four weapons, bind wounded creatures to your side, absorb permanent relic power, and hunt Vharok through the storm.</p>
+            <div class="title-actions">
+              <button id="enterButton" class="primary-button" type="button"><span>BEGIN THE HUNT</span><kbd>ENTER</kbd></button>
+              <span class="title-save-state"><i></i> Progress saves locally</span>
+            </div>
+            <div class="feature-row">
+              <span><i>◆</i> Six shifting biomes</span><span><i>⚔</i> Location garrisons</span><span><i>✦</i> Permanent relic power</span><span><i>◇</i> Tameable allies</span>
+            </div>
+          </div>
+          <aside class="title-briefing" aria-label="Current realm briefing">
+            <div class="briefing-kicker"><span></span>WARDEN BRIEFING</div>
+            <div class="briefing-realm"><small>ACTIVE REALM</small><strong id="titleRealmName">FORGING...</strong></div>
+            <dl>
+              <div><dt>SEED</dt><dd id="titleSeed">—</dd></div>
+              <div><dt>STRONGHOLDS</dt><dd id="titleStrongholds">—</dd></div>
+              <div><dt>WARDEN LEVEL</dt><dd id="titleWardenLevel">1</dd></div>
+            </dl>
+            <ol>
+              <li><b>01</b><span>Reach the ruined keep</span></li>
+              <li><b>02</b><span>Break location garrisons</span></li>
+              <li><b>03</b><span>Slay the World-Burner</span></li>
+            </ol>
+            <div class="briefing-status"><i></i> REALM READY</div>
+          </aside>
+        </div>
+        <small class="title-note">Click the world to capture the mouse · Headphones recommended · Press K for constellations</small>
       </div>
     </section>
 
@@ -218,7 +243,7 @@
         <p id="endCopy">The World-Burner still rules the northern sky.</p>
         <div class="end-stats four">
           <div><small>ENEMIES SLAIN</small><strong id="finalKills">0</strong></div>
-          <div><small>WAVE REACHED</small><strong id="finalWave">0</strong></div>
+          <div><small>STRONGHOLDS</small><strong id="finalStrongholds">0/0</strong></div>
           <div><small>DISTANCE WALKED</small><strong id="finalDistance">0m</strong></div>
           <div><small>WORLD EXPLORED</small><strong id="finalExplored">0%</strong></div>
         </div>
