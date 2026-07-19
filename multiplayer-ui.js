@@ -30,6 +30,7 @@
       this.initialized = false;
       this.redirecting = false;
       this.boundEnterGuard = false;
+      this.pingTimer = null;
       this.init();
     }
 
@@ -59,6 +60,12 @@
         <div class="party-status" aria-live="polite"><i></i><span id="partyStatus">SOLO REALM</span><b id="partyCount"></b></div>
         <div id="partyRoster" class="party-roster" aria-label="Party members"></div>`;
       anchor.insertAdjacentElement("afterend", party);
+      const partyHud = document.createElement("aside");
+      partyHud.className = "party-hud";
+      partyHud.hidden = true;
+      partyHud.setAttribute("aria-label", "Co-op party status");
+      partyHud.innerHTML = `<span><i></i> CO-OP</span><strong id="partyHudRoom">------</strong><small id="partyHudCount">0/4</small><small id="partyHudLatency">-- MS</small>`;
+      document.querySelector(".hud")?.appendChild(partyHud);
       this.elements = {
         root: party,
         tabs: [...party.querySelectorAll("[data-party-mode]")],
@@ -72,7 +79,11 @@
         leave: party.querySelector("#partyLeave"),
         status: party.querySelector("#partyStatus"),
         count: party.querySelector("#partyCount"),
-        roster: party.querySelector("#partyRoster")
+        roster: party.querySelector("#partyRoster"),
+        hud: partyHud,
+        hudRoom: partyHud.querySelector("#partyHudRoom"),
+        hudCount: partyHud.querySelector("#partyHudCount"),
+        hudLatency: partyHud.querySelector("#partyHudLatency")
       };
       this.elements.name.value = storedName();
       this.elements.tabs.forEach((tab) => tab.addEventListener("click", () => this.selectMode(tab.dataset.partyMode)));
@@ -98,6 +109,7 @@
       this.client.on("welcome", (message) => this.onWelcome(message));
       this.client.on("snapshot", (snapshot) => this.renderRoster(snapshot.players || []));
       this.client.on("presence", () => this.renderRoster(this.client.snapshot?.players || []));
+      this.client.on("latency", (latency) => { this.elements.hudLatency.textContent = `${latency} MS`; });
       this.client.on("world_registered", (message) => this.dispatch("world-registered", message));
       this.client.on("game_event:realm_started", (event) => {
         this.setStatus("PARTY ENTERING THE REALM", "ready");
@@ -210,10 +222,15 @@
       this.elements.panel.hidden = false;
       this.elements.session.hidden = false;
       this.elements.room.textContent = message.roomCode;
+      this.elements.hud.hidden = false;
+      this.elements.hudRoom.textContent = message.roomCode;
       this.elements.connect.hidden = true;
       this.elements.code.parentElement.hidden = true;
       this.setStatus(message.isHost ? "PARTY READY · YOU ARE HOST" : message.started ? "REALM IN PROGRESS · READY TO JOIN" : "CONNECTED · WAITING FOR HOST", "ready");
       this.renderRoster(message.snapshot?.players || []);
+      clearInterval(this.pingTimer);
+      this.client.ping();
+      this.pingTimer = window.setInterval(() => this.client?.ping(), 3000);
       this.dispatch("welcome", message);
       if (message.started) window.setTimeout(() => this.dispatch("realm-started", { reconnect: true }), 0);
     }
@@ -222,6 +239,7 @@
       if (!this.connected) return;
       const connected = players.filter((player) => player.connected);
       this.elements.count.textContent = `${connected.length}/4`;
+      this.elements.hudCount.textContent = `${connected.length}/4`;
       this.elements.roster.replaceChildren(...connected.map((player) => {
         const item = document.createElement("span");
         item.style.setProperty("--warden-color", player.color || "#78cfdf");
@@ -247,8 +265,11 @@
 
     leave(selectSolo = true) {
       this.client?.disconnect();
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
       this.elements.connect.hidden = false;
       this.elements.session.hidden = true;
+      this.elements.hud.hidden = true;
       this.elements.count.textContent = "";
       this.elements.roster.replaceChildren();
       if (selectSolo) this.selectMode("solo");
