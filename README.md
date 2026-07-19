@@ -16,6 +16,10 @@ python -m http.server 4173 --bind 127.0.0.1
 
 Then open `http://127.0.0.1:4173/`. Do not use `file://`; browser security rules prevent reliable model and texture loading from a local file URL.
 
+## Release 5.5: Living world scale
+
+The world now uses a measured one-unit-per-metre model registry. Settlement houses, castle walls, gates, towers, colliders, and door clearances share player-readable dimensions instead of pack-specific source scales. Each biome also receives its own generated sky and horizon treatment, 24-32 seeded infrastructure micro-landmarks, and an ancient instanced forest with thousands of trees, rare hero trunks, near/far detail, and chunk culling. Captured shrines and graveyards raise persistent Warden flags and add a matching minimap marker.
+
 ## Release 5.4: Strongholds
 
 The five-wave arena director has been replaced by a realm-wide conquest system. Every fort, settlement, ascent summit, ruin, camp, and the keep can hold a seeded enemy garrison. Composition and count scale with Warden level, locations keep their own leashed defenders, and clearing one grants a location-specific mix of XP, healing, shout charge, stamina, weapon mastery, or run XP. Victory now requires defeating Vharok and securing every stronghold.
@@ -88,7 +92,7 @@ npm run a11y
 npm run payload
 ```
 
-Release 5.4 is gated by a deterministic gameplay smoke, a multi-biome/seed production audit, desktop/mobile WCAG scans, a cold-start payload budget under 18 MB, and a live GitHub Pages audit. The complete contracts and extension notes are in [GAME-DEVELOPER-GUIDE.md](GAME-DEVELOPER-GUIDE.md).
+Release 5.5 is gated by a deterministic gameplay smoke, a multi-biome/seed world/production audit, desktop/mobile WCAG scans, a cold-start payload budget under 18 MB, and a live GitHub Pages audit. The complete contracts and extension notes are in [GAME-DEVELOPER-GUIDE.md](GAME-DEVELOPER-GUIDE.md).
 
 ## Assets and saves
 

@@ -37,7 +37,8 @@ async function request(path) {
   const csp = root.headers["content-security-policy"] || "";
   const checks = {
     root200: root.status === 200 && /ASHENHOLD/i.test(root.body),
-    releaseMarker: app.status === 200 && /WORLD_LAYOUT_VERSION\s*=\s*6/.test(app.body) && /strongholdDebug/.test(app.body) && /skillNodes/.test(app.body),
+    releaseMarker: app.status === 200 && /WORLD_LAYOUT_VERSION\s*=\s*7/.test(app.body) && /strongholdDebug/.test(app.body) && /skillNodes/.test(app.body)
+      && /createAncientForest/.test(app.body) && /MODEL_SCALE_TARGETS/.test(app.body) && /SKY_PROFILES/.test(app.body),
     monster200: monster.status === 200 && /"animations"\s*:/.test(monster.body),
     pbrNormal200: normal.status === 200 && Number(normal.headers["content-length"] || normal.body.length) > 100000,
     manifest200: manifest.status === 200 && /Ashenhold/.test(manifest.body),

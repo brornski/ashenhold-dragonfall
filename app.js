@@ -56,7 +56,38 @@
   const persistenceDisabled = testMode && !launchParams.has("test-save");
   const REALM_KEY = "ashenhold-realm-v1";
   const RUN_SAVE_KEY = "ashenhold-active-run-v1";
-  const WORLD_LAYOUT_VERSION = 6;
+  const WORLD_LAYOUT_VERSION = 7;
+  const CANONICAL_WORLD_SCALE = Object.freeze({
+    unitMeters: 1, wardenHeight: 1.9, doorHeight: 2.8, doorWidth: 2.4,
+    houseHeight: [8, 12], castleWallHeight: [9, 15], gateHeight: [7, 10], towerHeight: [18, 32]
+  });
+  // Imported packs use unrelated source units. These targets are measured in the game's
+  // canonical one-unit-per-meter space and converted from each loaded model's bounding box.
+  const MODEL_SCALE_TARGETS = Object.freeze({
+    tower: { role: "castle tower", targetHeight: 21 }, towerTop: { role: "tower crown", targetSpan: 15.5 },
+    wall: { role: "castle wall", targetSpan: 16, targetHeight: 12.5 }, wallCorner: { role: "castle corner", targetSpan: 16, targetHeight: 12.5 },
+    gate: { role: "castle gate", targetSpan: 14, targetHeight: 9.5 }, doorway: { role: "castle doorway", targetSpan: 14, targetHeight: 12.5 },
+    stairs: { role: "castle stairs", targetSpan: 10 }, bridge: { role: "bridge", targetSpan: 18, targetHeight: 7.5 },
+    bridgePillar: { role: "bridge pier", targetHeight: 14 }, siegeTower: { role: "siege tower", targetHeight: 17 },
+    tavern: { role: "two-storey tavern", targetHeight: 10.5 }, market: { role: "market hall", targetHeight: 8.5 },
+    blacksmith: { role: "blacksmith", targetHeight: 8.5 }, homeA: { role: "dwelling", targetHeight: 8.5 },
+    homeB: { role: "dwelling", targetHeight: 9 }, windmill: { role: "windmill", targetHeight: 17 },
+    towerA: { role: "watchtower", targetHeight: 19 }, towerB: { role: "watchtower", targetHeight: 22 },
+    church: { role: "church", targetHeight: 13 }, ruinedHouse: { role: "ruined dwelling", targetHeight: 9 },
+    crypt: { role: "crypt", targetHeight: 9.5 }, cryptA: { role: "crypt", targetHeight: 9 },
+    cryptSmall: { role: "small crypt", targetHeight: 7.5 }, tree: { role: "old-growth tree", targetHeight: 32 },
+    treePalm: { role: "coastal tree", targetHeight: 22 }, treePalmBend: { role: "jungle tree", targetHeight: 27 },
+    treePineA: { role: "conifer", targetHeight: 27 }, treePineB: { role: "conifer", targetHeight: 30 },
+    pineCrooked: { role: "crooked pine", targetHeight: 24 }
+  });
+  const SKY_PROFILES = Object.freeze({
+    jungle: { id: "verdant-canopy", features: ["humid-cloud-decks", "sun-shafts", "green-gold-haze"], halo: [520, 230, -420], haloScale: 150 },
+    shore: { id: "tempest-coast", features: ["storm-shelves", "rain-shafts", "sea-horizon"], halo: [650, 145, -330], haloScale: 120 },
+    desert: { id: "ember-dust", features: ["dust-bands", "white-hot-sun", "heat-horizon"], halo: [720, 195, -210], haloScale: 190 },
+    snowy: { id: "frozen-aurora", features: ["aurora-ribbons", "snow-clouds", "ice-horizon"], halo: [610, 205, -370], haloScale: 135 },
+    mountains: { id: "high-altitude", features: ["massive-clouds", "distant-peaks", "altitude-blue"], halo: [690, 235, -270], haloScale: 145 },
+    moon: { id: "celestial-void", features: ["starfield", "eclipse-moon", "violet-nebula"], halo: [690, 260, -160], haloScale: 105 }
+  });
   const BIOMES = {
     snowy: { name: "FROSTBOUND WILDS", textureId: "snow", relief: 1.05, base: 2.6, fog: 0x869ca6, fogDensity: .00195, ground: 0x718087, cliff: 0x7d898d, grass: 0x50625c, grassStrength: .42, frost: 0xc9d4d5, frostStart: 16, water: 0x315663, waterLevel: -3.2, waterOpacity: .62, sky: 0xb2c5ce, sun: 0xffead2, sunIntensity: 1.22, hemi: 0xa9bdc4, exposure: 1.1, skyZenith: 0x6b87a0, skyHorizon: 0xdfe9ec, skyGlow: 0xdceef4, stoneTint: 0xcfdde2, particleSize: 1.4, particleOpacity: .5, particleFall: .55, particleCount: 1 },
     jungle: { name: "VERDANT RUINS", textureId: "jungle", relief: .72, base: 3.2, fog: 0x1b352c, fogDensity: .00305, ground: 0x344a32, cliff: 0x465448, grass: 0x284b2d, grassStrength: 1.0, frost: 0x7a8a76, frostStart: 125, water: 0x1e514c, waterLevel: -2.4, waterOpacity: .72, sky: 0x71968d, sun: 0xffd5a7, sunIntensity: 1.12, hemi: 0x759a82, exposure: 1.02, skyZenith: 0x1d3a33, skyHorizon: 0x7fae8f, skyGlow: 0xe8c87a, stoneTint: 0x718a64, particleSize: 1.05, particleOpacity: .38, particleFall: .7, particleCount: .9 },
@@ -213,6 +244,17 @@
   let verticalRouteReports = [];
   let biomePropsReport = { kind: "none", total: 0, byKind: {} };
   let importedModelInstances = 0;
+  let modelScaleRegistry = {};
+  let skyReport = { id: "unbuilt", signature: "", features: [], featureCount: 0, gradientStops: 0, horizonBlend: false };
+  let forestChunks = [];
+  let forestVisibilityTimer = 0;
+  let forestReport = {
+    profile: "none", total: 0, heroes: 0, chunks: 0, visible: 0,
+    nearChunks: 0, farChunks: 0, culledChunks: 0, nearTrees: 0, farTrees: 0,
+    instancedMeshes: 0, heroColliders: 0, maxTrunkDiameter: 0
+  };
+  let infrastructureReport = { total: 0, byKind: {}, colliders: 0, importedModels: 0 };
+  let captureFlags = [];
   let groundEnemies = [];
   let experienceRunes = [];
   let chests = [];
@@ -441,14 +483,55 @@
   }
   const terrainFeatures = buildTerrainFeatures();
   worldLayout.pois = generatePoiLayout();
+  function generateInfrastructureLayout() {
+    const salt = worldLayout.salt + 10400;
+    const palettes = {
+      jungle: ["collapsed-wall", "road-shrine", "abandoned-farm", "hunter-platform", "broken-cart", "root-vigil"],
+      shore: ["collapsed-wall", "road-shrine", "fisher-camp", "broken-cart", "watch-platform", "drowned-pier"],
+      desert: ["buried-wall", "road-shrine", "abandoned-farm", "broken-cart", "waystone", "petrified-vigil"],
+      snowy: ["collapsed-wall", "road-shrine", "hunter-platform", "broken-cart", "waystone", "frozen-camp"],
+      mountains: ["collapsed-wall", "road-shrine", "watch-platform", "broken-cart", "waystone", "fallen-bridge"],
+      moon: ["collapsed-wall", "void-shrine", "ruined-habitation", "broken-cart", "waystone", "crystal-vigil"]
+    };
+    const kinds = palettes[realm.biome] || palettes.jungle;
+    const target = 24 + Math.floor(seeded(salt + 1) * 9);
+    const sites = [];
+    const anchors = [[START.x, START.z, 52], [TITLE_VANTAGE.x, TITLE_VANTAGE.z, 42], [RUINS.x, RUINS.z - 24, 86], [RUNE_HOLLOW.x, RUNE_HOLLOW.z, 38]];
+    for (let slot = 0; slot < target; slot += 1) {
+      for (let attempt = 0; attempt < 96; attempt += 1) {
+        const roll = salt + slot * 419 + attempt * 17;
+        const x = (seeded(roll + 1) - .5) * 1480;
+        const z = (seeded(roll + 2) - .5) * 1480;
+        if (Math.abs(x) > 740 || Math.abs(z) > 740) continue;
+        const y = rawTerrainHeight(x, z);
+        if (y <= biome.waterLevel + .8) continue;
+        const slope = Math.abs(rawTerrainHeight(x + 2, z) - y) + Math.abs(rawTerrainHeight(x, z + 2) - y);
+        if (slope > 1.25) continue;
+        if (z > -195 && z < 245 && Math.abs(x - roadCenterAt(z)) < 25) continue;
+        let clear = anchors.every((anchor) => Math.hypot(x - anchor[0], z - anchor[1]) >= anchor[2]);
+        for (let index = 0; index < worldLayout.forts.length && clear; index += 1) clear = Math.hypot(x - worldLayout.forts[index][0], z - worldLayout.forts[index][1]) >= 78;
+        for (let index = 0; index < worldLayout.routes.length && clear; index += 1) clear = Math.hypot(x - worldLayout.routes[index][0], z - worldLayout.routes[index][1]) >= 58;
+        for (let index = 0; index < worldLayout.pois.length && clear; index += 1) clear = Math.hypot(x - worldLayout.pois[index].x, z - worldLayout.pois[index].z) >= 54;
+        for (let index = 0; index < sites.length && clear; index += 1) clear = Math.hypot(x - sites[index].x, z - sites[index].z) >= 35;
+        if (!clear) continue;
+        sites.push({
+          id: "micro-" + slot, kind: kinds[Math.floor(seeded(roll + 3) * kinds.length)],
+          x, z, rotation: seeded(roll + 4) * Math.PI * 2, variant: Math.floor(seeded(roll + 5) * 4)
+        });
+        break;
+      }
+    }
+    return sites;
+  }
+  worldLayout.infrastructure = generateInfrastructureLayout();
   const foundationZones = [
     { id: "title-vantage", x: TITLE_VANTAGE.x, z: TITLE_VANTAGE.z, inner: 14, outer: 28, lift: 0 },
     { id: "start", x: START.x, z: START.z, inner: 18, outer: 42, lift: .2 },
-    { id: "keep", x: RUINS.x, z: RUINS.z - 24, inner: 42, outer: 70, lift: 0 },
+    { id: "keep", x: RUINS.x, z: RUINS.z - 27, inner: 47, outer: 84, lift: 0 },
     { id: "rune-hollow", x: RUNE_HOLLOW.x, z: RUNE_HOLLOW.z, inner: 10, outer: 24, lift: 0 }
-  ].concat(worldLayout.forts.map((fort, index) => ({ id: "fort-" + index, x: fort[0], z: fort[1], inner: 30, outer: 58, lift: .15 })))
+  ].concat(worldLayout.forts.map((fort, index) => ({ id: "fort-" + index, x: fort[0], z: fort[1], inner: 38, outer: 68, lift: .15 })))
     .concat(worldLayout.routes.map((route, index) => ({ id: "route-" + index, x: route[0], z: route[1], inner: 16, outer: 34, lift: .25 })))
-    .concat(worldLayout.pois.map((poi, index) => ({ id: "poi-" + index, x: poi.x, z: poi.z, inner: 14, outer: 30, lift: .18 })));
+    .concat(worldLayout.pois.map((poi, index) => ({ id: "poi-" + index, x: poi.x, z: poi.z, inner: poi.kind === "hamlet" ? 23 : 17, outer: poi.kind === "hamlet" ? 44 : 35, lift: .18 })));
   const foundationTargets = new Map();
   function roadCenterAt(z) {
     const t = clamp((215 - z) / 368, 0, 1);
@@ -1267,6 +1350,55 @@
     });
   }
 
+  function measureLoadedModelRegistry() {
+    modelScaleRegistry = {};
+    const assets = visualAssets.models || {};
+    Object.keys(assets).forEach((id) => {
+      const sceneRoot = assets[id] && assets[id].scene;
+      if (!sceneRoot) return;
+      sceneRoot.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(sceneRoot);
+      const sx = Math.max(.01, box.max.x - box.min.x);
+      const sy = Math.max(.01, box.max.y - box.min.y);
+      const sz = Math.max(.01, box.max.z - box.min.z);
+      const target = MODEL_SCALE_TARGETS[id] || null;
+      const canonicalScale = target
+        ? target.targetSpan ? target.targetSpan / Math.max(sx, sz) : target.targetHeight / sy
+        : 1;
+      const canonicalScaleY = target && target.targetHeight ? target.targetHeight / sy : canonicalScale;
+      modelScaleRegistry[id] = {
+        id, role: target ? target.role : "prop", sx, sy, sz,
+        minX: box.min.x, minY: box.min.y, minZ: box.min.z,
+        maxX: box.max.x, maxY: box.max.y, maxZ: box.max.z,
+        canonicalScale, canonicalScaleY,
+        targetHeight: target && target.targetHeight || null,
+        targetSpan: target && target.targetSpan || null,
+        worldWidth: sx * canonicalScale, worldHeight: sy * canonicalScaleY, worldDepth: sz * canonicalScale
+      };
+    });
+  }
+
+  function canonicalModelScale(id, multiplier) {
+    const metric = modelScaleRegistry[id];
+    return (metric ? metric.canonicalScale : 1) * (multiplier == null ? 1 : multiplier);
+  }
+
+  function modelVerticalScale(id, horizontalScale) {
+    const metric = modelScaleRegistry[id];
+    if (!metric || !metric.canonicalScale) return horizontalScale;
+    return horizontalScale * metric.canonicalScaleY / metric.canonicalScale;
+  }
+
+  function scaledModelCollider(id, scale, heightLimit) {
+    const metric = modelScaleRegistry[id];
+    if (!metric) return null;
+    const verticalScale = modelVerticalScale(id, scale);
+    return {
+      hx: metric.sx * scale * .46, hz: metric.sz * scale * .46,
+      minY: 0, maxY: Math.min(metric.sy * verticalScale, heightLimit == null ? Infinity : heightLimit)
+    };
+  }
+
   async function loadModelAssets() {
     visualAssets.models = {};
     if (!THREE.GLTFLoader) {
@@ -1370,6 +1502,7 @@
       if (result.status === "fulfilled") visualAssets.models[id] = result.value;
       else console.warn("3D model failed to load:", entries[index][1], result.reason);
     });
+    measureLoadedModelRegistry();
   }
 
   async function boot() {
@@ -1393,6 +1526,7 @@
       createRuins();
       createWilderness();
       createImportedWorld();
+      createInfrastructure();
       createVerticalRoutes();
       createExperienceRunes();
       createSettlements();
@@ -1474,6 +1608,97 @@
     glowGradient.addColorStop(1, "rgba(" + glowRgb + ",0)");
     context.fillStyle = glowGradient;
     context.fillRect(0, 0, 1024, 512);
+    const profile = SKY_PROFILES[realm.biome] || SKY_PROFILES.jungle;
+    const skySalt = 13100 + BIOME_IDS.indexOf(realm.biome) * 1000;
+    let featureCount = 0;
+    const ellipse = (x, y, rx, ry, color, alpha) => {
+      context.save();
+      context.globalAlpha = alpha;
+      context.fillStyle = color;
+      context.beginPath();
+      context.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+      featureCount += 1;
+    };
+    if (realm.biome === "jungle") {
+      for (let index = 0; index < 28; index += 1) {
+        ellipse(seeded(skySalt + index * 5) * 1100 - 38, 165 + seeded(skySalt + index * 5 + 1) * 135,
+          42 + seeded(skySalt + index * 5 + 2) * 95, 9 + seeded(skySalt + index * 5 + 3) * 24, "#17392e", .12 + seeded(skySalt + index * 5 + 4) * .14);
+      }
+      context.save();
+      context.globalCompositeOperation = "screen";
+      for (let index = 0; index < 7; index += 1) {
+        const x = 410 + index * 45 + seeded(skySalt + 300 + index) * 70;
+        const shaft = context.createLinearGradient(x, 112, x + 80, 390);
+        shaft.addColorStop(0, "rgba(238,215,135,.2)");
+        shaft.addColorStop(1, "rgba(238,215,135,0)");
+        context.fillStyle = shaft;
+        context.beginPath();
+        context.moveTo(x, 100); context.lineTo(x + 25, 100); context.lineTo(x + 145, 420); context.lineTo(x + 65, 420); context.closePath(); context.fill();
+        featureCount += 1;
+      }
+      context.restore();
+    } else if (realm.biome === "shore") {
+      for (let index = 0; index < 24; index += 1) {
+        ellipse(seeded(skySalt + index * 7) * 1120 - 48, 100 + seeded(skySalt + index * 7 + 1) * 170,
+          55 + seeded(skySalt + index * 7 + 2) * 120, 13 + seeded(skySalt + index * 7 + 3) * 32, index % 3 ? "#233c46" : "#72898e", .18 + seeded(skySalt + index * 7 + 4) * .22);
+      }
+      context.save();
+      context.strokeStyle = "rgba(168,204,210,.15)";
+      context.lineWidth = 3;
+      for (let index = 0; index < 15; index += 1) {
+        const x = 40 + seeded(skySalt + 500 + index * 3) * 950;
+        context.beginPath(); context.moveTo(x, 205); context.lineTo(x - 75, 420); context.stroke();
+        featureCount += 1;
+      }
+      context.restore();
+    } else if (realm.biome === "desert") {
+      for (let index = 0; index < 15; index += 1) {
+        ellipse(seeded(skySalt + index * 7) * 1080 - 28, 250 + seeded(skySalt + index * 7 + 1) * 95,
+          80 + seeded(skySalt + index * 7 + 2) * 150, 12 + seeded(skySalt + index * 7 + 3) * 25, index % 2 ? "#9d6c43" : "#d7a066", .09 + seeded(skySalt + index * 7 + 4) * .16);
+      }
+      const heat = context.createLinearGradient(0, 230, 0, 340);
+      heat.addColorStop(0, "rgba(255,205,121,0)"); heat.addColorStop(.55, "rgba(255,190,101,.21)"); heat.addColorStop(1, "rgba(111,64,39,0)");
+      context.fillStyle = heat; context.fillRect(0, 220, 1024, 140); featureCount += 1;
+    } else if (realm.biome === "snowy") {
+      context.save();
+      context.globalCompositeOperation = "screen";
+      context.lineCap = "round";
+      for (let band = 0; band < 5; band += 1) {
+        context.strokeStyle = band % 2 ? "rgba(102,226,195,.2)" : "rgba(126,155,255,.18)";
+        context.lineWidth = 16 + band * 5;
+        context.beginPath();
+        context.moveTo(-40, 95 + band * 18);
+        context.bezierCurveTo(230, 28 + band * 11, 470, 205 - band * 9, 760, 82 + band * 13);
+        context.bezierCurveTo(870, 45 + band * 12, 960, 100 + band * 16, 1070, 64 + band * 10);
+        context.stroke(); featureCount += 1;
+      }
+      context.restore();
+      for (let index = 0; index < 16; index += 1) ellipse(seeded(skySalt + index * 5) * 1100 - 38, 190 + seeded(skySalt + index * 5 + 1) * 105, 46 + seeded(skySalt + index * 5 + 2) * 90, 10 + seeded(skySalt + index * 5 + 3) * 20, "#d5e0e3", .08 + seeded(skySalt + index * 5 + 4) * .12);
+    } else if (realm.biome === "mountains") {
+      for (let index = 0; index < 22; index += 1) ellipse(seeded(skySalt + index * 6) * 1120 - 48, 85 + seeded(skySalt + index * 6 + 1) * 170, 48 + seeded(skySalt + index * 6 + 2) * 115, 12 + seeded(skySalt + index * 6 + 3) * 30, index % 2 ? "#394b5a" : "#c5d0d4", .1 + seeded(skySalt + index * 6 + 4) * .18);
+      context.save(); context.fillStyle = "rgba(32,42,51,.35)"; context.beginPath(); context.moveTo(0, 330);
+      for (let x = 0; x <= 1024; x += 42) context.lineTo(x, 330 - seeded(skySalt + 700 + x) * 88);
+      context.lineTo(1024, 390); context.lineTo(0, 390); context.closePath(); context.fill(); context.restore(); featureCount += 1;
+    } else {
+      context.save(); context.fillStyle = "rgba(221,231,255,.88)";
+      for (let index = 0; index < 190; index += 1) {
+        const radius = .45 + seeded(skySalt + index * 5 + 2) * 1.45;
+        context.globalAlpha = .25 + seeded(skySalt + index * 5 + 3) * .7;
+        context.beginPath(); context.arc(seeded(skySalt + index * 5) * 1024, seeded(skySalt + index * 5 + 1) * 330, radius, 0, Math.PI * 2); context.fill();
+      }
+      context.restore(); featureCount += 190;
+      const nebula = context.createRadialGradient(220, 115, 8, 220, 115, 280);
+      nebula.addColorStop(0, "rgba(142,102,210,.24)"); nebula.addColorStop(.5, "rgba(85,64,151,.11)"); nebula.addColorStop(1, "rgba(35,29,77,0)");
+      context.fillStyle = nebula; context.fillRect(0, 0, 560, 390); featureCount += 1;
+      ellipse(790, 112, 54, 54, "#bac7ff", .62); ellipse(807, 100, 51, 51, "#171a31", .94);
+    }
+    skyReport = {
+      id: profile.id, features: profile.features.slice(), featureCount,
+      signature: profile.id + ":" + biome.skyZenith.toString(16) + ":" + featureCount,
+      gradientStops: 5, horizonBlend: true
+    };
     const texture = new THREE.CanvasTexture(surface);
     texture.encoding = THREE.sRGBEncoding;
     texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -1533,8 +1758,9 @@
       map: haloTexture, color: biome.skyGlow || biome.sun, transparent: true, opacity: realm.biome === "moon" ? .72 : .52,
       blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false
     }));
-    halo.position.set(760, 180, -150);
-    halo.scale.setScalar(realm.biome === "moon" ? 105 : 170);
+    const skyProfile = SKY_PROFILES[realm.biome] || SKY_PROFILES.jungle;
+    halo.position.set(skyProfile.halo[0], skyProfile.halo[1], skyProfile.halo[2]);
+    halo.scale.setScalar(skyProfile.haloScale);
     halo.renderOrder = -90;
     sky.add(halo);
 
@@ -1855,44 +2081,46 @@
     ruins.name = "Ashenhold Keep";
     scene.add(ruins);
     const z = RUINS.z;
-    addStoneBox(ruins, -24, z - 25, 5, 11, 52, 0, true);
-    addStoneBox(ruins, 24, z - 25, 5, 11, 52, 0, true);
-    addStoneBox(ruins, -16, z - 51, 19, 9, 5, 0, true);
-    addStoneBox(ruins, 16, z - 51, 19, 13, 5, 0, true);
-    addStoneBox(ruins, -17, z + 2, 15, 8, 4, 0, true);
-    addStoneBox(ruins, 17, z + 2, 15, 6, 4, 0, true);
+    // Canonical keep: a roughly 80 x 82 metre defensible enclosure, with a nine-metre gate.
+    addStoneBox(ruins, -38, z - 27, 6, 15, 82, 0, true);
+    addStoneBox(ruins, 38, z - 27, 6, 15, 82, 0, true);
+    addStoneBox(ruins, -20, z - 68, 34, 14, 6, 0, true);
+    addStoneBox(ruins, 20, z - 68, 34, 17, 6, 0, true);
+    addStoneBox(ruins, -21, z + 14, 31, 13, 6, 0, true);
+    addStoneBox(ruins, 21, z + 14, 31, 11, 6, 0, true);
 
-    const towerGeometry = new THREE.CylinderGeometry(7.2, 8, 17, 9);
-    [[-25, z - 51], [25, z - 51], [-25, z + 2], [25, z + 2]].forEach((point, index) => {
+    const towerGeometry = new THREE.CylinderGeometry(9.2, 10.2, 26, 10);
+    [[-38, z - 68], [38, z - 68], [-38, z + 14], [38, z + 14]].forEach((point, index) => {
       const tower = new THREE.Mesh(towerGeometry, index % 2 ? darkStoneMaterial : stoneMaterial);
-      tower.position.set(point[0], terrainHeight(point[0], point[1]) + 8.5, point[1]);
+      const towerBase = terrainHeight(point[0], point[1]);
+      tower.position.set(point[0], towerBase + 13, point[1]);
       tower.rotation.y = index * .38;
       tower.castShadow = !isCoarse;
       tower.receiveShadow = true;
       ruins.add(tower);
-      colliders.push({ x: point[0], z: point[1], hx: 6.2, hz: 6.2 });
-      for (let b = 0; b < 6; b += 1) {
+      addCollider(point[0], point[1], 8.8, 8.8, 0, towerBase, towerBase + 27);
+      for (let b = 0; b < 8; b += 1) {
         if ((b + index) % 3 === 0) continue;
-        const angle = b / 6 * Math.PI * 2;
-        const battlement = new THREE.Mesh(new THREE.BoxGeometry(2.7, 2.5, 2.7), stoneMaterial);
-        battlement.position.set(point[0] + Math.cos(angle) * 6.2, tower.position.y + 9, point[1] + Math.sin(angle) * 6.2);
+        const angle = b / 8 * Math.PI * 2;
+        const battlement = new THREE.Mesh(new THREE.BoxGeometry(3.1, 3, 3.1), stoneMaterial);
+        battlement.position.set(point[0] + Math.cos(angle) * 8.2, tower.position.y + 14, point[1] + Math.sin(angle) * 8.2);
         battlement.castShadow = !isCoarse;
         ruins.add(battlement);
       }
     });
 
-    [-4.8, 4.8].forEach((x) => addStoneBox(ruins, x, z + 7, 3.2, 11, 3.5, 0, true));
-    addStoneBox(ruins, 0, z + 7, 13, 2.8, 3.5, 0, false).position.y += 8.2;
+    [-5.6, 5.6].forEach((x) => addStoneBox(ruins, x, z + 14, 3.4, 14, 5.8, 0, true));
+    addStoneBox(ruins, 0, z + 14, 14.6, 3.2, 5.8, 0, false).position.y += 10.3;
 
-    const obelisk = new THREE.Mesh(new THREE.ConeGeometry(2.3, 12, 4), darkStoneMaterial);
-    obelisk.position.set(0, terrainHeight(0, z - 26) + 6, z - 26);
+    const obelisk = new THREE.Mesh(new THREE.ConeGeometry(3.2, 17, 4), darkStoneMaterial);
+    obelisk.position.set(0, terrainHeight(0, z - 27) + 8.5, z - 27);
     obelisk.rotation.y = Math.PI / 4;
     obelisk.castShadow = !isCoarse;
     ruins.add(obelisk);
 
-    createFire(-10, z - 15, true);
-    createFire(12, z - 34, false);
-    createFire(0, z + 15, false);
+    createFire(-16, z - 12, true);
+    createFire(18, z - 43, false);
+    createFire(0, z + 24, false);
   }
 
   function createFire(x, z, withLight) {
@@ -1942,6 +2170,169 @@
     scene.add(group);
   }
 
+  const FOREST_PROFILES = Object.freeze({
+    jungle: { id: "primeval-broadleaf", desktop: 3600, coarse: 2200, minHeight: 18, maxHeight: 38, heroMin: 50, heroMax: 82, heroChance: .016, trunk: 1.28, crown: "broad", leaf: 0x214d2d, bark: 0x2b2119 },
+    snowy: { id: "ancient-conifer", desktop: 3000, coarse: 1800, minHeight: 16, maxHeight: 34, heroMin: 43, heroMax: 68, heroChance: .013, trunk: 1.05, crown: "conifer", leaf: 0x526a68, bark: 0x332c29 },
+    shore: { id: "storm-coast-grove", desktop: 2500, coarse: 1500, minHeight: 15, maxHeight: 31, heroMin: 40, heroMax: 62, heroChance: .012, trunk: .92, crown: "broad", leaf: 0x3b6650, bark: 0x3c2c21 },
+    mountains: { id: "wind-carved-pine", desktop: 2200, coarse: 1400, minHeight: 13, maxHeight: 29, heroMin: 38, heroMax: 58, heroChance: .011, trunk: .9, crown: "conifer", leaf: 0x40574c, bark: 0x332b29 },
+    desert: { id: "petrified-forest", desktop: 2000, coarse: 900, minHeight: 10, maxHeight: 24, heroMin: 32, heroMax: 52, heroChance: .01, trunk: 1.1, crown: "dead", leaf: 0x73543e, bark: 0x503727 },
+    moon: { id: "umbra-deadwood", desktop: 2200, coarse: 1200, minHeight: 11, maxHeight: 27, heroMin: 35, heroMax: 57, heroChance: .012, trunk: 1.06, crown: "crystal", leaf: 0x686a94, bark: 0x282638 }
+  });
+
+  function forestPlacementClear(x, z, padding) {
+    const clearance = padding || 0;
+    if (z > -205 && z < 255 && Math.abs(x - roadCenterAt(z)) < 18 + clearance) return false;
+    if (Math.hypot(x - START.x, z - START.z) < 48 + clearance) return false;
+    if (Math.hypot(x - TITLE_VANTAGE.x, z - TITLE_VANTAGE.z) < 34 + clearance) return false;
+    if (Math.hypot(x - RUINS.x, z - (RUINS.z - 27)) < 88 + clearance) return false;
+    if (Math.hypot(x - RUNE_HOLLOW.x, z - RUNE_HOLLOW.z) < 28 + clearance) return false;
+    for (let index = 0; index < worldLayout.forts.length; index += 1) if (Math.hypot(x - worldLayout.forts[index][0], z - worldLayout.forts[index][1]) < 66 + clearance) return false;
+    for (let index = 0; index < worldLayout.routes.length; index += 1) if (Math.hypot(x - worldLayout.routes[index][0], z - worldLayout.routes[index][1]) < 44 + clearance) return false;
+    for (let index = 0; index < worldLayout.pois.length; index += 1) if (Math.hypot(x - worldLayout.pois[index].x, z - worldLayout.pois[index].z) < 38 + clearance) return false;
+    for (let index = 0; index < worldLayout.infrastructure.length; index += 1) if (Math.hypot(x - worldLayout.infrastructure[index].x, z - worldLayout.infrastructure[index].z) < 12 + clearance) return false;
+    return true;
+  }
+
+  function createAncientForest() {
+    const profile = FOREST_PROFILES[realm.biome] || FOREST_PROFILES.jungle;
+    const target = isCoarse ? profile.coarse : profile.desktop;
+    const placements = [];
+    const salt = worldLayout.salt + 15200;
+    for (let attempt = 0; placements.length < target && attempt < target * 16; attempt += 1) {
+      const roll = salt + attempt * 19;
+      const x = (seeded(roll + 1) - .5) * 1660;
+      const z = (seeded(roll + 2) - .5) * 1660;
+      if (!forestPlacementClear(x, z, 1.5)) continue;
+      const y = terrainHeight(x, z);
+      if (y <= biome.waterLevel + .45) continue;
+      const slope = Math.abs(terrainHeight(x + 1.5, z) - y) + Math.abs(terrainHeight(x, z + 1.5) - y);
+      if (slope > 1.35) continue;
+      const hero = seeded(roll + 3) < profile.heroChance;
+      const height = hero
+        ? lerp(profile.heroMin, profile.heroMax, seeded(roll + 4))
+        : lerp(profile.minHeight, profile.maxHeight, seeded(roll + 4));
+      const trunkRadius = hero
+        ? lerp(2.3, realm.biome === "jungle" ? 6.7 : 5.2, seeded(roll + 5))
+        : (.38 + seeded(roll + 5) * .78) * profile.trunk;
+      const crownRadius = hero ? height * (.18 + seeded(roll + 6) * .08) : height * (.14 + seeded(roll + 6) * .065);
+      placements.push({ x, y, z, height, trunkRadius, crownRadius, hero, rotation: seeded(roll + 7) * Math.PI * 2 });
+    }
+    const chunkSize = 180;
+    const buckets = new Map();
+    placements.forEach((tree) => {
+      const gx = Math.floor((tree.x + HALF_WORLD) / chunkSize);
+      const gz = Math.floor((tree.z + HALF_WORLD) / chunkSize);
+      const key = gx + ":" + gz;
+      if (!buckets.has(key)) buckets.set(key, { gx, gz, trees: [] });
+      buckets.get(key).trees.push(tree);
+    });
+    const trunkGeometry = new THREE.CylinderGeometry(.45, .65, 1, isCoarse ? 5 : 7);
+    const crownGeometry = profile.crown === "conifer" ? new THREE.ConeGeometry(1, 1, isCoarse ? 5 : 7)
+      : profile.crown === "crystal" ? new THREE.OctahedronGeometry(1, 0)
+      : profile.crown === "dead" ? new THREE.ConeGeometry(.45, 1, 5)
+      : new THREE.SphereGeometry(1, isCoarse ? 5 : 7, isCoarse ? 4 : 6);
+    const farGeometry = new THREE.ConeGeometry(.72, 1, 5);
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: profile.bark, roughness: 1, metalness: 0 });
+    const crownMaterial = new THREE.MeshStandardMaterial({
+      color: profile.leaf, roughness: .96, metalness: profile.crown === "crystal" ? .2 : 0,
+      emissive: profile.crown === "crystal" ? 0x26264d : 0x000000,
+      emissiveIntensity: profile.crown === "crystal" ? .35 : 0
+    });
+    const farMaterial = new THREE.MeshLambertMaterial({ color: new THREE.Color(profile.leaf).multiplyScalar(.72) });
+    const matrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    forestChunks = [];
+    let heroColliderBudget = isCoarse ? 12 : 28;
+    const colliderCountBefore = colliders.length;
+    buckets.forEach((bucket) => {
+      const centerX = -HALF_WORLD + (bucket.gx + .5) * chunkSize;
+      const centerZ = -HALF_WORLD + (bucket.gz + .5) * chunkSize;
+      const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, bucket.trees.length);
+      const crownMesh = new THREE.InstancedMesh(crownGeometry, crownMaterial, bucket.trees.length);
+      const farMesh = new THREE.InstancedMesh(farGeometry, farMaterial, bucket.trees.length);
+      bucket.trees.forEach((tree, index) => {
+        quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), tree.rotation);
+        matrix.compose(
+          new THREE.Vector3(tree.x - centerX, tree.y + tree.height * .5, tree.z - centerZ), quaternion,
+          new THREE.Vector3(tree.trunkRadius / .65, tree.height, tree.trunkRadius / .65)
+        );
+        trunkMesh.setMatrixAt(index, matrix);
+        const crownHeight = profile.crown === "dead" ? tree.height * .42 : tree.height * (tree.hero ? .52 : .46);
+        const crownY = tree.y + tree.height * (profile.crown === "conifer" ? .7 : .78);
+        matrix.compose(
+          new THREE.Vector3(tree.x - centerX, crownY, tree.z - centerZ), quaternion,
+          new THREE.Vector3(tree.crownRadius, crownHeight, tree.crownRadius)
+        );
+        crownMesh.setMatrixAt(index, matrix);
+        matrix.compose(
+          new THREE.Vector3(tree.x - centerX, tree.y + tree.height * .5, tree.z - centerZ), quaternion,
+          new THREE.Vector3(Math.max(tree.trunkRadius * 1.5, tree.crownRadius * .72), tree.height, Math.max(tree.trunkRadius * 1.5, tree.crownRadius * .72))
+        );
+        farMesh.setMatrixAt(index, matrix);
+        if (tree.hero && heroColliderBudget > 0) {
+          addCollider(tree.x, tree.z, tree.trunkRadius * .72, tree.trunkRadius * .72, 0, tree.y, tree.y + tree.height);
+          heroColliderBudget -= 1;
+        }
+      });
+      [trunkMesh, crownMesh, farMesh].forEach((mesh) => {
+        mesh.position.set(centerX, 0, centerZ);
+        mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.frustumCulled = false;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+      });
+      trunkMesh.castShadow = !isCoarse;
+      crownMesh.castShadow = false;
+      farMesh.castShadow = false;
+      forestChunks.push({ centerX, centerZ, count: bucket.trees.length, nearMeshes: [trunkMesh, crownMesh], farMesh });
+    });
+    forestReport = {
+      profile: profile.id, total: placements.length,
+      heroes: placements.filter((tree) => tree.hero).length,
+      chunks: forestChunks.length, visible: 0,
+      nearChunks: 0, farChunks: 0, culledChunks: forestChunks.length,
+      nearTrees: 0, farTrees: 0,
+      instancedMeshes: forestChunks.length * 3,
+      heroColliders: colliders.length - colliderCountBefore,
+      maxTrunkDiameter: placements.reduce((maximum, tree) => Math.max(maximum, tree.trunkRadius * 2), 0),
+      potentialDrawCalls: forestChunks.length * 3
+    };
+    updateAncientForestVisibility(true);
+  }
+
+  function updateAncientForestVisibility(force) {
+    if (!force) {
+      forestVisibilityTimer -= .016;
+      if (forestVisibilityTimer > 0) return;
+    }
+    forestVisibilityTimer = .35;
+    const focus = player.root ? player.root.position : TITLE_VANTAGE;
+    const nearDistance = isCoarse ? 150 : 255;
+    const farDistance = (isCoarse ? 390 : 650) * Math.max(.72, qualityScale);
+    let visible = 0;
+    let nearChunks = 0;
+    let farChunks = 0;
+    let nearTrees = 0;
+    let farTrees = 0;
+    forestChunks.forEach((chunk) => {
+      const distance = Math.hypot(chunk.centerX - focus.x, chunk.centerZ - focus.z);
+      const near = distance < nearDistance;
+      const far = !near && distance < farDistance;
+      chunk.nearMeshes.forEach((mesh) => { mesh.visible = near; });
+      chunk.farMesh.visible = far;
+      if (near) { nearChunks += 1; nearTrees += chunk.count; }
+      else if (far) { farChunks += 1; farTrees += chunk.count; }
+      if (near || far) visible += chunk.count;
+    });
+    forestReport.visible = visible;
+    forestReport.nearChunks = nearChunks;
+    forestReport.farChunks = farChunks;
+    forestReport.culledChunks = Math.max(0, forestChunks.length - nearChunks - farChunks);
+    forestReport.nearTrees = nearTrees;
+    forestReport.farTrees = farTrees;
+  }
+
   function createWilderness() {
     const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
     const rockMaterial = new THREE.MeshStandardMaterial({ color: biome.cliff, roughness: .98 });
@@ -1961,14 +2352,7 @@
     rocks.receiveShadow = true;
     scene.add(rocks);
 
-    const treeDensity = realm.biome === "moon" ? 0 : realm.biome === "desert" ? .22 : realm.biome === "jungle" ? 1.7 : realm.biome === "shore" ? .72 : 1;
-    const treeCount = Math.round((isCoarse ? 20 : 38) * treeDensity);
-    for (let i = 0; i < treeCount; i += 1) {
-      let x = (seeded(i * 17 + 8) - .5) * 900;
-      let z = (seeded(i * 23 + 2) - .5) * 900;
-      if (Math.abs(x) < 23 && z > -180 && z < 230) x += x < 0 ? -35 : 35;
-      createDeadTree(x, z, .75 + seeded(i * 31) * .8, seeded(i * 19) * Math.PI * 2);
-    }
+    createAncientForest();
 
     if (!visualAssets.models || !visualAssets.models.tower) {
       createWatchtower(154, 74);
@@ -2010,10 +2394,13 @@
     if (!asset) return null;
     const root = asset.scene.clone(true);
     root.name = "Imported " + id;
-    root.scale.setScalar(scale || 1);
+    const horizontalScale = scale || 1;
+    const verticalScale = modelVerticalScale(id, horizontalScale);
+    root.scale.set(horizontalScale, verticalScale, horizontalScale);
     root.rotation.y = rotation || 0;
     const groundY = Number.isFinite(baseY) ? baseY : terrainHeight(x, z);
-    root.position.set(x, groundY + (yOffset || 0), z);
+    const metric = modelScaleRegistry[id];
+    root.position.set(x, groundY + (yOffset || 0) - (metric ? metric.minY * verticalScale : 0), z);
     const wooden = id === "catapult" || id === "siegeTower";
     const ironwork = id === "gate";
     const palette = id === "tree" ? worldFoliageMaterial : wooden ? worldWoodMaterial : ironwork ? worldIronMaterial : darkStoneMaterial;
@@ -2040,21 +2427,13 @@
   }
 
   // --- POI pack placement (keeps original atlas materials; importedModel would override them) ---
-  const packModelMetrics = {};
   function packModelSize(key) {
-    if (!packModelMetrics[key]) {
-      const asset = visualAssets.models && visualAssets.models[key];
-      if (!asset) return null;
-      const box = new THREE.Box3().setFromObject(asset.scene);
-      packModelMetrics[key] = {
-        sx: Math.max(.05, box.max.x - box.min.x),
-        sy: Math.max(.05, box.max.y - box.min.y),
-        sz: Math.max(.05, box.max.z - box.min.z),
-        cx: (box.min.x + box.max.x) / 2,
-        cz: (box.min.z + box.max.z) / 2
-      };
-    }
-    return packModelMetrics[key];
+    const metric = modelScaleRegistry[key];
+    if (!metric) return null;
+    return Object.assign({
+      cx: (metric.minX + metric.maxX) / 2,
+      cz: (metric.minZ + metric.maxZ) / 2
+    }, metric);
   }
 
   function placePackModel(key, x, z, scale, rotation, opts) {
@@ -2063,10 +2442,13 @@
     const options = opts || {};
     const root = asset.scene.clone(true);
     root.name = "Pack " + key;
-    root.scale.setScalar(scale || 1);
+    const horizontalScale = scale || 1;
+    const verticalScale = modelVerticalScale(key, horizontalScale);
+    root.scale.set(horizontalScale, verticalScale, horizontalScale);
     root.rotation.y = rotation || 0;
     const baseY = Number.isFinite(options.baseY) ? options.baseY : terrainHeight(x, z);
-    root.position.set(x, baseY + (options.yOffset || 0), z);
+    const metric = modelScaleRegistry[key];
+    root.position.set(x, baseY + (options.yOffset || 0) - (metric ? metric.minY * verticalScale : 0), z);
     root.traverse((object) => {
       if (!object.isMesh) return;
       object.castShadow = !isCoarse;
@@ -2107,6 +2489,16 @@
     });
   }
 
+  function addGatewayColliders(x, z, rotation, width, depth, baseY, height, doorGap) {
+    const gap = clamp(Math.max(CANONICAL_WORLD_SCALE.doorWidth, doorGap || 4.8), 2.4, width - 1.2);
+    const postWidth = Math.max(.5, (width - gap) / 2);
+    [-1, 1].forEach((side) => {
+      const localX = side * (gap / 2 + postWidth / 2);
+      const point = poiLocalToWorld(x, z, rotation, localX, 0);
+      addCollider(point.x, point.z, postWidth / 2, depth / 2, rotation, baseY, baseY + height);
+    });
+  }
+
   // Align a model's long horizontal axis (measured from its bbox) tangent to a placement angle.
   function poiTangentRotation(angle, size) {
     return -angle - (size.sx >= size.sz ? Math.PI / 2 : 0);
@@ -2116,8 +2508,13 @@
     const fort = new THREE.Group();
     fort.name = name;
     scene.add(fort);
-    const spacing = 17 * scale / 4;
-    const towerScale = scale;
+    const fortMultiplier = clamp(scale / 4.45, .9, 1.12);
+    const spacing = 29 * fortMultiplier;
+    const towerScale = canonicalModelScale("tower", fortMultiplier);
+    const towerTopScale = canonicalModelScale("towerTop", fortMultiplier);
+    const wallScale = canonicalModelScale("wall", fortMultiplier);
+    const gateScale = canonicalModelScale("gate", fortMultiplier);
+    const doorwayScale = canonicalModelScale("doorway", fortMultiplier);
     const fortBaseY = terrainHeight(x, z);
     const cosine = Math.cos(rotation);
     const sine = Math.sin(rotation);
@@ -2132,22 +2529,32 @@
       return model;
     };
     [[-spacing,-spacing],[spacing,-spacing],[-spacing,spacing],[spacing,spacing]].forEach((offset, index) => {
-      place("tower", offset[0], offset[1], towerScale, index * Math.PI / 2, 0, { hx: 3.8 * scale / 4, hz: 3.8 * scale / 4 });
-      place("towerTop", offset[0], offset[1], towerScale, index * Math.PI / 2, 7.75 * scale / 4);
+      place("tower", offset[0], offset[1], towerScale, index * Math.PI / 2, 0, scaledModelCollider("tower", towerScale, 24 * fortMultiplier));
+      const towerHeight = modelScaleRegistry.tower ? modelScaleRegistry.tower.sy * towerScale : 21 * fortMultiplier;
+      place("towerTop", offset[0], offset[1], towerTopScale, index * Math.PI / 2, towerHeight - .35 * fortMultiplier);
     });
     [-.5,.5].forEach((side) => {
-      place("wall", side * spacing, -spacing, scale, 0, 0, { hx: 4.2 * scale / 4, hz: 1.3 * scale / 4 });
-      place("wall", side * spacing, spacing, scale, 0, 0, { hx: 4.2 * scale / 4, hz: 1.3 * scale / 4 });
-      place("wall", -spacing, side * spacing, scale, Math.PI / 2, 0, { hx: 1.3 * scale / 4, hz: 4.2 * scale / 4 });
-      place("wall", spacing, side * spacing, scale, Math.PI / 2, 0, { hx: 1.3 * scale / 4, hz: 4.2 * scale / 4 });
+      const wallCollider = scaledModelCollider("wall", wallScale, 13 * fortMultiplier);
+      place("wall", side * spacing, -spacing, wallScale, 0, 0, wallCollider);
+      place("wall", side * spacing, spacing, wallScale, 0, 0, wallCollider);
+      place("wall", -spacing, side * spacing, wallScale, Math.PI / 2, 0, wallCollider);
+      place("wall", spacing, side * spacing, wallScale, Math.PI / 2, 0, wallCollider);
     });
-    place("gate", 0, spacing, scale, 0, 0, null);
-    place("doorway", 0, -spacing, scale, 0, 0, null);
-    place("stairs", 0, -spacing * .55, scale * .9, Math.PI, 0, null);
-    place("catapult", spacing * .25, -spacing * .18, scale * .78, .55, 0, null);
-    place("rock", -spacing * .3, spacing * .15, scale * .72, 0, 0, null);
-    const fireA = worldPoint(-5, 2);
-    const fireB = worldPoint(6, -5);
+    // Kenney's gate and doorway run along their source Z axis. Turn that long axis
+    // onto the fort wall plane so the visible opening matches the traversal gap.
+    place("gate", 0, spacing, gateScale, Math.PI / 2, 0, null);
+    place("doorway", 0, -spacing, doorwayScale, Math.PI / 2, 0, null);
+    const gateMetric = modelScaleRegistry.gate;
+    const doorwayMetric = modelScaleRegistry.doorway;
+    addGatewayColliders(x - Math.sin(rotation) * spacing, z + Math.cos(rotation) * spacing, rotation,
+      gateMetric ? Math.max(gateMetric.sx, gateMetric.sz) * gateScale : 14, gateMetric ? Math.min(gateMetric.sx, gateMetric.sz) * gateScale : 2.2, fortBaseY, 9.5 * fortMultiplier, 5.4 * fortMultiplier);
+    addGatewayColliders(x + Math.sin(rotation) * spacing, z - Math.cos(rotation) * spacing, rotation,
+      doorwayMetric ? Math.max(doorwayMetric.sx, doorwayMetric.sz) * doorwayScale : 14, doorwayMetric ? Math.min(doorwayMetric.sx, doorwayMetric.sz) * doorwayScale : 2.2, fortBaseY, 12.5 * fortMultiplier, 4.8 * fortMultiplier);
+    place("stairs", 0, -spacing * .52, canonicalModelScale("stairs", fortMultiplier), Math.PI, 0, null);
+    place("catapult", spacing * .25, -spacing * .18, 3.4 * fortMultiplier, .55, 0, null);
+    place("rock", -spacing * .3, spacing * .15, 3.2 * fortMultiplier, 0, 0, null);
+    const fireA = worldPoint(-10, 5);
+    const fireB = worldPoint(12, -9);
     createFire(fireA.x, fireA.z, !isCoarse);
     createFire(fireB.x, fireB.z, false);
   }
@@ -2158,10 +2565,12 @@
       createImportedFort(fort[0], fort[1], fort[2], fort[3], fort[4]);
       registerStronghold("fort-" + index, fort[4], "fort", fort[0], fort[1]);
     });
-    importedModel("siegeTower", 34, -178, 4.1, -.45, 0, { hx: 4.5, hz: 4.5 });
-    importedModel("bridgePillar", -356, 55, 5.2, Math.PI / 2, 0, { hx: 5, hz: 8 });
-    importedModel("tree", -330, 242, 5.5, .2, 0, null);
-    importedModel("tree", 295, -310, 5.2, -1.1, 0, null);
+    const siegeScale = canonicalModelScale("siegeTower");
+    const pierScale = canonicalModelScale("bridgePillar");
+    importedModel("siegeTower", 34, -178, siegeScale, -.45, 0, scaledModelCollider("siegeTower", siegeScale, 17));
+    importedModel("bridgePillar", -356, 55, pierScale, Math.PI / 2, 0, scaledModelCollider("bridgePillar", pierScale, 14));
+    importedModel("tree", -330, 242, canonicalModelScale("tree", 1.35), .2, 0, null);
+    importedModel("tree", 295, -310, canonicalModelScale("tree", 1.2), -1.1, 0, null);
     importedModel("rock", 410, -165, 6.4, .7, 0, null);
     for (let i = 0; i < 4; i += 1) {
       const angle = seeded(7200 + i * 5) * Math.PI * 2;
@@ -2169,10 +2578,13 @@
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius;
       const rotation = seeded(7202 + i * 5) * Math.PI * 2;
-      const scale = 3.45 + seeded(7203 + i * 5) * .75;
-      importedModel("tower", x, z, scale, rotation, 0, { hx: 3.6, hz: 3.6 });
-      importedModel("towerTop", x, z, scale, rotation, 7.75 * scale / 4, null);
-      importedModel("wall", x + Math.cos(rotation) * 7.5, z + Math.sin(rotation) * 7.5, scale, rotation + Math.PI / 2, 0, null);
+      const multiplier = .86 + seeded(7203 + i * 5) * .18;
+      const towerScale = canonicalModelScale("tower", multiplier);
+      const topScale = canonicalModelScale("towerTop", multiplier);
+      const wallScale = canonicalModelScale("wall", multiplier);
+      importedModel("tower", x, z, towerScale, rotation, 0, scaledModelCollider("tower", towerScale, 22));
+      importedModel("towerTop", x, z, topScale, rotation, (modelScaleRegistry.tower ? modelScaleRegistry.tower.sy * towerScale : 21) - .3, null);
+      importedModel("wall", x + Math.cos(rotation) * 10, z + Math.sin(rotation) * 10, wallScale, rotation + Math.PI / 2, 0, scaledModelCollider("wall", wallScale, 11));
     }
     const dressingCount = realm.biome === "jungle" ? 15 : realm.biome === "moon" ? 10 : realm.biome === "desert" ? 7 : 9;
     for (let i = 0; i < dressingCount; i += 1) {
@@ -2180,8 +2592,92 @@
       const z = (seeded(7601 + i * 9) - .5) * 930;
       if (Math.abs(x) < 28 && z > -185 && z < 235) continue;
       const id = realm.biome === "jungle" ? "tree" : "rock";
-      importedModel(id, x, z, 3.2 + seeded(7602 + i * 9) * 3.4, seeded(7603 + i * 9) * Math.PI * 2, 0, null);
+      importedModel(id, x, z, id === "tree" ? canonicalModelScale("tree", .8 + seeded(7602 + i * 9) * .7) : 3.2 + seeded(7602 + i * 9) * 3.4, seeded(7603 + i * 9) * Math.PI * 2, 0, null);
     }
+  }
+
+  function createInfrastructure() {
+    const beforeColliders = colliders.length;
+    const beforeImported = importedModelInstances;
+    const byKind = {};
+    const addWoodBox = (group, x, z, width, height, depth, rotation, collider) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), worldWoodMaterial);
+      const baseY = terrainHeight(x, z);
+      mesh.position.set(x, baseY + height / 2, z);
+      mesh.rotation.y = rotation || 0;
+      mesh.castShadow = !isCoarse;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+      if (collider) addCollider(x, z, width / 2, depth / 2, rotation || 0, baseY, baseY + height);
+      return mesh;
+    };
+    (worldLayout.infrastructure || []).forEach((site, index) => {
+      byKind[site.kind] = (byKind[site.kind] || 0) + 1;
+      const group = new THREE.Group();
+      group.name = "Micro landmark " + site.id + " " + site.kind;
+      scene.add(group);
+      const point = (localX, localZ) => poiLocalToWorld(site.x, site.z, site.rotation, localX, localZ);
+      const baseY = terrainHeight(site.x, site.z);
+      if (/wall|bridge/.test(site.kind)) {
+        const lengths = [5.8, 4.6, 3.5];
+        lengths.forEach((length, segment) => {
+          const local = point((segment - 1) * 4.1, (segment % 2) * 1.2);
+          addStoneBox(group, local.x, local.z, length, 2.8 + segment * .8, 1.25, site.rotation + (segment - 1) * .16, segment === 1);
+        });
+        if (site.kind === "fallen-bridge" || site.kind === "drowned-pier") {
+          [-1, 1].forEach((side) => {
+            const local = point(side * 4.8, -3.2);
+            addWoodBox(group, local.x, local.z, 4.8, .42, 1.8, site.rotation + .28 * side, false);
+          });
+        }
+      } else if (/farm|habitation/.test(site.kind)) {
+        if (visualAssets.models && visualAssets.models.ruinedHouse) {
+          const scale = canonicalModelScale("ruinedHouse", .9 + site.variant * .035);
+          placePackModel("ruinedHouse", site.x, site.z, scale, site.rotation, { baseY });
+          const size = packModelSize("ruinedHouse");
+          addBuildingColliders(site.x, site.z, site.rotation, size.sx * scale / 2, size.sz * scale / 2, baseY, size.sy * scale, 3, size.cx * scale, size.cz * scale);
+        } else addStoneBox(group, site.x, site.z, 8, 5.5, 6.5, site.rotation, true);
+        const field = point(8, 1);
+        for (let row = -1; row <= 1; row += 1) addWoodBox(group, field.x + Math.cos(site.rotation) * row * 1.8, field.z - Math.sin(site.rotation) * row * 1.8, 5.5, .18, .22, site.rotation, false);
+      } else if (/platform/.test(site.kind)) {
+        const deckY = baseY + 4.5;
+        [[-2.4,-2.4],[2.4,-2.4],[-2.4,2.4],[2.4,2.4]].forEach((offset) => {
+          const local = point(offset[0], offset[1]);
+          const mesh = new THREE.Mesh(new THREE.CylinderGeometry(.22, .3, 4.5, 6), worldWoodMaterial);
+          mesh.position.set(local.x, baseY + 2.25, local.z);
+          mesh.castShadow = !isCoarse;
+          group.add(mesh);
+        });
+        const deck = new THREE.Mesh(new THREE.BoxGeometry(6, .35, 6), worldWoodMaterial);
+        deck.position.set(site.x, deckY, site.z); deck.rotation.y = site.rotation; deck.castShadow = !isCoarse; deck.receiveShadow = true; group.add(deck);
+      } else if (/camp/.test(site.kind)) {
+        const tentKey = visualAssets.models && visualAssets.models.tentDetailed ? "tentDetailed" : visualAssets.models && visualAssets.models.tent ? "tent" : null;
+        if (tentKey) placePackModel(tentKey, site.x, site.z, tentKey === "tent" ? 3.4 : 3.6, site.rotation, { baseY });
+        createFire(site.x + Math.cos(site.rotation) * 3.5, site.z + Math.sin(site.rotation) * 3.5, false);
+      } else if (site.kind === "broken-cart") {
+        if (visualAssets.models && visualAssets.models.cart) placePackModel("cart", site.x, site.z, 3.5, site.rotation, { baseY });
+        const crate = point(2.8, 1.2);
+        if (visualAssets.models && visualAssets.models.crateBig) placePackModel("crateBig", crate.x, crate.z, 3.1, site.rotation + .4, { baseY });
+      } else {
+        const height = /crystal|void/.test(site.kind) ? 9.5 : /root|petrified/.test(site.kind) ? 8 : 6.5;
+        const material = /crystal|void/.test(site.kind) ? new THREE.MeshStandardMaterial({ color: 0x7776bd, emissive: 0x2f2b69, emissiveIntensity: .7, roughness: .36, metalness: .22 }) : darkStoneMaterial;
+        const marker = new THREE.Mesh(new THREE.ConeGeometry(1.05, height, /crystal/.test(site.kind) ? 5 : 4), material);
+        marker.position.set(site.x, baseY + height / 2, site.z); marker.rotation.y = site.rotation; marker.castShadow = !isCoarse; group.add(marker);
+        addCollider(site.x, site.z, .72, .72, site.rotation, baseY, baseY + height);
+        for (let stone = 0; stone < 3; stone += 1) {
+          const angle = site.rotation + stone / 3 * Math.PI * 2;
+          const local = { x: site.x + Math.cos(angle) * 2.2, z: site.z + Math.sin(angle) * 2.2 };
+          addStoneBox(group, local.x, local.z, 1.1, .65 + stone * .14, .8, angle, false);
+        }
+      }
+      group.userData.infrastructure = { id: site.id, kind: site.kind, index };
+    });
+    infrastructureReport = {
+      total: (worldLayout.infrastructure || []).length,
+      byKind,
+      colliders: colliders.length - beforeColliders,
+      importedModels: importedModelInstances - beforeImported
+    };
   }
 
   function addPlatform(x, z, width, depth, topY, rotation, metadata) {
@@ -2554,6 +3050,86 @@
     stronghold.markerMaterial = material;
   }
 
+  function createCaptureFlag(stronghold) {
+    if (!stronghold || (stronghold.kind !== "shrine" && stronghold.kind !== "graveyard")) return null;
+    const salt = worldLayout.salt + 17400 + strongholds.length * 61;
+    const angle = seeded(salt + 1) * Math.PI * 2;
+    const radius = stronghold.kind === "graveyard" ? 8.2 : 6.8;
+    const x = stronghold.x + Math.cos(angle) * radius;
+    const z = stronghold.z + Math.sin(angle) * radius;
+    const baseY = surfaceHeightAt(x, z, 999);
+    const height = stronghold.kind === "graveyard" ? 17 : 15;
+    const root = new THREE.Group();
+    root.name = "Warden capture flag " + stronghold.id;
+    root.position.set(x, baseY, z);
+    root.rotation.y = seeded(salt + 2) * Math.PI * 2;
+    const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x283b45, roughness: .42, metalness: .62 });
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(.09, .13, height, 8), poleMaterial);
+    pole.position.y = height / 2;
+    pole.castShadow = !isCoarse;
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(.72, .9, .34, 10), darkStoneMaterial);
+    foot.position.y = .17;
+    foot.receiveShadow = true;
+    const finial = new THREE.Mesh(new THREE.ConeGeometry(.25, .72, 5), poleMaterial);
+    finial.position.y = height + .34;
+    const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, 4.9, 6), poleMaterial);
+    crossbar.rotation.z = Math.PI / 2;
+    crossbar.position.set(2.25, height - 1.05, 0);
+    const clothGeometry = new THREE.PlaneGeometry(4.7, 2.8, 8, 4);
+    const clothMaterial = new THREE.MeshStandardMaterial({
+      color: 0x367fd3, emissive: 0x12365f, emissiveIntensity: .42,
+      roughness: .74, metalness: .03, side: THREE.DoubleSide
+    });
+    const cloth = new THREE.Mesh(clothGeometry, clothMaterial);
+    cloth.position.set(2.42, height - 2.52, 0);
+    cloth.castShadow = !isCoarse;
+    const sigilMaterial = new THREE.MeshBasicMaterial({ color: 0xc7efff, transparent: true, opacity: .88, side: THREE.DoubleSide, depthWrite: false });
+    const sigil = new THREE.Mesh(new THREE.RingGeometry(.36, .49, 4), sigilMaterial);
+    sigil.position.set(2.12, height - 2.48, .025);
+    sigil.rotation.z = Math.PI / 4;
+    root.add(foot, pole, finial, crossbar, cloth, sigil);
+    scene.add(root);
+    const flag = {
+      strongholdId: stronghold.id, root, cloth, baseY, height, raise: 0, target: 0,
+      phase: seeded(salt + 3) * Math.PI * 2,
+      basePositions: new Float32Array(clothGeometry.attributes.position.array)
+    };
+    root.visible = false;
+    stronghold.captureFlag = flag;
+    captureFlags.push(flag);
+    return flag;
+  }
+
+  function setCaptureFlag(stronghold, captured, animate) {
+    const flag = stronghold && stronghold.captureFlag;
+    if (!flag) return;
+    flag.target = captured ? 1 : 0;
+    if (!captured) {
+      flag.raise = 0;
+      flag.root.visible = false;
+      return;
+    }
+    flag.root.visible = true;
+    flag.raise = animate ? 0 : 1;
+    flag.root.position.y = flag.baseY - flag.height * (1 - flag.raise);
+  }
+
+  function updateCaptureFlags(dt) {
+    captureFlags.forEach((flag) => {
+      if (!flag.root.visible) return;
+      if (flag.raise < flag.target) flag.raise = Math.min(flag.target, flag.raise + dt / 1.65);
+      const eased = 1 - Math.pow(1 - flag.raise, 3);
+      flag.root.position.y = flag.baseY - flag.height * (1 - eased);
+      const positions = flag.cloth.geometry.attributes.position;
+      for (let index = 0; index < positions.count; index += 1) {
+        const baseX = flag.basePositions[index * 3];
+        const tether = clamp((baseX + 2.35) / 4.7, 0, 1);
+        positions.setZ(index, Math.sin(elapsed * 3.2 + flag.phase + baseX * 1.35) * .18 * tether + Math.sin(elapsed * 5.1 + index) * .035 * tether);
+      }
+      positions.needsUpdate = true;
+    });
+  }
+
   function decorateStrongholdSite(stronghold, salt) {
     const models = visualAssets.models || {};
     const choices = stronghold.kind === "camp" ? ["crateBig", "weaponrack", "tent"]
@@ -2603,6 +3179,7 @@
     });
     strongholds.push(stronghold);
     createStrongholdMarker(stronghold);
+    createCaptureFlag(stronghold);
     decorateStrongholdSite(stronghold, salt);
     return stronghold;
   }
@@ -2643,13 +3220,14 @@
     const buildings = picks.filter((key) => models[key]);
     buildings.forEach((key, index) => {
       const angle = poi.rotation + index / buildings.length * Math.PI * 2 + (seeded(salt + 10 + index * 3) - .5) * .45;
-      const radius = 9 + seeded(salt + 11 + index * 3) * 5;
+      const radius = 16 + seeded(salt + 11 + index * 3) * 7;
       const bx = poi.x + Math.cos(angle) * radius;
       const bz = poi.z + Math.sin(angle) * radius;
       const facing = Math.atan2(poi.x - bx, poi.z - bz);
-      if (!placePackModel(key, bx, bz, POI_SCALES.medieval, facing, { baseY })) return;
+      const buildingScale = canonicalModelScale(key);
+      if (!placePackModel(key, bx, bz, buildingScale, facing, { baseY })) return;
       const size = packModelSize(key);
-      addBuildingColliders(bx, bz, facing, size.sx * POI_SCALES.medieval / 2, size.sz * POI_SCALES.medieval / 2, baseY, size.sy * POI_SCALES.medieval, 1.8, size.cx * POI_SCALES.medieval, size.cz * POI_SCALES.medieval);
+      addBuildingColliders(bx, bz, facing, size.sx * buildingScale / 2, size.sz * buildingScale / 2, baseY, size.sy * buildingScale, 3.1, size.cx * buildingScale, size.cz * buildingScale);
     });
     const dressingKeys = ["barrel", "crateBig", "crateOpen", "sack", "tent", "weaponrack", "flagRed", "bannerRed", "bannerGreen", "cart", "stallBench"];
     const dressingColliders = { barrel: true, crateBig: true, crateOpen: true, tent: true, weaponrack: true, cart: true, stallBench: true };
@@ -2688,7 +3266,7 @@
     const treeKey = { snowy: "treePineA", jungle: "treePalmBend", desert: "cactusTall", shore: "treePalm", mountains: "treePineB" }[realm.biome];
     if (treeKey && models[treeKey]) {
       const angle = seeded(salt + 26) * Math.PI * 2;
-      placePackModel(treeKey, poi.x + Math.cos(angle) * 13.5, poi.z + Math.sin(angle) * 13.5, POI_SCALES.natureTree, seeded(salt + 27) * Math.PI * 2, {});
+      placePackModel(treeKey, poi.x + Math.cos(angle) * 24, poi.z + Math.sin(angle) * 24, canonicalModelScale(treeKey, .9), seeded(salt + 27) * Math.PI * 2, {});
     }
     if (models.campfireStones) placePackModel("campfireStones", fx, fz, POI_SCALES.nature, fireAngle, { baseY });
     createFire(fx, fz, !isCoarse);
@@ -2706,20 +3284,20 @@
     if (!towerKey) { buildPoiFallback(poi, baseY); return; }
     const facing = poi.rotation;
     const size = packModelSize(towerKey);
-    let towerScale = POI_SCALES.medieval * 1.4;
+    let towerScale = canonicalModelScale(towerKey);
     const footprint = Math.min(size.sx, size.sz) * towerScale;
-    if (footprint < 4.6) towerScale *= 4.6 / Math.max(.5, footprint);
+    if (footprint < 8.5) towerScale *= 8.5 / Math.max(.5, footprint);
     placePackModel(towerKey, poi.x, poi.z, towerScale, facing, { baseY });
     const halfX = size.sx * towerScale / 2;
     const halfZ = size.sz * towerScale / 2;
     // Gameplay-critical door: 2.4 gap so the r.8 capsule clears the front quarters with margin.
-    addBuildingColliders(poi.x, poi.z, facing, halfX, halfZ, baseY, size.sy * towerScale, 2.4, size.cx * towerScale, size.cz * towerScale);
+    addBuildingColliders(poi.x, poi.z, facing, halfX, halfZ, baseY, size.sy * towerScale, 3.1, size.cx * towerScale, size.cz * towerScale);
     // Interior wood steps to an upper floor; plain platforms so surfaceHeightAt just works.
     // Full-width strips (threshold +.75, mid +1.5, deck +2.25) so an r.8 capsule can climb
     // without clipping the next tier's collider band; decks align with the rotated shell.
     const innerX = halfX - .7;
     const innerZ = halfZ - .7;
-    const floorTop = baseY + 2.25;
+    const floorTop = baseY + 3;
     const strip = Math.min(1.2, innerZ - .6);
     const stepAt = (localX, localZ, width, depth, topY) => {
       const point = poiLocalToWorld(poi.x, poi.z, facing, localX, localZ);
@@ -2727,7 +3305,8 @@
     };
     stepAt(0, innerZ - strip / 2, innerX * 2, strip, baseY + .75);
     stepAt(0, innerZ - strip * 1.5, innerX * 2, strip, baseY + 1.5);
-    stepAt(0, -strip, innerX * 2, innerZ * 2 - strip * 2, floorTop);
+    stepAt(0, innerZ - strip * 2.5, innerX * 2, strip, baseY + 2.25);
+    stepAt(0, -strip * 1.5, innerX * 2, Math.max(1.4, innerZ * 2 - strip * 3), floorTop);
     const chestPoint = poiLocalToWorld(poi.x, poi.z, facing, 0, -strip);
     addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 100 + Math.floor(seeded(salt + 8) * 41));
     debug.chests += 1;
@@ -2806,14 +3385,15 @@
     const cryptKeys = ["crypt", "cryptA", "cryptSmall"].filter((key) => models[key]);
     const cryptKey = cryptKeys[Math.floor(seeded(salt + 1) * cryptKeys.length)];
     const cryptSize = packModelSize(cryptKey);
-    const cryptHalf = cryptSize.sz * POI_SCALES.crypt / 2;
+    const cryptScale = canonicalModelScale(cryptKey);
+    const cryptHalf = cryptSize.sz * cryptScale / 2;
     const cryptZ = -6.4;
     const altarZ = cryptZ + cryptHalf + 1.2;
     const chestZ = altarZ + 1.7;
     const rowStart = Math.max(-.6, chestZ + 1.3);
     const cryptPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, cryptZ);
-    placePackModel(cryptKey, cryptPoint.x, cryptPoint.z, POI_SCALES.crypt, poi.rotation, { baseY });
-    addCollider(cryptPoint.x, cryptPoint.z, cryptSize.sx * POI_SCALES.crypt * .5, cryptSize.sz * POI_SCALES.crypt * .5, poi.rotation, baseY - 1, baseY + Math.min(cryptSize.sy * POI_SCALES.crypt, 6));
+    placePackModel(cryptKey, cryptPoint.x, cryptPoint.z, cryptScale, poi.rotation, { baseY });
+    addBuildingColliders(cryptPoint.x, cryptPoint.z, poi.rotation, cryptSize.sx * cryptScale * .5, cryptSize.sz * cryptScale * .5, baseY, cryptSize.sy * cryptScale, 3, cryptSize.cx * cryptScale, cryptSize.cz * cryptScale);
     if (models.altarStone) {
       const altarPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, altarZ);
       placePackModel("altarStone", altarPoint.x, altarPoint.z, POI_SCALES.graveyard, poi.rotation, { baseY });
@@ -4090,12 +4670,14 @@
     stronghold.markerMaterial.color.setHex(stronghold.cleared ? 0x67d6b1 : 0xe26b3f);
     stronghold.markerMaterial.opacity = stronghold.cleared ? .16 : .42;
     if (stronghold.marker) stronghold.marker.scale.setScalar(stronghold.cleared ? .82 : 1);
+    setCaptureFlag(stronghold, stronghold.cleared, false);
   }
 
   function clearStronghold(stronghold, grantRewards) {
     if (!stronghold || stronghold.cleared) return false;
     stronghold.cleared = true;
     updateStrongholdMarker(stronghold);
+    setCaptureFlag(stronghold, true, grantRewards !== false);
     const reward = STRONGHOLD_BONUSES[stronghold.kind] || STRONGHOLD_BONUSES.hamlet;
     if (grantRewards !== false) {
       grantXp(reward.xp);
@@ -5727,11 +6309,14 @@
 
   function updateWorldDecor(dt) {
     if (sky) sky.rotation.y += dt * .0013;
+    forestVisibilityTimer -= dt;
+    if (forestVisibilityTimer <= 0) updateAncientForestVisibility(true);
     strongholds.forEach((stronghold, index) => {
       if (!stronghold.marker || !stronghold.markerMaterial) return;
       stronghold.marker.rotation.z += dt * (stronghold.cleared ? .08 : .22);
       stronghold.markerMaterial.opacity = stronghold.cleared ? .12 : .34 + Math.sin(elapsed * 2 + index) * .1;
     });
+    updateCaptureFlags(dt);
     updateExperienceRunes(dt);
     updateDragonSouls(dt);
     updateChests(dt);
@@ -6086,6 +6671,16 @@
       }
       mapContext.fillStyle = landmark.discovered ? MARKER_STYLES.outpostDiscovered.color : landmark.revealed ? MARKER_STYLES.poi.color : MARKER_STYLES.outpostHidden.color;
       mapContext.fillRect(point.x - 2.5, point.y - 2.5, 5, 5);
+      mapContext.restore();
+    });
+    strongholds.filter((stronghold) => stronghold.cleared && stronghold.captureFlag).forEach((stronghold) => {
+      const point = toMap(stronghold.captureFlag.root.position);
+      mapContext.save();
+      mapContext.strokeStyle = "#7edcf2";
+      mapContext.fillStyle = "rgba(71,143,218,.9)";
+      mapContext.lineWidth = 1.25;
+      mapContext.beginPath(); mapContext.moveTo(point.x - 2, point.y + 4); mapContext.lineTo(point.x - 2, point.y - 5); mapContext.stroke();
+      mapContext.beginPath(); mapContext.moveTo(point.x - 1.5, point.y - 5); mapContext.lineTo(point.x + 4, point.y - 3); mapContext.lineTo(point.x - 1.5, point.y - 1); mapContext.closePath(); mapContext.fill();
       mapContext.restore();
     });
     allEnemies().forEach((enemy) => {
@@ -6475,7 +7070,7 @@
       strongholds: {
         cleared: strongholds.filter((stronghold) => stronghold.cleared).length,
         total: strongholds.length,
-        list: strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), cleared: stronghold.cleared }))
+        list: strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), cleared: stronghold.cleared, flagRaised: Boolean(stronghold.captureFlag && stronghold.captureFlag.root.visible) }))
       },
       runesCollected, totalRunes: experienceRunes.length,
       chestsOpened: chests.filter((chest) => chest.opened).length, totalChests: chests.length,
@@ -6487,6 +7082,32 @@
         importedModels: visualAssets.models ? Object.keys(visualAssets.models).length : 0,
         importedModelInstances,
         modelSlots: visualAssets.modelPaths ? Object.keys(visualAssets.modelPaths) : [],
+        canonicalScale: {
+          unitMeters: CANONICAL_WORLD_SCALE.unitMeters,
+          wardenHeight: CANONICAL_WORLD_SCALE.wardenHeight,
+          doorHeight: CANONICAL_WORLD_SCALE.doorHeight,
+          doorWidth: CANONICAL_WORLD_SCALE.doorWidth,
+          houseHeight: CANONICAL_WORLD_SCALE.houseHeight.slice(),
+          castleWallHeight: CANONICAL_WORLD_SCALE.castleWallHeight.slice(),
+          gateHeight: CANONICAL_WORLD_SCALE.gateHeight.slice(),
+          towerHeight: CANONICAL_WORLD_SCALE.towerHeight.slice(),
+          structures: Object.keys(MODEL_SCALE_TARGETS).reduce((result, id) => {
+            const metric = modelScaleRegistry[id];
+            if (metric) result[id] = {
+              role: metric.role, width: metric.worldWidth, height: metric.worldHeight, depth: metric.worldDepth,
+              scale: metric.canonicalScale, verticalScale: metric.canonicalScaleY
+            };
+            return result;
+          }, {})
+        },
+        forest: Object.assign({}, forestReport),
+        infrastructure: { total: infrastructureReport.total, byKind: Object.assign({}, infrastructureReport.byKind), colliders: infrastructureReport.colliders, importedModels: infrastructureReport.importedModels },
+        skyProfile: {
+          id: skyReport.id, signature: skyReport.signature, features: skyReport.features.slice(),
+          featureCount: skyReport.featureCount || 0, gradientStops: skyReport.gradientStops || 0,
+          horizonBlend: Boolean(skyReport.horizonBlend), environmentMap: Boolean(visualAssets.environment)
+        },
+        capturedFlags: { total: captureFlags.length, raised: captureFlags.filter((flag) => flag.root.visible && flag.target > 0).length },
         grassInstances: grassField ? grassField.count : 0,
         props: { kind: biomePropsReport.kind, total: biomePropsReport.total, byKind: Object.assign({}, biomePropsReport.byKind) },
         outpostsDiscovered,
@@ -6605,7 +7226,11 @@
         setEnemyTameReady(enemy);
         return true;
       },
-      strongholdDebug: () => strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), total: stronghold.members.length, cleared: stronghold.cleared })),
+      strongholdDebug: () => strongholds.map((stronghold) => ({
+        id: stronghold.id, name: stronghold.name, kind: stronghold.kind,
+        alive: strongholdAliveCount(stronghold), total: stronghold.members.length, cleared: stronghold.cleared,
+        flagRaised: Boolean(stronghold.captureFlag && stronghold.captureFlag.root.visible && stronghold.captureFlag.target > 0)
+      })),
       clearStronghold: clearStrongholdById,
       setQuestComplete: () => { questStage = 3; bossSpawned = true; updateQuestUI(); },
       objectiveInfo: () => currentObjective(),
@@ -6686,6 +7311,30 @@
       },
       forceCritical: () => { player.forceNextCritical = true; },
       modelCatalog: () => Object.assign({}, visualAssets.modelPaths || {}),
+      modelScaleRegistry: () => Object.keys(modelScaleRegistry).reduce((result, id) => {
+        const metric = modelScaleRegistry[id];
+        result[id] = {
+          role: metric.role,
+          source: { width: metric.sx, height: metric.sy, depth: metric.sz },
+          world: { width: metric.worldWidth, height: metric.worldHeight, depth: metric.worldDepth },
+          scale: metric.canonicalScale, verticalScale: metric.canonicalScaleY,
+          targetHeight: metric.targetHeight, targetSpan: metric.targetSpan
+        };
+        return result;
+      }, {}),
+      forestDebug: () => Object.assign({}, forestReport, {
+        lodChunks: forestChunks.map((chunk) => ({
+          x: chunk.centerX, z: chunk.centerZ, count: chunk.count,
+          lod: chunk.nearMeshes[0].visible ? "near" : chunk.farMesh.visible ? "far" : "culled"
+        }))
+      }),
+      infrastructureDebug: () => (worldLayout.infrastructure || []).map((site) => Object.assign({}, site)),
+      skyDebug: () => Object.assign({}, skyReport, { features: skyReport.features.slice(), environmentMap: Boolean(visualAssets.environment) }),
+      captureFlagDebug: () => captureFlags.map((flag) => ({
+        strongholdId: flag.strongholdId, visible: flag.root.visible, raised: flag.raise, target: flag.target,
+        minimapMarker: Boolean(flag.root.visible && flag.target > 0),
+        x: flag.root.position.x, y: flag.root.position.y, z: flag.root.position.z, baseY: flag.baseY, height: flag.height
+      })),
       skillSchema: () => skillTree.map((branch) => ({ id: branch.id, scope: branch.scope || "permanent", nodes: branch.nodes.map((node) => ({ id: node.id, scope: node.scope, maxRank: node.maxRank, cost: node.cost, requiredMastery: node.requiredMastery || null })) })),
       platformProbe: () => {
         const platform = platforms[0];

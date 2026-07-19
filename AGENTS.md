@@ -18,7 +18,7 @@ This file applies to the entire repository. Read `GAME-DEVELOPER-GUIDE.md` and `
 - Taming: slowed/crit-weakened wargs and biome light creatures can be bonded with `E`; maximum two companions. Bonded creatures follow, fight, add traversal speed, persist in an active run, and count as handled garrison members.
 - Progression: nine permanent branches plus three per-run branches, 66 nodes total. `THE STRIDE` is the sprint branch and must retain a 100%+ maximum super-sprint improvement.
 - Sprint: latched hysteresis and an exhaustion lock prevent stamina-threshold flicker. The additive sprint pose, FOV, streaks, and trail effects consume the stable sprint flags.
-- Persistence: permanent key `ashenhold-progression-v3` (payload 6), active-run key `ashenhold-active-run-v1` (payload 1), realm session key `ashenhold-realm-v1`, `WORLD_LAYOUT_VERSION = 6`.
+- Persistence: permanent key `ashenhold-progression-v3` (payload 6), active-run key `ashenhold-active-run-v1` (payload 1), realm session key `ashenhold-realm-v1`, `WORLD_LAYOUT_VERSION = 7`.
 - Realm rotation: jungle -> shore -> desert -> snowy -> mountains -> moon -> loop, with a fresh seed after victory or death.
 
 ## Non-negotiable implementation rules
@@ -84,6 +84,6 @@ node test-results\e2e-smoke.cjs
 - Sprint: verify enter/exit thresholds, zero-stamina lockout, animation/FOV stability, capstone speed, launch shockwave, and trail damage.
 - Saves: verify progression migration, permanent relic restoration, stronghold cleared IDs, handled garrison members, companions, and next-realm cleanup.
 - Assets: verify active biome actors animate, dense model instances render, catalog paths exist, and all requests remain same-origin.
-- Deployment: verify layout marker 6, manifest scope under the repository path, core GLTF/PBR assets, runtime-only exclusions, and a clean live browser boot.
+- Deployment: verify layout marker 7, manifest scope under the repository path, core GLTF/PBR assets, runtime-only exclusions, and a clean live browser boot.
 
 The full architecture, balance tables, save envelopes, debug hooks, audit coverage, and honest limitations are in `GAME-DEVELOPER-GUIDE.md`.
