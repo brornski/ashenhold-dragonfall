@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#090d10">
   <meta name="description" content="Ashenhold: Dragonfall — a third-person 3D open-world dark-fantasy browser game.">
+  <meta name="ashenhold-multiplayer-url" content="wss://multiplayer-server-weld.vercel.app/api/ws">
   <title>Ashenhold: Dragonfall</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%23e66f36' d='M32 3 8 14v18c0 15 9 24 24 29 15-5 24-14 24-29V14L32 3Zm0 12 7 11-5 2 8 8-10-4-10 4 8-8-5-2 7-11Z'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
@@ -161,19 +162,19 @@
       <div class="title-card">
         <div class="title-brandline">
           <span class="title-sigil" aria-hidden="true"><i></i><b></b></span>
-          <p class="eyebrow"><span></span>A SEED-FORGED DARK FANTASY<span></span></p>
+          <p class="eyebrow"><span></span>A SEED-FORGED SOLO + CO-OP HUNT<span></span></p>
         </div>
         <div class="title-grid">
           <div class="title-main">
             <p id="realmLabel" class="realm-label">PROCEDURAL REALM</p>
             <h1><small>ASHENHOLD</small>DRAGONFALL</h1>
-            <p class="title-lead">Break enemy-held strongholds across a living open realm. Master four weapons, bind wounded creatures to your side, absorb permanent relic power, and hunt Vharok through the storm.</p>
+            <p class="title-lead">Hunt alone or rally up to four Wardens across a living open realm. Break enemy-held strongholds, bind wounded creatures, absorb permanent relic power, and face Vharok through the storm.</p>
             <div class="title-actions">
               <button id="enterButton" class="primary-button" type="button"><span>BEGIN THE HUNT</span><kbd>ENTER</kbd></button>
-              <span class="title-save-state"><i></i> Progress saves locally</span>
+              <span class="title-save-state"><i></i> Solo progress saves locally</span>
             </div>
             <div class="feature-row">
-              <span><i>◆</i> Six shifting biomes</span><span><i>⚔</i> Location garrisons</span><span><i>✦</i> Permanent relic power</span><span><i>◇</i> Tameable allies</span>
+              <span><i>◆</i> Six shifting biomes</span><span><i>⚔</i> Four-Warden co-op</span><span><i>✦</i> Permanent relic power</span><span><i>◇</i> Tameable allies</span>
             </div>
           </div>
           <aside class="title-briefing" aria-label="Current realm briefing">
@@ -192,7 +193,7 @@
             <div class="briefing-status"><i></i> REALM READY</div>
           </aside>
         </div>
-        <small class="title-note">Click the world to capture the mouse · Headphones recommended · Press K for constellations</small>
+        <small class="title-note">Choose Solo, Host, or Join · Click the world to capture the mouse · Press K for constellations</small>
       </div>
     </section>
 
@@ -264,6 +265,10 @@
   <script src="assets/vendor/three.min.js"></script>
   <script src="assets/vendor/GLTFLoader.js"></script>
   <script src="assets/vendor/SkeletonUtils.js"></script>
+  <script src="multiplayer-client.js"></script>
+  <script src="multiplayer-avatars.js"></script>
+  <script src="multiplayer-game.js"></script>
+  <script src="multiplayer-ui.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
