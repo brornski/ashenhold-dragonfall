@@ -1,0 +1,11 @@
+.git/
+.vercel/
+AGENTS.md
+GAME-DEVELOPER-GUIDE.md
+README.md
+open-dragon-browser.cmd
+test-results/
+tools/
+*.log
+assets/dragons.png
+

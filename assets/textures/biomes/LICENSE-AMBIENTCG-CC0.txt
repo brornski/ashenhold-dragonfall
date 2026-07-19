@@ -1,0 +1,18 @@
+ambientCG biome material set
+Source: https://ambientcg.com/
+License: Creative Commons CC0 1.0
+
+Runtime maps are curated 1K JPG color, OpenGL normal, and roughness maps:
+
+- snowy: Snow015
+- jungle: Ground037
+- desert: Ground093C
+- shore: Gravel041
+- mountains: Ground068
+- moon: Rocks011
+
+Asset pages follow https://ambientcg.com/view?id=<asset-id>.
+ambientCG states that its assets may be used without attribution, including
+commercially. Attribution is retained here for provenance and future agents.
+
+CC0 legal code: https://creativecommons.org/publicdomain/zero/1.0/legalcode

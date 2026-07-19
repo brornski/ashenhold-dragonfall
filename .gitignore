@@ -1,0 +1,6 @@
+.vercel/
+assets/dragons.png
+test-results/*.json
+test-results/*.log
+test-results/*.pid
+test-results/*.png

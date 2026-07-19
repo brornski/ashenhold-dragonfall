@@ -1,0 +1,11 @@
+{
+  "name": "Ashenhold: Dragonfall",
+  "short_name": "Ashenhold",
+  "description": "A third-person 3D roguelite dragon RPG with persistent progression, ranked skill constellations, and deterministic saved realms.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "background_color": "#090d10",
+  "theme_color": "#090d10",
+  "orientation": "landscape"
+}

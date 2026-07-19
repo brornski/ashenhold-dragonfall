@@ -1,0 +1,9 @@
+Quaternius RPG Character Pack
+Source: https://quaternius.com/packs/rpgcharacters.html
+Runtime adaptation: warden.gltf (Warrior character)
+
+The source pack is published by Quaternius under Creative Commons CC0 1.0
+and is free to use in personal and commercial projects. The runtime file is
+an unmodified, self-contained glTF selected from the official source pack.
+
+CC0 legal code: https://creativecommons.org/publicdomain/zero/1.0/legalcode

@@ -1,0 +1,29 @@
+Ashenhold curated enemy cast
+
+Source: Quaternius — Ultimate Monsters
+Official page: https://quaternius.com/packs/ultimatemonsters.html
+Official download folder: https://drive.google.com/drive/folders/18m4KpzpEzhC9wl7jzr6dUc0N8Jozr79C
+
+Upstream description: 50 fully animated monsters, supplied in glTF and other
+formats for personal and commercial use.
+
+License: Creative Commons CC0 1.0 Universal (public-domain dedication)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Curated embedded glTF files used by this project:
+- alien.gltf
+- birb.gltf
+- blue-demon.gltf
+- cactoro.gltf
+- demon.gltf
+- fish.gltf
+- frog.gltf
+- monkroose.gltf
+- orc-skull.gltf
+- orc.gltf
+- tribal.gltf
+- yeti.gltf
+
+Each retained glTF contains its own geometry, rig, fourteen animation clips,
+and embedded texture data. No runtime request is made to Quaternius or Google
+Drive.

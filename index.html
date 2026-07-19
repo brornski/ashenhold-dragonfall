@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#090d10">
+  <meta name="description" content="Ashenhold: Dragonfall — a third-person 3D open-world dark-fantasy browser game.">
+  <title>Ashenhold: Dragonfall</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%23e66f36' d='M32 3 8 14v18c0 15 9 24 24 29 15-5 24-14 24-29V14L32 3Zm0 12 7 11-5 2 8 8-10-4-10 4 8-8-5-2 7-11Z'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <main id="game" class="game" data-state="loading" aria-label="Ashenhold Dragonfall 3D game">
+    <div id="viewport" class="viewport" role="region" aria-label="3D open world"></div>
+    <div class="world-grade" aria-hidden="true"></div>
+    <div id="damageFlash" class="damage-flash" aria-hidden="true"></div>
+    <div id="hitMarker" class="hit-marker" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div id="crosshair" class="crosshair" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></div>
+    <div id="combatText" aria-hidden="true"></div>
+
+    <header id="hud" class="hud">
+      <section class="player-panel" aria-label="Player status">
+        <div class="crest" aria-hidden="true">
+          <svg viewBox="0 0 58 68"><path d="M29 2 6 11v19c0 16 9 28 23 36 14-8 23-20 23-36V11L29 2Z"/><path d="m29 13-11 9 7 3-6 7 8-3 2 19 3-19 8 3-6-7 7-3-12-9Z"/></svg>
+        </div>
+        <div class="bars">
+          <div class="player-name"><strong>THE WARDEN</strong><span id="playerLevel">LV. 1</span></div>
+          <div class="bar health" role="progressbar" aria-label="Health" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><i id="healthBar"></i><b id="healthText">100</b></div>
+          <div class="bar stamina" role="progressbar" aria-label="Stamina" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100"><i id="staminaBar"></i><b>STAMINA</b></div>
+          <div class="bar shout" role="progressbar" aria-label="Dragon shout charge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="shoutBar"></i><b>DRAGON SHOUT</b></div>
+          <div class="mastery-hud">
+            <div><span>WARDEN XP</span><i><em id="levelXpBar"></em></i><b id="levelXpText">0 / 140</b></div>
+            <div><span><span id="weaponHudName" class="weapon-name">ASHEN BLADE</span> <strong id="weaponLevel">I</strong></span><i class="weapon-xp"><em id="weaponXpBar"></em></i><b id="weaponXpText">0 / 65</b></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="compass" aria-label="Compass and objective">
+        <div class="compass-heading"><span>W</span><span>NW</span><strong id="heading">N</strong><span>NE</span><span>E</span></div>
+        <div class="compass-line"><i></i><i></i><i class="major"></i><i></i><i></i></div>
+        <div id="objectiveNeedle" class="objective-needle" title="Quest objective"><i></i><span id="objectiveName"></span><span id="objectiveDistance">—</span></div>
+      </section>
+
+      <section class="quest" aria-label="Current quest">
+        <small id="biomeTag" class="biome-tag">PROCEDURAL REALM</small>
+        <small>MAIN QUEST</small>
+        <h2>THE SIEGE OF ASHENHOLD</h2>
+        <div class="quest-rule"></div>
+        <p id="questObjective"><i></i> Reach the ruined keep</p>
+        <p id="questProgress" class="quest-progress">The road lies north through the pass.</p>
+        <div class="side-quest-rule"></div>
+        <small id="sideQuestTitle" class="side-quest-title">SIDE QUEST · RUNES & BASTIONS</small>
+        <p id="sideQuestObjective" class="side-quest-objective"><i></i> Absorb ancient runes for Warden XP</p>
+      </section>
+
+      <section class="minimap-wrap" aria-label="World minimap">
+        <canvas id="minimap" width="190" height="190"></canvas>
+        <span class="map-ring" aria-hidden="true"></span>
+        <b>N</b>
+        <div id="mapLegend" class="map-legend" aria-hidden="true">
+          <span class="ml-objective"><i class="d"></i>OBJECTIVE</span>
+          <span class="ml-rune"><i class="d s"></i>RUNE</span>
+          <span class="ml-chest"><i></i>CHEST</span>
+          <span class="ml-soul"><i class="o"></i>SOUL</span>
+          <span class="ml-dragon"><i class="t"></i>DRAGON</span>
+          <span class="ml-enemy"><i class="o"></i>ENEMY</span>
+          <span class="ml-boss"><i class="r"></i>BOSS</span>
+          <span class="ml-fort"><i></i>FORT</span>
+          <span class="ml-town"><i></i>TOWN</span>
+          <span class="ml-keep"><i class="s"></i>KEEP</span>
+        </div>
+      </section>
+
+      <nav class="hud-actions" aria-label="Game options">
+        <button id="skillsButton" class="skills-button" type="button" aria-label="Open skill tree" title="Skill Tree (K)">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M12 7.2v4.2M12 11.4 6.8 16M12 11.4l5.2 4.6"/></svg>
+          <i id="skillPointBadge">0</i>
+        </button>
+        <button id="soundButton" type="button" aria-label="Toggle sound" aria-pressed="false" title="Sound">
+          <svg class="sound-on" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Zm4 4a5 5 0 0 1 0 6m3-9a9 9 0 0 1 0 12"/></svg>
+          <svg class="sound-off" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Zm5 5 5 5m0-5-5 5"/></svg>
+        </button>
+        <button id="fullscreenButton" type="button" aria-label="Toggle fullscreen" title="Fullscreen">
+          <svg viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5"/></svg>
+        </button>
+        <button id="pauseButton" type="button" aria-label="Pause" title="Pause">
+          <svg viewBox="0 0 24 24"><path d="M8 5v14m8-14v14"/></svg>
+        </button>
+      </nav>
+
+      <section id="weaponRack" class="weapon-rack" aria-label="Weapon arsenal">
+        <button type="button" data-weapon="blade" aria-label="Equip Ashen Blade">
+          <kbd>1</kbd><i>⚔</i><span><strong>ASHEN BLADE</strong><small>BALANCED</small></span>
+        </button>
+        <button type="button" data-weapon="bow" aria-label="Equip Frostfang Bow">
+          <kbd>2</kbd><i>➶</i><span><strong>FROSTFANG</strong><small>PRECISION</small></span>
+        </button>
+        <button type="button" data-weapon="axe" aria-label="Equip Wyrmcleaver Axe">
+          <kbd>3</kbd><i>◆</i><span><strong>WYRMCLEAVER</strong><small>HEAVY</small></span>
+        </button>
+        <button type="button" data-weapon="staff" aria-label="Equip Stormcaller Staff">
+          <kbd>4</kbd><i>✦</i><span><strong>STORMCALLER</strong><small>ARCANE</small></span>
+        </button>
+      </section>
+    </header>
+
+    <section id="dragonTarget" class="dragon-target" aria-label="Target enemy health">
+      <div><small id="dragonRank">ANCIENT DRAGON</small><strong id="dragonName">DRAKOR</strong></div>
+      <div class="enemy-bar"><i id="dragonHealthBar"></i></div>
+    </section>
+
+    <section id="waveHud" class="wave-hud" aria-label="Enemy assault status">
+      <small>ENEMY ASSAULT</small>
+      <strong>WAVE <span id="waveNumber">1</span></strong>
+      <div><i id="waveProgressBar"></i></div>
+      <b id="waveEnemyCount">0 ENEMIES REMAIN</b>
+    </section>
+
+    <div id="interactionHint" class="interaction-hint"><kbd>E</kbd><span id="interactionText">Absorb Rune</span></div>
+    <div id="locationBanner" class="location-banner" aria-live="polite"><small>DISCOVERED</small><strong>ASHENHOLD PASS</strong><span></span></div>
+    <div id="message" class="message" aria-live="polite"></div>
+    <div id="levelUpBanner" class="level-up-banner" aria-live="polite">
+      <small id="levelUpKicker">WARDEN ASCENDED</small>
+      <strong id="levelUpTitle">LEVEL 2</strong>
+      <span id="levelUpCopy">Skill point earned</span>
+    </div>
+
+    <aside class="controls-card">
+      <p><kbd>WASD</kbd> Move</p><p><kbd>SHIFT</kbd> Sprint</p><p><kbd>CTRL</kbd> Super Sprint</p><p><kbd>SPACE</kbd> High Jump</p>
+      <p><kbd>CLICK</kbd> Attack</p><p><kbd>ALT / RMB</kbd> Dodge</p><p><kbd>TAB / MMB</kbd> Lock</p><p><kbd>1—4</kbd> Weapons</p><p><kbd>WHEEL</kbd> Camera</p>
+      <p><kbd>Q</kbd> Shout</p><p><kbd>E</kbd> Interact</p><p><kbd>C</kbd> Shoulder</p><p><kbd>K</kbd> Skills</p><p><kbd>ESC</kbd> Pause</p>
+    </aside>
+
+    <section id="mobileControls" class="mobile-controls" aria-label="Touch controls">
+      <div id="joystick" class="joystick"><i id="joystickKnob"></i></div>
+      <div id="lookPad" class="look-pad" role="region" aria-label="Drag to look"></div>
+      <button id="mobileAttack" class="mobile-button attack" type="button"><span>⚔</span><b>ATTACK</b></button>
+      <button id="mobileShout" class="mobile-button shout-button" type="button"><span>ᚦ</span><b>SHOUT</b></button>
+      <button id="mobileJump" class="mobile-button jump" type="button"><span>↑</span><b>JUMP</b></button>
+      <button id="mobileWeapon" class="mobile-button weapon-button" type="button"><span>1</span><b>WEAPON</b></button>
+      <button id="mobileDodge" class="mobile-button dodge-button" type="button"><span>↝</span><b>DODGE</b></button>
+      <button id="mobileLock" class="mobile-button lock-button" type="button"><span>◎</span><b>LOCK</b></button>
+    </section>
+
+    <section id="loadingScreen" class="screen loading-screen active">
+      <div class="loading-card">
+        <span class="loading-rune"></span>
+        <p>FORGING THE REALM</p>
+        <div class="loading-track"><i id="loadingBar"></i></div>
+        <small id="loadingText">Raising the mountains...</small>
+      </div>
+    </section>
+
+    <section id="titleScreen" class="screen title-screen">
+      <div class="title-smoke" aria-hidden="true"></div>
+      <div class="title-card">
+        <p class="eyebrow"><span></span>A THIRD-PERSON OPEN WORLD<span></span></p>
+        <p id="realmLabel" class="realm-label">PROCEDURAL REALM</p>
+        <h1><small>ASHENHOLD</small>DRAGONFALL</h1>
+        <p>Cross a seed-forged vertical realm every run, master four weapons through eight permanent and three temporary constellations, survive five escalating enemy waves, reclaim lost forts, and hunt the World-Burner.</p>
+        <button id="enterButton" class="primary-button" type="button"><span>ENTER THE OPEN WORLD</span><kbd>ENTER</kbd></button>
+        <div class="feature-row">
+          <span><i>◈</i> Six changing biomes</span><span><i>⚔</i> Four weapon masteries</span><span><i>△</i> 3D dragon hunts</span>
+        </div>
+        <small class="title-note">Click the world to capture the mouse • Headphones recommended</small>
+      </div>
+    </section>
+
+    <section id="pauseScreen" class="screen pause-screen" role="dialog" aria-modal="true" aria-labelledby="pauseTitle">
+      <div class="dialog">
+        <p class="dialog-kicker">THE REALM WAITS</p>
+        <h2 id="pauseTitle">PAUSED</h2>
+        <p>Mouse released. Your progress in this run is preserved.</p>
+        <button id="resumeButton" class="primary-button" type="button"><span>RETURN TO THE REALM</span><kbd>ESC</kbd></button>
+        <button id="restartButton" class="text-button" type="button">Restart adventure</button>
+      </div>
+    </section>
+
+    <section id="skillsScreen" class="screen skills-screen" role="dialog" aria-modal="true" aria-label="Skill tree">
+      <div class="skills-shell">
+        <header class="skills-header">
+          <div>
+            <p>WARDEN PROGRESSION</p>
+            <h2>CONSTELLATIONS OF ASHENHOLD</h2>
+          </div>
+          <button id="closeSkillsButton" type="button" aria-label="Close skill tree"><span>RETURN TO THE REALM</span><b aria-hidden="true">×</b><kbd>K</kbd></button>
+        </header>
+        <div class="progression-summary">
+          <article>
+            <small>WARDEN LEVEL</small><strong id="treePlayerLevel">1</strong>
+            <div class="tree-meter"><i id="treeLevelXpBar"></i></div><span id="treeLevelXpText">0 / 140 XP</span>
+          </article>
+          <article>
+            <small><span id="treeWeaponName">ASHEN BLADE</span> MASTERY</small><strong id="treeWeaponLevel">I</strong>
+            <div class="tree-meter weapon"><i id="treeWeaponXpBar"></i></div><span id="treeWeaponXpText">0 / 65 MASTERY</span>
+          </article>
+          <article>
+            <small>RUN ATTUNEMENT</small><strong id="treeRunLevel">1</strong>
+            <div class="tree-meter run"><i id="treeRunXpBar"></i></div><span id="treeRunXpText">0 / 90 RUN XP</span>
+          </article>
+          <article class="point-vault">
+            <small>PERMANENT + RUN POINTS</small><strong id="treeSkillPoints">0 + 0</strong><span>Run points reset on victory or death.</span>
+          </article>
+        </div>
+        <div id="skillBranches" class="skill-branches" tabindex="0" aria-label="Skill constellations"></div>
+        <footer class="skills-footer">
+          <span>Slay dragons for Warden XP</span><i></i><span>Deal damage for weapon mastery</span><i></i><span>Progress is saved automatically</span>
+          <button id="resetProgressButton" type="button">Reset progression</button>
+        </footer>
+      </div>
+    </section>
+
+    <section id="endScreen" class="screen end-screen" role="dialog" aria-modal="true" aria-labelledby="endTitle">
+      <div class="dialog end-dialog">
+        <p id="endKicker" class="dialog-kicker">ASHENHOLD HAS FALLEN</p>
+        <h2 id="endTitle">DEFEAT</h2>
+        <p id="endCopy">The World-Burner still rules the northern sky.</p>
+        <div class="end-stats four">
+          <div><small>ENEMIES SLAIN</small><strong id="finalKills">0</strong></div>
+          <div><small>WAVE REACHED</small><strong id="finalWave">0</strong></div>
+          <div><small>DISTANCE WALKED</small><strong id="finalDistance">0m</strong></div>
+          <div><small>WORLD EXPLORED</small><strong id="finalExplored">0%</strong></div>
+        </div>
+        <button id="playAgainButton" class="primary-button" type="button"><span>FORGE THE NEXT REALM</span><kbd>ENTER</kbd></button>
+      </div>
+    </section>
+
+    <div id="webglError" class="webgl-error" role="alert">
+      <h2>WEBGL REQUIRED</h2>
+      <p>This 3D game needs hardware-accelerated WebGL. Enable graphics acceleration or open it in a current version of Edge, Chrome, or Firefox.</p>
+    </div>
+  </main>
+
+  <script src="assets/vendor/three.min.js"></script>
+  <script src="assets/vendor/GLTFLoader.js"></script>
+  <script src="assets/vendor/SkeletonUtils.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
