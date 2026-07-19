@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import WebSocket from "ws";
-import { createAshenholdServer } from "../app.mjs";
+import { createAshenholdServer } from "../create-server.mjs";
 
 let instance;
 let websocketUrl;

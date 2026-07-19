@@ -1,11 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
   "fluid": true,
   "functions": {
     "api/ws.js": {
       "maxDuration": 300
     }
   },
+  "rewrites": [
+    { "source": "/", "destination": "/api/health" },
+    { "source": "/health", "destination": "/api/health" }
+  ],
   "headers": [
     {
       "source": "/health",

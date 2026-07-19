@@ -1,4 +1,4 @@
-import { createAshenholdServer } from "./app.mjs";
+import { createAshenholdServer } from "./create-server.mjs";
 
 const port = Math.max(1, Math.min(65535, Number(process.env.PORT) || 8787));
 const host = process.env.HOST || "127.0.0.1";

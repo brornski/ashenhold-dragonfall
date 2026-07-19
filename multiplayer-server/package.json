@@ -6,10 +6,11 @@
   "description": "Authoritative WebSocket room service for Ashenhold: Dragonfall co-op.",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/server.test.mjs"
+    "test": "node --test test/server.test.mjs",
+    "test:remote": "node test/remote-smoke.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   },
   "dependencies": {
     "express": "^5.2.1",

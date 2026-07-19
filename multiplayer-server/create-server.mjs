@@ -15,7 +15,7 @@ export function createAshenholdServer(options = {}) {
     next();
   });
   app.get("/health", (_, response) => response.json({ ok: true, service: "ashenhold-multiplayer", protocol: PROTOCOL_VERSION, rooms: realmServer.rooms.size, maxPlayers: MAX_PLAYERS, now: Date.now() }));
-  app.get("/", (_, response) => response.json({ service: "Ashenhold Multiplayer", websocket: "/ws", protocol: PROTOCOL_VERSION }));
+  app.get("/", (_, response) => response.json({ service: "Ashenhold Multiplayer", websocket: options.path || "/ws", protocol: PROTOCOL_VERSION }));
   wss.on("connection", (socket) => {
     realmServer.attach(socket);
     socket.on("message", (data) => realmServer.receive(socket, data));
