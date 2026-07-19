@@ -118,17 +118,19 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     const test = window.__ASHENHOLD_TEST__;
     const spots = test.chestPositions();
     if (!spots.length) return { found: 0 };
-    test.teleport(spots[0].x, spots[0].z);
+    const positioned = test.positionAtChest(spots[0].id);
+    if (!positioned) return { found: spots.length, positioned: false };
     const before = window.ashenholdGame.snapshot();
     const powerBefore = before.relicBonuses[spots[0].powerUp.type];
     if (before.health > 45) test.damagePlayer(35, "CHEST TEST");
     const damaged = window.ashenholdGame.snapshot().health;
-    test.interact();
+    test.openChest(spots[0].id);
     let after = window.ashenholdGame.snapshot();
-    if (after.chestsOpened === before.chestsOpened) test.interact();
+    if (after.chestsOpened === before.chestsOpened) test.openChest(spots[0].id);
     after = window.ashenholdGame.snapshot();
     return {
       found: spots.length,
+      positioned: true,
       opened: after.chestsOpened === before.chestsOpened + 1,
       healed: after.health > damaged,
       xpChanged: after.level > before.level || after.xp !== before.xp,

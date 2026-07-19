@@ -20,9 +20,9 @@
     endCopy: $("endCopy"), finalKills: $("finalKills"), finalDistance: $("finalDistance"), finalExplored: $("finalExplored"),
     webglError: $("webglError"), joystick: $("joystick"), joystickKnob: $("joystickKnob"), lookPad: $("lookPad"),
     mobileAttack: $("mobileAttack"), mobileShout: $("mobileShout"), mobileJump: $("mobileJump"), mobileWeapon: $("mobileWeapon"),
-    mobileDodge: $("mobileDodge"), mobileLock: $("mobileLock"),
+    mobileDodge: $("mobileDodge"), mobileLock: $("mobileLock"), mobileSlide: $("mobileSlide"), mobileSkills: $("mobileSkills"),
     skills: $("skillsScreen"), skillsButton: $("skillsButton"), closeSkills: $("closeSkillsButton"),
-    resetProgress: $("resetProgressButton"), skillBranches: $("skillBranches"), skillPointBadge: $("skillPointBadge"),
+    resetProgress: $("resetProgressButton"), skillBranches: $("skillBranches"), skillPointBadge: $("skillPointBadge"), mobileSkillPointBadge: $("mobileSkillPointBadge"),
     playerLevel: $("playerLevel"), levelXpBar: $("levelXpBar"), levelXpText: $("levelXpText"),
     weaponLevel: $("weaponLevel"), weaponXpBar: $("weaponXpBar"), weaponXpText: $("weaponXpText"),
     treePlayerLevel: $("treePlayerLevel"), treeLevelXpBar: $("treeLevelXpBar"), treeLevelXpText: $("treeLevelXpText"),
@@ -277,6 +277,7 @@
   const raycaster = new THREE.Raycaster();
 
   const encounterRng = { state: ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0 };
+  const slideTestSurfaceCache = {};
 
   function encounterRandom() {
     let value = encounterRng.state >>> 0;
@@ -351,6 +352,20 @@
     sprintLatch: false,
     superSprintLatch: false,
     sprintExhausted: false,
+    sliding: false,
+    slideSpeed: 0,
+    slideDirection: new THREE.Vector3(0, 0, -1),
+    slideTime: 0,
+    slideSlopeDegrees: 0,
+    slideInputPressed: false,
+    slideExitBlocked: false,
+    slideCollision: false,
+    slideFxTimer: 0,
+    mobileSlideHeld: false,
+    airMomentum: new THREE.Vector3(),
+    airbornePhase: "grounded",
+    landingTime: 0,
+    landingImpact: 0,
     stormstrideTimer: 0,
     jumpTime: 0,
     attackVariant: 0,
@@ -1119,7 +1134,9 @@
     if (ui.mobileWeapon) ui.mobileWeapon.querySelector("span").textContent = String(WEAPON_IDS.indexOf(player.activeWeapon) + 1);
     ui.treeSkillPoints.textContent = player.skillPoints + " + " + player.runSkillPoints;
     ui.skillPointBadge.textContent = player.skillPoints + player.runSkillPoints;
+    if (ui.mobileSkillPointBadge) ui.mobileSkillPointBadge.textContent = player.skillPoints + player.runSkillPoints;
     ui.skillsButton.classList.toggle("no-points", player.skillPoints + player.runSkillPoints < 1);
+    if (ui.mobileSkills) ui.mobileSkills.classList.toggle("no-points", player.skillPoints + player.runSkillPoints < 1);
     if (ui.skillBranches.children.length) {
       ui.skillBranches.querySelectorAll("[data-skill]").forEach((button) => {
         const node = skillById.get(button.dataset.skill);
@@ -1155,7 +1172,7 @@
     game.dataset.state = state;
     ui.skills.classList.remove("active");
     lastTime = performance.now();
-    if (!isCoarse && !testMode) requestPointer();
+    if (!isCoarse && !testMode) showMessage("CLICK THE REALM TO RECAPTURE THE MOUSE", "#9fcbd4");
   }
 
   function clearProgressionData() {
@@ -3026,8 +3043,16 @@
     camp: [4.5, 9], ruin: [4.5, 9], ascent: [5, 11], keep: [9, 17]
   };
 
-  function addPoiChestSpot(poi, x, z, xp) {
-    poiChestSpots.push({ idSuffix: poiChestSpots.length, name: poi.name + " CACHE", x, z, xp: Math.round(xp) });
+  function addPoiChestSpot(poi, x, z, xp, rotation) {
+    const radialRotation = Math.atan2(x - poi.x, z - poi.z);
+    poiChestSpots.push({
+      idSuffix: poiChestSpots.length,
+      name: poi.name + " CACHE",
+      x,
+      z,
+      xp: Math.round(xp),
+      rotation: Number.isFinite(rotation) ? rotation : radialRotation
+    });
   }
 
   // addRoutePlatform with a yaw: keeps watchpost decks aligned to their (rotated) tower shell so
@@ -3312,7 +3337,7 @@
     stepAt(0, innerZ - strip * 2.5, innerX * 2, strip, baseY + 2.25);
     stepAt(0, -strip * 1.5, innerX * 2, Math.max(1.4, innerZ * 2 - strip * 3), floorTop);
     const chestPoint = poiLocalToWorld(poi.x, poi.z, facing, 0, -strip);
-    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 100 + Math.floor(seeded(salt + 8) * 41));
+    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 100 + Math.floor(seeded(salt + 8) * 41), facing);
     debug.chests += 1;
     const doorDir = { x: Math.sin(facing), z: Math.cos(facing) };
     const sideDir = { x: Math.cos(facing), z: -Math.sin(facing) };
@@ -3377,7 +3402,7 @@
     scene.add(altar);
     addCollider(altarPoint.x, altarPoint.z, .8, .53, poi.rotation, baseY - 1, baseY + .95);
     const chestPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, 5.1);
-    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 12) * 31));
+    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 12) * 31), poi.rotation);
     debug.chests += 1;
   }
 
@@ -3450,7 +3475,7 @@
       if (placePackModel("pineCrooked", pinePoint.x, pinePoint.z, POI_SCALES.graveyard, seeded(salt + 14) * Math.PI * 2, { baseY })) addCollider(pinePoint.x, pinePoint.z, .5, .5, 0, baseY - 1, baseY + 3);
     }
     const chestPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, chestZ);
-    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 12) * 31));
+    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 12) * 31), poi.rotation);
     debug.chests += 1;
   }
 
@@ -3532,7 +3557,7 @@
     scene.add(altar);
     addCollider(altarPoint.x, altarPoint.z, .8, .53, poi.rotation, baseY - 1, baseY + .95);
     const chestPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, 4.6);
-    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 16) * 21));
+    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 16) * 21), poi.rotation);
     debug.chests += 1;
   }
 
@@ -3561,12 +3586,13 @@
     const definitions = worldLayout.forts.map((fort, index) => ({
       id: "chest-fort-" + index, name: fort[4] + " CHEST", xp: 70 + index * 20,
       x: fort[0] + Math.cos(fort[2]) * 4 - Math.sin(fort[2]) * 6,
-      z: fort[1] + Math.sin(fort[2]) * 4 + Math.cos(fort[2]) * 6
+      z: fort[1] + Math.sin(fort[2]) * 4 + Math.cos(fort[2]) * 6,
+      rotation: fort[2]
     })).concat(routeSummits.filter(Boolean).map((summit, index) => ({
       id: "chest-route-" + index, name: worldLayout.routes[index][5] + " TROVE", xp: 130 + index * 30,
-      x: summit.x + (index ? 1.5 : 2.4), z: summit.z
+      x: summit.x + (index ? 1.5 : 2.4), z: summit.z, rotation: -Math.PI / 2
     }))).concat(poiChestSpots.map((spot, index) => ({
-      id: "chest-poi-" + index, name: spot.name, xp: spot.xp, x: spot.x, z: spot.z
+      id: "chest-poi-" + index, name: spot.name, xp: spot.xp, x: spot.x, z: spot.z, rotation: spot.rotation
     })));
     const bandMaterial = new THREE.MeshStandardMaterial({ color: 0x2e3436, roughness: .58, metalness: .7, envMapIntensity: .35 });
     const powerTypes = ["damage", "health", "regen", "sprint", "stamina", "critDamage"];
@@ -3590,16 +3616,20 @@
       const lockMaterial = new THREE.MeshStandardMaterial({ color: 0xe8b45a, emissive: 0xe8b45a, emissiveIntensity: 1.2, roughness: .35, metalness: .55 });
       const lock = new THREE.Mesh(new THREE.BoxGeometry(.22, .26, .12), lockMaterial);
       lock.position.set(0, .82, .56);
+      const interactionAnchor = new THREE.Object3D();
+      interactionAnchor.name = "Chest front latch interaction anchor";
+      interactionAnchor.position.set(0, .86, .72);
       const marker = new THREE.Mesh(new THREE.RingGeometry(1.15, 1.22, 30), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: .5, side: THREE.DoubleSide, depthWrite: false }));
       marker.rotation.x = -Math.PI / 2;
       marker.position.y = .04;
-      root.add(base, lid, bandA, bandB, lock, marker);
+      root.add(base, lid, bandA, bandB, lock, marker, interactionAnchor);
       root.position.set(definition.x, surfaceHeightAt(definition.x, definition.z, 999), definition.z);
+      root.rotation.y = definition.rotation || 0;
       root.traverse((object) => { if (object.isMesh) { object.castShadow = !isCoarse; object.receiveShadow = true; } });
       scene.add(root);
       chests.push({
         id: definition.id, name: definition.name, xp: definition.xp,
-        root, lid, lockMaterial, marker, opened: false, openTime: 0, phase: index * 1.71,
+        root, lid, lockMaterial, marker, interactionAnchor, opened: false, openTime: 0, phase: index * 1.71,
         powerUp: { type: powerType, amount: powerAmount }
       });
     });
@@ -3615,16 +3645,107 @@
     });
   }
 
+  function segmentIntersectsChestCollider(start, end, box) {
+    const cosine = Math.cos(box.rotation || 0);
+    const sine = Math.sin(box.rotation || 0);
+    const startDx = start.x - box.x;
+    const startDz = start.z - box.z;
+    const localStart = {
+      x: startDx * cosine - startDz * sine,
+      y: start.y,
+      z: startDx * sine + startDz * cosine
+    };
+    const endDx = end.x - box.x;
+    const endDz = end.z - box.z;
+    const localEnd = {
+      x: endDx * cosine - endDz * sine,
+      y: end.y,
+      z: endDx * sine + endDz * cosine
+    };
+    let near = 0;
+    let far = 1;
+    const clipAxis = (origin, delta, minimum, maximum) => {
+      if (!Number.isFinite(minimum) && !Number.isFinite(maximum)) return true;
+      if (Math.abs(delta) < .00001) return origin >= minimum && origin <= maximum;
+      let first = (minimum - origin) / delta;
+      let second = (maximum - origin) / delta;
+      if (first > second) { const swap = first; first = second; second = swap; }
+      near = Math.max(near, first);
+      far = Math.min(far, second);
+      return near <= far;
+    };
+    return clipAxis(localStart.x, localEnd.x - localStart.x, -box.hx, box.hx)
+      && clipAxis(localStart.z, localEnd.z - localStart.z, -box.hz, box.hz)
+      && clipAxis(localStart.y, localEnd.y - localStart.y, box.minY, box.maxY)
+      && far >= .025 && near <= .975;
+  }
+
+  const CHEST_INTERACTION_RANGE = 3.5;
+  const CHEST_LEVEL_TOLERANCE = 1.65;
+  const CHEST_FRONT_DOT = .35;
+  const CHEST_FACING_DOT = .15;
+
+  function chestFrontVector(chest) {
+    return new THREE.Vector3(0, 0, 1).applyQuaternion(chest.root.quaternion).setY(0).normalize();
+  }
+
+  function chestInteractionStance(chest, distance) {
+    const front = chestFrontVector(chest);
+    const foot = chest.root.position.clone().addScaledVector(front, distance == null ? 2.15 : distance);
+    foot.y = surfaceHeightAt(foot.x, foot.z, chest.root.position.y + .95);
+    const latch = chest.interactionAnchor.getWorldPosition(new THREE.Vector3());
+    const facing = latch.clone().sub(foot).setY(0).normalize();
+    return { foot, front, facing, latch };
+  }
+
+  function chestInteractionDetails(chest, footOverride, facingOverride, groundedOverride) {
+    if (!chest || chest.opened || !player.root) return { allowed: false, reason: "unavailable" };
+    const foot = footOverride ? footOverride.clone() : player.root.position.clone();
+    const origin = foot.clone().add(new THREE.Vector3(0, 1.28, 0));
+    const latch = chest.interactionAnchor.getWorldPosition(new THREE.Vector3());
+    const distance = origin.distanceTo(latch);
+    const verticalDifference = Math.abs(foot.y - chest.root.position.y);
+    const front = chestFrontVector(chest);
+    const approach = foot.clone().sub(chest.root.position).setY(0);
+    const approachDot = approach.lengthSq() < .001 ? -1 : approach.normalize().dot(front);
+    const toLatch = latch.clone().sub(origin).setY(0);
+    const facing = facingOverride
+      ? facingOverride.clone().setY(0).normalize()
+      : new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+    const facingDot = toLatch.lengthSq() < .001 ? -1 : facing.dot(toLatch.normalize());
+    const ownSurface = surfaceHeightAt(foot.x, foot.z, foot.y + .95);
+    const onOwnSurface = Math.abs(ownSurface - foot.y) <= .55;
+    const colliderBlocked = colliders.some((box) => segmentIntersectsChestCollider(origin, latch, box));
+    let terrainBlocked = false;
+    for (let sample = 1; sample < 12 && !terrainBlocked; sample += 1) {
+      const amount = sample / 12;
+      const point = origin.clone().lerp(latch, amount);
+      if (terrainHeight(point.x, point.z) > point.y - .08) terrainBlocked = true;
+    }
+    const grounded = groundedOverride == null ? (footOverride ? onOwnSurface : player.grounded) : Boolean(groundedOverride);
+    const allowed = grounded && onOwnSurface && distance <= CHEST_INTERACTION_RANGE && verticalDifference <= CHEST_LEVEL_TOLERANCE
+      && approachDot >= CHEST_FRONT_DOT && facingDot >= CHEST_FACING_DOT && !colliderBlocked && !terrainBlocked;
+    let reason = "ready";
+    if (!grounded || !onOwnSurface) reason = "not-grounded";
+    else if (distance > CHEST_INTERACTION_RANGE) reason = "too-far";
+    else if (verticalDifference > CHEST_LEVEL_TOLERANCE) reason = "wrong-level";
+    else if (approachDot < CHEST_FRONT_DOT) reason = "wrong-side";
+    else if (facingDot < CHEST_FACING_DOT) reason = "not-facing";
+    else if (colliderBlocked || terrainBlocked) reason = "blocked-line-of-sight";
+    return { allowed, reason, distance, verticalDifference, approachDot, facingDot, colliderBlocked, terrainBlocked, origin, latch };
+  }
+
   function nearestChest(maxDistance) {
     if (!player.root) return null;
-    const maximum = maxDistance == null ? 11 : maxDistance;
+    const maximum = Math.min(CHEST_INTERACTION_RANGE, maxDistance == null ? CHEST_INTERACTION_RANGE : Math.max(0, maxDistance));
     return chests
-      .filter((chest) => !chest.opened && distance2D(player.root.position, chest.root.position) <= maximum)
-      .sort((a, b) => distance2D(player.root.position, a.root.position) - distance2D(player.root.position, b.root.position))[0] || null;
+      .map((chest) => ({ chest, access: chestInteractionDetails(chest) }))
+      .filter((entry) => !entry.chest.opened && entry.access.allowed && entry.access.distance <= maximum)
+      .sort((a, b) => a.access.distance - b.access.distance)[0]?.chest || null;
   }
 
   function openChest(chest) {
-    if (!chest || chest.opened || state !== "playing") return false;
+    if (!chest || chest.opened || state !== "playing" || !chestInteractionDetails(chest).allowed) return false;
     chest.opened = true;
     chest.openTime = .01;
     const oldMaximumHealth = maxHealth();
@@ -4226,7 +4347,14 @@
       upperArmL: bone("UpperArm.L"),
       upperArmR: bone("UpperArm.R"),
       lowerArmL: bone("LowerArm.L"),
-      lowerArmR: bone("LowerArm.R")
+      lowerArmR: bone("LowerArm.R"),
+      hips: bone("Hips"),
+      upperLegL: bone("UpperLeg.L"),
+      upperLegR: bone("UpperLeg.R"),
+      lowerLegL: bone("LowerLeg.L"),
+      lowerLegR: bone("LowerLeg.R"),
+      footL: bone("Foot.L"),
+      footR: bone("Foot.R")
     } : null;
     player.sprintPoseSnapshot = null;
     player.sprintPoseApplied = false;
@@ -6022,6 +6150,24 @@
     })));
   }
 
+  function resetTraversalMotion() {
+    player.sliding = false;
+    player.slideSpeed = 0;
+    player.slideDirection.set(0, 0, -1);
+    player.slideTime = 0;
+    player.slideSlopeDegrees = 0;
+    player.slideInputPressed = false;
+    player.slideExitBlocked = false;
+    player.slideCollision = false;
+    player.slideFxTimer = 0;
+    player.mobileSlideHeld = false;
+    player.airMomentum.set(0, 0, 0);
+    player.airbornePhase = "grounded";
+    player.landingTime = 0;
+    player.landingImpact = 0;
+    if (player.modelRoot) player.modelRoot.position.y = 0;
+  }
+
   function startGame(forceFresh) {
     if (state === "ended" && !testMode) {
       window.location.reload();
@@ -6050,6 +6196,7 @@
     player.sprintExhausted = false;
     player.sprinting = false;
     player.superSprinting = false;
+    resetTraversalMotion();
     player.stormstrideTimer = 0;
     player.attackCooldown = 0;
     player.attackTime = 0;
@@ -6140,6 +6287,128 @@
     return height;
   }
 
+  function strideSprintPower() {
+    return 1 + skillRank("gale_pace") * .15 + relicBonus("sprint") / 100 + bondedPaceBonus();
+  }
+
+  function strideSuperPower() {
+    return 1 + skillRank("windstep") * .055 + skillRank("gale_pace") * .1 + skillRank("tempest_pace") * .25 + (hasSkill("stormstride") ? .25 : 0) + relicBonus("sprint") / 100 + bondedPaceBonus();
+  }
+
+  function terrainDescentInfo(direction, position) {
+    const origin = position || player.root.position;
+    const heading = direction.clone().setY(0);
+    if (heading.lengthSq() < .0001) heading.set(0, 0, -1);
+    heading.normalize();
+    const sample = 1.8;
+    const current = terrainHeight(origin.x, origin.z);
+    const ahead = terrainHeight(origin.x + heading.x * sample, origin.z + heading.z * sample);
+    const crossSample = 1.25;
+    const gradientX = (terrainHeight(origin.x + crossSample, origin.z) - terrainHeight(origin.x - crossSample, origin.z)) / (crossSample * 2);
+    const gradientZ = (terrainHeight(origin.x, origin.z + crossSample) - terrainHeight(origin.x, origin.z - crossSample)) / (crossSample * 2);
+    const downhill = new THREE.Vector3(-gradientX, 0, -gradientZ);
+    if (downhill.lengthSq() < .0001) downhill.copy(heading);
+    else downhill.normalize();
+    return {
+      angle: Math.atan2(current - ahead, sample) * 180 / Math.PI,
+      steepness: Math.atan(Math.hypot(gradientX, gradientZ)) * 180 / Math.PI,
+      current,
+      ahead,
+      downhill,
+      onTerrain: Math.abs(origin.y - current) <= .48,
+      aboveWater: current > biome.waterLevel + .35
+    };
+  }
+
+  function canStandAtPlayer() {
+    return !hitsCollider(player.root.position.x, player.root.position.z, .72, player.root.position.y, player.root.position.y + 2.15);
+  }
+
+  function beginSlide(direction, slope) {
+    if (!player.root || !direction || direction.lengthSq() < .001 || !player.grounded || player.sliding || player.dodgeTime > 0 || player.attackTime > 0 || player.stamina <= 8) return false;
+    const descent = slope || terrainDescentInfo(direction);
+    if (!descent.onTerrain || !descent.aboveWater || descent.angle < 8) return false;
+    player.sliding = true;
+    player.slideDirection.copy(direction).setY(0).normalize();
+    player.slideSpeed = Math.max(13.5, 17.2 * strideSprintPower());
+    player.slideTime = 0;
+    player.slideSlopeDegrees = descent.angle;
+    player.slideExitBlocked = false;
+    player.slideCollision = false;
+    player.slideFxTimer = 0;
+    player.sprintLatch = false;
+    player.superSprintLatch = false;
+    player.sprinting = false;
+    player.superSprinting = false;
+    audio.tone(92, 58, .15, "triangle", .014);
+    showMessage("DOWNHILL SLIDE", "#e8c98c");
+    return true;
+  }
+
+  function finishSlide(forceAirborne) {
+    if (!player.sliding) return true;
+    if (!forceAirborne && player.grounded && !canStandAtPlayer()) {
+      player.slideExitBlocked = true;
+      player.slideSpeed = Math.min(player.slideSpeed, 2.5);
+      return false;
+    }
+    player.sliding = false;
+    player.slideExitBlocked = false;
+    player.slideSpeed = forceAirborne ? player.slideSpeed : 0;
+    player.slideSlopeDegrees = 0;
+    return true;
+  }
+
+  function updateSlide(dt, inputDirection, slideHeld) {
+    if (!player.sliding) return false;
+    if (!player.grounded) {
+      player.airMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
+      finishSlide(true);
+      return false;
+    }
+    const terrain = terrainHeight(player.root.position.x, player.root.position.z);
+    if (!slideHeld || player.attackTime > 0 || player.dodgeTime > 0 || terrain <= biome.waterLevel + .35 || Math.abs(player.root.position.y - terrain) > .48) {
+      if (finishSlide(false)) return false;
+    }
+    if (inputDirection && inputDirection.lengthSq() > .01) {
+      const steering = inputDirection.clone().setY(0).normalize();
+      if (steering.dot(player.slideDirection) > -.15) player.slideDirection.lerp(steering, clamp(dt * 1.25, 0, .18)).normalize();
+    }
+    const descent = terrainDescentInfo(player.slideDirection);
+    player.slideSlopeDegrees = descent.angle;
+    player.slideDirection.lerp(descent.downhill, clamp(dt * .72, 0, .11)).normalize();
+    if (descent.angle < -4) {
+      if (finishSlide(false)) return false;
+    }
+    const slopeAcceleration = Math.sin(Math.max(0, descent.angle) * Math.PI / 180) * 30;
+    const friction = descent.angle >= 4 ? 2.4 : descent.angle > 0 ? 6.5 : 12.5;
+    player.slideSpeed = clamp(player.slideSpeed + (slopeAcceleration - friction) * dt, 0, 43 * Math.min(1.45, strideSprintPower()));
+    const marathonEfficiency = clamp(1 - skillRank("marathon") * .25, .35, 1);
+    player.stamina = Math.max(0, player.stamina - 5 * marathonEfficiency * dt);
+    const intended = player.slideSpeed * dt;
+    const startX = player.root.position.x;
+    const startZ = player.root.position.z;
+    const moved = movePlayer(player.slideDirection.x * intended, player.slideDirection.z * intended);
+    const forwardProgress = (player.root.position.x - startX) * player.slideDirection.x + (player.root.position.z - startZ) * player.slideDirection.z;
+    player.distance += moved;
+    player.slideTime += dt;
+    player.moving = moved > .001;
+    player.root.rotation.y = rotateToward(player.root.rotation.y, Math.atan2(-player.slideDirection.x, -player.slideDirection.z), dt * 12);
+    if (intended > .04 && forwardProgress < intended * .32) {
+      player.slideCollision = true;
+      player.slideSpeed *= .28;
+      cameraTrauma = Math.max(cameraTrauma, .18);
+      if (finishSlide(false)) return false;
+    }
+    if (player.slideSpeed < 4.5 && player.slideTime > .2 && finishSlide(false)) return false;
+    player.slideFxTimer -= dt;
+    if (!isCoarse && !reducedMotion && player.slideFxTimer <= 0) {
+      player.slideFxTimer = .075;
+      spawnSlideDust();
+    }
+    return player.sliding;
+  }
+
   function updatePlayer(dt) {
     const previousAttackTime = player.attackTime;
     player.attackCooldown = Math.max(0, player.attackCooldown - dt);
@@ -6178,11 +6447,18 @@
     inputZ += -mobileMove.y;
     const magnitude = Math.hypot(inputX, inputZ);
     let moving = magnitude > .08;
-    player.moving = moving;
+    const forward = new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+    const right = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
+    const inputDirection = moving ? forward.clone().multiplyScalar(inputZ / Math.max(1, magnitude)).add(right.clone().multiplyScalar(inputX / Math.max(1, magnitude))).normalize() : null;
+    player.moving = moving || player.sliding;
     const wasSuperSprinting = player.superSprinting;
-    const touchSuperSprint = isCoarse && magnitude > .92;
-    const wantsSuperSprint = moving && (keys.has("control") || touchSuperSprint);
-    const wantsSprint = moving && (wantsSuperSprint || keys.has("shift") || (isCoarse && magnitude > .68) || magnitude > 1.15);
+    const slideHeld = keys.has("control") || player.mobileSlideHeld;
+    const touchSuperSprint = isCoarse && magnitude > .92 && !player.mobileSlideHeld;
+    const rawWantsSuperSprint = moving && (keys.has("control") || player.mobileSlideHeld || touchSuperSprint);
+    const wantsSprint = moving && (rawWantsSuperSprint || keys.has("shift") || (isCoarse && magnitude > .68) || magnitude > 1.15);
+    if (player.slideInputPressed && inputDirection && wantsSprint && !player.sprintExhausted) beginSlide(inputDirection, terrainDescentInfo(inputDirection));
+    player.slideInputPressed = false;
+    const wantsSuperSprint = rawWantsSuperSprint && !player.sliding;
     if (player.stamina <= 0) player.sprintExhausted = true;
     if (player.sprintExhausted && player.stamina >= 10) player.sprintExhausted = false;
     if (!wantsSprint || player.sprintExhausted) player.sprintLatch = false;
@@ -6192,14 +6468,16 @@
     else if (!player.superSprintLatch && player.stamina > 12) player.superSprintLatch = true;
     else if (player.superSprintLatch && player.stamina <= 5) player.superSprintLatch = false;
     if (player.superSprintLatch) player.sprintLatch = true;
-    player.superSprinting = moving && player.dodgeTime <= 0 && player.superSprintLatch;
-    player.sprinting = moving && player.dodgeTime <= 0 && (player.sprintLatch || player.superSprinting);
+    player.superSprinting = moving && player.grounded && !player.sliding && player.dodgeTime <= 0 && player.superSprintLatch;
+    player.sprinting = moving && player.grounded && !player.sliding && player.dodgeTime <= 0 && (player.sprintLatch || player.superSprinting);
     const staminaRecovery = (moving ? 16 : 25) * (1 + skillRank("endurance") * .06) * (1 + relicBonus("regen") / 100)
       * (player.sprinting ? 1 + skillRank("second_lungs") * .3 : 1);
-    player.stamina = Math.min(maxStamina(), player.stamina + staminaRecovery * dt);
+    if (!player.sliding) player.stamina = Math.min(maxStamina(), player.stamina + staminaRecovery * dt);
     if (!wasSuperSprinting && player.superSprinting && hasSkill("stormlaunch")) triggerStormlaunch();
 
-    if (player.dodgeTime > 0) {
+    if (player.sliding) {
+      moving = updateSlide(dt, inputDirection, slideHeld) || moving;
+    } else if (player.dodgeTime > 0) {
       moving = true;
       const dodgeProgress = clamp(player.dodgeElapsed / .58, 0, 1);
       const dodgeSpeed = lerp(21, 7.5, dodgeProgress);
@@ -6209,13 +6487,11 @@
     } else if (moving) {
       inputX /= Math.max(1, magnitude);
       inputZ /= Math.max(1, magnitude);
-      const forward = new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
-      const right = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
-      const direction = forward.multiplyScalar(inputZ).add(right.multiplyScalar(inputX)).normalize();
+      const direction = inputDirection;
       const superSprinting = player.superSprinting;
       const sprinting = player.sprinting;
-      const sprintPower = 1 + skillRank("gale_pace") * .15 + relicBonus("sprint") / 100 + bondedPaceBonus();
-      const superPower = 1 + skillRank("windstep") * .055 + skillRank("gale_pace") * .1 + skillRank("tempest_pace") * .25 + (hasSkill("stormstride") ? .25 : 0) + relicBonus("sprint") / 100 + bondedPaceBonus();
+      const sprintPower = strideSprintPower();
+      const superPower = strideSuperPower();
       const speed = superSprinting ? 25.5 * superPower : sprinting ? 17.2 * sprintPower : 7.8;
       const marathonEfficiency = clamp(1 - skillRank("marathon") * .25, .35, 1);
       if (superSprinting) player.stamina = Math.max(0, player.stamina - 34 * marathonEfficiency * (1 - skillRank("windstep") * .09) * dt);
@@ -6235,38 +6511,64 @@
       player.walkCycle += dt * (superSprinting ? 24 : sprinting ? 17.5 : 9.2);
     }
 
+    if (!player.grounded && player.airMomentum.lengthSq() > .01) {
+      player.distance += movePlayer(player.airMomentum.x * dt, player.airMomentum.z * dt);
+      player.airMomentum.multiplyScalar(Math.pow(.2, dt));
+      if (player.airMomentum.lengthSq() < .04) player.airMomentum.set(0, 0, 0);
+    }
+
     updateStormstrideTrail(dt);
 
     const currentY = player.root.position.y;
     const landingHeight = surfaceHeightAt(player.root.position.x, player.root.position.z, currentY);
     if (player.grounded && currentY - landingHeight > .9) {
+      if (player.sliding) {
+        player.airMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
+        finishSlide(true);
+      }
       player.grounded = false;
       player.velocityY = Math.min(0, player.velocityY);
       player.jumpTime = 0;
+      player.airbornePhase = "fall";
     }
     if (!player.grounded) {
       player.jumpTime += dt;
       player.velocityY -= 20.5 * dt;
+      player.airbornePhase = player.jumpTime < .1 && player.velocityY > 0 ? "jump" : player.velocityY > 2 ? "rise" : player.velocityY > -2 ? "apex" : "fall";
       const nextY = player.root.position.y + player.velocityY * dt;
       const surface = surfaceHeightAt(player.root.position.x, player.root.position.z, player.root.position.y + .9);
       if (player.velocityY <= 0 && nextY <= surface) {
+        const impact = Math.abs(player.velocityY);
         player.root.position.y = surface;
         player.velocityY = 0;
         player.grounded = true;
         player.jumpTime = 0;
+        player.airMomentum.multiplyScalar(.35);
+        player.airbornePhase = "land";
+        player.landingTime = impact > 13 ? .28 : .18;
+        player.landingImpact = impact;
+        if (impact > 13) {
+          cameraTrauma = Math.max(cameraTrauma, .2);
+          createShockwave(player.root.position.clone(), 2.2, .2, 0x9a8770);
+        }
       } else player.root.position.y = nextY;
-    } else player.root.position.y = landingHeight;
+    } else {
+      player.root.position.y = landingHeight;
+      player.landingTime = Math.max(0, player.landingTime - dt);
+      if (player.landingTime <= 0) player.airbornePhase = "grounded";
+    }
     recoverPlayerFromCollision();
-    if (player.grounded && player.root.position.y > biome.waterLevel + .35 && !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + 2.1)) player.lastSafePosition.copy(player.root.position);
+    if (player.grounded && player.root.position.y > biome.waterLevel + .35 && !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + (player.sliding ? 1.15 : 2.1))) player.lastSafePosition.copy(player.root.position);
     player.vertical = Math.max(0, player.root.position.y - terrainHeight(player.root.position.x, player.root.position.z));
-    camera.fov = lerp(camera.fov, player.superSprinting ? 76 : player.sprinting ? 69 : 62, 1 - Math.pow(.002, dt));
+    const slideFov = 69 + clamp((player.slideSpeed - 12) * .22, 0, 7);
+    camera.fov = lerp(camera.fov, player.sliding ? slideFov : player.superSprinting ? 76 : player.sprinting ? 69 : 62, 1 - Math.pow(.002, dt));
     camera.updateProjectionMatrix();
     player.streakTimer -= dt;
     if (player.superSprinting && player.grounded && !isCoarse && !reducedMotion && player.streakTimer <= 0) {
       player.streakTimer = 1 / 12;
       spawnSpeedStreaks();
     }
-    animatePlayer(dt, moving);
+    animatePlayer(dt, moving || player.sliding);
     const cellX = Math.floor((player.root.position.x + HALF_WORLD) / 45);
     const cellZ = Math.floor((player.root.position.z + HALF_WORLD) / 45);
     discoveredCells.add(cellX + ":" + cellZ);
@@ -6304,6 +6606,7 @@
 
   function movePlayer(dx, dz) {
     const radius = .72;
+    const collisionHeight = player.sliding ? 1.15 : 2.15;
     const startX = player.root.position.x;
     const startZ = player.root.position.z;
     const distance = Math.hypot(dx, dz);
@@ -6314,12 +6617,12 @@
       const footY = player.root.position.y;
       const candidateX = clamp(player.root.position.x + stepX, -HALF_WORLD, HALF_WORLD);
       const candidateZ = clamp(player.root.position.z + stepZ, -HALF_WORLD, HALF_WORLD);
-      if (canPlayerOccupy(candidateX, candidateZ, radius, footY)) {
+      if (canPlayerOccupy(candidateX, candidateZ, radius, footY, collisionHeight)) {
         player.root.position.x = candidateX;
         player.root.position.z = candidateZ;
       } else {
-        const xOpen = canPlayerOccupy(candidateX, player.root.position.z, radius, footY);
-        const zOpen = canPlayerOccupy(player.root.position.x, candidateZ, radius, footY);
+        const xOpen = canPlayerOccupy(candidateX, player.root.position.z, radius, footY, collisionHeight);
+        const zOpen = canPlayerOccupy(player.root.position.x, candidateZ, radius, footY, collisionHeight);
         if (xOpen && zOpen) {
           if (Math.abs(stepX) >= Math.abs(stepZ)) player.root.position.x = candidateX;
           else player.root.position.z = candidateZ;
@@ -6354,8 +6657,9 @@
     });
   }
 
-  function canPlayerOccupy(x, z, radius, footY) {
-    if (hitsCollider(x, z, radius, footY, footY + 2.15)) return false;
+  function canPlayerOccupy(x, z, radius, footY, height) {
+    const collisionHeight = Number.isFinite(height) ? height : player.sliding ? 1.15 : 2.15;
+    if (hitsCollider(x, z, radius, footY, footY + collisionHeight)) return false;
     if (!player.grounded) return true;
     const currentSurface = surfaceHeightAt(player.root.position.x, player.root.position.z, footY + .9);
     const nextSurface = surfaceHeightAt(x, z, footY + .9);
@@ -6373,7 +6677,8 @@
   }
 
   function recoverPlayerFromCollision() {
-    if (!player.root || !player.grounded || !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + 2.1)) return false;
+    const collisionHeight = player.sliding ? 1.15 : 2.1;
+    if (!player.root || !player.grounded || !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + collisionHeight)) return false;
     const originX = player.root.position.x;
     const originZ = player.root.position.z;
     for (let ring = 1; ring <= 5; ring += 1) {
@@ -6382,7 +6687,7 @@
         const angle = index / 16 * Math.PI * 2;
         const x = clamp(originX + Math.cos(angle) * radius, -HALF_WORLD, HALF_WORLD);
         const z = clamp(originZ + Math.sin(angle) * radius, -HALF_WORLD, HALF_WORLD);
-        if (!canPlayerOccupy(x, z, .68, player.root.position.y)) continue;
+        if (!canPlayerOccupy(x, z, .68, player.root.position.y, collisionHeight)) continue;
         player.root.position.x = x;
         player.root.position.z = z;
         player.root.position.y = surfaceHeightAt(x, z, player.root.position.y + 1.05);
@@ -6420,6 +6725,20 @@
     });
   }
 
+  function capturePlayerPoseBones() {
+    if (!player.sprintBones) return false;
+    if (player.sprintPoseApplied) return true;
+    if (!player.sprintPoseSnapshot) {
+      player.sprintPoseSnapshot = {};
+      Object.keys(player.sprintBones).forEach((key) => { player.sprintPoseSnapshot[key] = new THREE.Quaternion(); });
+    }
+    Object.keys(player.sprintBones).forEach((key) => {
+      if (player.sprintBones[key]) player.sprintPoseSnapshot[key].copy(player.sprintBones[key].quaternion);
+    });
+    player.sprintPoseApplied = true;
+    return true;
+  }
+
   function updateSprintPose(dt) {
     let target = player.superSprinting ? 1 : player.sprinting ? .65 : 0;
     if (player.dodgeTime > 0 || player.hitReaction > 0 || player.attackTime > 0 || !player.grounded || !player.moving || state !== "playing") target = 0;
@@ -6427,12 +6746,7 @@
     const weight = player.sprintPoseWeight;
     if (weight < .001 || !player.sprintBones) return;
     const bones = player.sprintBones;
-    if (!player.sprintPoseSnapshot) {
-      player.sprintPoseSnapshot = {};
-      Object.keys(bones).forEach((key) => { player.sprintPoseSnapshot[key] = new THREE.Quaternion(); });
-    }
-    Object.keys(bones).forEach((key) => { if (bones[key]) player.sprintPoseSnapshot[key].copy(bones[key].quaternion); });
-    player.sprintPoseApplied = true;
+    capturePlayerPoseBones();
     _sprintRight.set(1, 0, 0).applyQuaternion(player.root.quaternion);
     // Sign convention (verified via screenshot probe): positive angle about world-right
     // pitches up-pointing bones BACKWARD, so the forward lean uses negative angles.
@@ -6452,13 +6766,54 @@
     addBoneWorldAxisRotation(bones.lowerArmR, _sprintRight, -.2 * weight);
   }
 
+  function updateAirborneAndSlideModelPose(dt) {
+    if (!player.modelRoot) return;
+    const slideWeight = player.sliding ? 1 : 0;
+    const airborneWeight = !player.grounded ? 1 : 0;
+    const landingWeight = player.grounded && player.landingTime > 0 ? clamp(player.landingTime / .22, 0, 1) : 0;
+    const targetOffset = slideWeight ? -.56 : landingWeight ? -.12 * landingWeight : 0;
+    player.modelRoot.position.y = lerp(player.modelRoot.position.y, targetOffset, 1 - Math.pow(.0005, dt));
+    if (!player.sprintBones || (!slideWeight && !airborneWeight && !landingWeight)) return;
+    capturePlayerPoseBones();
+    const bones = player.sprintBones;
+    _sprintRight.set(1, 0, 0).applyQuaternion(player.root.quaternion);
+    if (slideWeight) {
+      addBoneWorldAxisRotation(bones.torso, _sprintRight, -.62);
+      addBoneWorldAxisRotation(bones.abdomen, _sprintRight, -.24);
+      addBoneWorldAxisRotation(bones.hips, _sprintRight, .32);
+      addBoneWorldAxisRotation(bones.upperLegL, _sprintRight, 1.08);
+      addBoneWorldAxisRotation(bones.upperLegR, _sprintRight, .72);
+      addBoneWorldAxisRotation(bones.lowerLegL, _sprintRight, -1.28);
+      addBoneWorldAxisRotation(bones.lowerLegR, _sprintRight, -.94);
+      addBoneWorldAxisRotation(bones.upperArmL, _sprintRight, -.64);
+      addBoneWorldAxisRotation(bones.upperArmR, _sprintRight, -.48);
+    } else if (airborneWeight) {
+      const rising = player.airbornePhase === "jump" || player.airbornePhase === "rise";
+      const falling = player.airbornePhase === "fall";
+      addBoneWorldAxisRotation(bones.torso, _sprintRight, rising ? -.16 : falling ? .12 : -.02);
+      addBoneWorldAxisRotation(bones.upperLegL, _sprintRight, rising ? -.58 : .42);
+      addBoneWorldAxisRotation(bones.upperLegR, _sprintRight, rising ? .76 : -.28);
+      addBoneWorldAxisRotation(bones.lowerLegL, _sprintRight, rising ? .72 : -.52);
+      addBoneWorldAxisRotation(bones.lowerLegR, _sprintRight, rising ? -.42 : .66);
+      addBoneWorldAxisRotation(bones.upperArmL, _sprintRight, -.38);
+      addBoneWorldAxisRotation(bones.upperArmR, _sprintRight, -.22);
+    } else if (landingWeight) {
+      addBoneWorldAxisRotation(bones.hips, _sprintRight, .16 * landingWeight);
+      addBoneWorldAxisRotation(bones.upperLegL, _sprintRight, .34 * landingWeight);
+      addBoneWorldAxisRotation(bones.upperLegR, _sprintRight, .34 * landingWeight);
+      addBoneWorldAxisRotation(bones.lowerLegL, _sprintRight, -.48 * landingWeight);
+      addBoneWorldAxisRotation(bones.lowerLegR, _sprintRight, -.48 * landingWeight);
+    }
+  }
+
   function animatePlayer(dt, moving) {
-    const stride = moving ? Math.sin(player.walkCycle) : 0;
+    const groundLocomotion = moving && player.grounded && !player.sliding;
+    const stride = groundLocomotion ? Math.sin(player.walkCycle) : 0;
     const sprint = player.sprinting ? 1 : 0;
     const superSprint = player.superSprinting ? 1 : 0;
     const strideSize = superSprint ? 1.24 : sprint ? 1.02 : .58;
     const settle = Math.min(1, dt * 13);
-    const verticalPulse = moving ? Math.abs(Math.sin(player.walkCycle * 2)) : 0;
+    const verticalPulse = groundLocomotion ? Math.abs(Math.sin(player.walkCycle * 2)) : 0;
     player.leftLeg.rotation.x = lerp(player.leftLeg.rotation.x, stride * strideSize, settle);
     player.rightLeg.rotation.x = lerp(player.rightLeg.rotation.x, -stride * strideSize, settle);
     player.leftLeg.rotation.z = lerp(player.leftLeg.rotation.z, sprint ? -.07 : 0, settle);
@@ -6467,7 +6822,12 @@
     player.body.rotation.x = lerp(player.body.rotation.x, superSprint ? -.25 : sprint ? -.16 : 0, settle);
     player.body.rotation.z = lerp(player.body.rotation.z, moving ? -stride * .035 : 0, settle);
     player.body.rotation.y = lerp(player.body.rotation.y, 0, settle);
-    if (!player.grounded) {
+    if (player.sliding) {
+      player.leftLeg.rotation.x = lerp(player.leftLeg.rotation.x, .96, settle);
+      player.rightLeg.rotation.x = lerp(player.rightLeg.rotation.x, .64, settle);
+      player.leftArm.rotation.z = lerp(player.leftArm.rotation.z, -.28, settle);
+      player.body.rotation.x = lerp(player.body.rotation.x, -.52, settle);
+    } else if (!player.grounded) {
       const rising = player.velocityY > 0;
       player.leftLeg.rotation.x = lerp(player.leftLeg.rotation.x, rising ? -.48 : .32, settle * 1.4);
       player.rightLeg.rotation.x = lerp(player.rightLeg.rotation.x, rising ? .68 : -.22, settle * 1.4);
@@ -6514,9 +6874,9 @@
       player.body.rotation.z += Math.sin(impact * Math.PI) * .18;
       player.leftArm.rotation.x -= .45 * impact;
     }
-    player.body.position.y = 1.62 + verticalPulse * (superSprint ? .13 : sprint ? .09 : .045) - (!player.grounded ? .05 : 0);
+    player.body.position.y = lerp(player.body.position.y, player.sliding ? 1.03 : 1.62 + verticalPulse * (superSprint ? .13 : sprint ? .09 : .045) - (!player.grounded ? .05 : 0), settle);
     const capePosition = player.cape.geometry.attributes.position;
-    const sway = Math.sin(elapsed * 3.2) * .035 + (moving ? (sprint ? .31 : .12) : 0);
+    const sway = Math.sin(elapsed * 3.2) * .035 + (player.sliding ? .36 : groundLocomotion ? (sprint ? .31 : .12) : 0);
     capePosition.setZ(2, .61 + sway);
     capePosition.setZ(3, .61 + sway);
     capePosition.needsUpdate = true;
@@ -6526,21 +6886,28 @@
       if (player.dodgeTime > 0) modelState = "roll";
       else if (player.hitReaction > 0) modelState = "hit";
       else if (player.attackTime > 0) modelState = player.attackVariant % 2 ? "attack1" : "attack2";
-      else if (!player.grounded) modelState = "run";
-      else if (moving) modelState = player.sprinting ? "run" : "walk";
+      else if (!player.grounded || player.sliding || player.landingTime > 0) modelState = "idle";
+      else if (groundLocomotion) modelState = player.sprinting ? "run" : "walk";
       setPlayerModelAction(modelState);
       if (modelState === "run" && player.modelActions.run) player.modelActions.run.setEffectiveTimeScale(player.superSprinting ? 1.25 : 1.15);
       restoreSprintPoseBones();
       player.modelMixer.update(dt);
       updateSprintPose(dt);
+      updateAirborneAndSlideModelPose(dt);
     }
   }
 
   function jump() {
     if (state !== "playing" || !player.grounded || player.stamina < 10) return;
+    if (player.sliding) {
+      player.airMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
+      finishSlide(true);
+    } else player.airMomentum.set(0, 0, 0);
     player.grounded = false;
     player.velocityY = 15.2 + skillRank("acrobat") * 1.3 + (realm.biome === "moon" ? 1.6 : 0);
     player.jumpTime = 0;
+    player.airbornePhase = "jump";
+    player.landingTime = 0;
     player.stamina -= 10;
     emitPlayerNoise(13, .32, "jump");
     audio.tone(120, 185, .12, "triangle", .014);
@@ -6548,6 +6915,7 @@
 
   function dodge() {
     if (state !== "playing" || !player.grounded || player.dodgeTime > 0 || player.dodgeCooldown > 0 || player.attackTime > .12 || player.stamina < 22) return false;
+    if (player.sliding && !finishSlide(false)) return false;
     let inputX = (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0) + mobileMove.x;
     let inputZ = (keys.has("w") ? 1 : 0) - (keys.has("s") ? 1 : 0) - mobileMove.y;
     if (Math.hypot(inputX, inputZ) < .08) inputZ = 1;
@@ -6577,6 +6945,7 @@
     const weapon = WEAPONS[weaponId];
     const staminaCost = attackStaminaCost(weaponId);
     if (state !== "playing" || player.dodgeTime > 0 || player.attackCooldown > 0 || player.stamina < staminaCost) return;
+    if (player.sliding && !finishSlide(false)) return;
     audio.init();
     const attackSpeed = attackSpeedMultiplier(weaponId);
     player.attackCooldown = weapon.cooldown * attackSpeed;
@@ -7172,6 +7541,23 @@
     }
   }
 
+  function spawnSlideDust() {
+    const direction = player.slideDirection;
+    const right = new THREE.Vector3(-direction.z, 0, direction.x);
+    for (let index = 0; index < 2; index += 1) {
+      const material = new THREE.MeshBasicMaterial({ color: realm.biome === "snowy" ? 0xd9e8eb : realm.biome === "desert" ? 0xd9a86c : 0x9a8b70, transparent: true, opacity: .34, depthWrite: false });
+      const mesh = new THREE.Mesh(new THREE.CircleGeometry(.13 + index * .04, 7), material);
+      const lateral = index ? .48 : -.48;
+      mesh.position.copy(player.root.position)
+        .addScaledVector(direction, .62)
+        .addScaledVector(right, lateral);
+      mesh.position.y += .08;
+      mesh.rotation.x = -Math.PI / 2;
+      scene.add(mesh);
+      effects.push({ mesh, life: .38, maxLife: .38, grow: 3.1, type: "burst", peakOpacity: .34 });
+    }
+  }
+
   function updateEffects(dt) {
     effects.forEach((effect) => {
       effect.life -= dt;
@@ -7237,7 +7623,8 @@
 
   function updateCamera(dt, immediate) {
     if (!player.root) return;
-    const target = player.root.position.clone().add(new THREE.Vector3(0, 1.84, 0));
+    const targetHeight = player.sliding ? 1.08 : player.landingTime > 0 ? 1.68 : 1.84;
+    const target = player.root.position.clone().add(new THREE.Vector3(0, targetHeight, 0));
     if (lockedTarget && !lockedTarget.dead) {
       const lockOffset = lockedTarget.root.position.clone().sub(player.root.position);
       const lockYaw = Math.atan2(-lockOffset.x, -lockOffset.z);
@@ -7430,6 +7817,10 @@
     ui.shout.style.width = player.shout + "%";
     ui.shout.parentElement.setAttribute("aria-valuenow", String(Math.round(player.shout)));
     ui.shoutMeter.classList.toggle("ready", player.shout >= 100);
+    if (ui.mobileSlide) {
+      ui.mobileSlide.classList.toggle("active", player.sliding);
+      ui.mobileSlide.setAttribute("aria-pressed", String(player.sliding));
+    }
     const nearbyTame = nearestTameCandidate(11);
     const nearbyRune = nearbyTame ? null : nearestExperienceRune(11);
     const nearbySoul = (nearbyTame || nearbyRune) ? null : nearestDragonSoul(11);
@@ -7805,6 +8196,7 @@
       const key = event.key.toLowerCase();
       if ([" ","arrowup","arrowdown","arrowleft","arrowright","tab","alt"].includes(key)) event.preventDefault();
       keys.add(key);
+      if (state === "playing" && key === "control" && !event.repeat) player.slideInputPressed = true;
       if (event.code === "Space" && !event.repeat) jump();
       if (key === "q" && !event.repeat) useShout();
       if (key === "f" && !event.repeat) attack();
@@ -7854,6 +8246,7 @@
     ui.playAgain.addEventListener("click", () => startGame(false));
     ui.pauseButton.addEventListener("click", () => pauseGame(true));
     ui.skillsButton.addEventListener("click", openSkillTree);
+    ui.mobileSkills.addEventListener("click", openSkillTree);
     ui.closeSkills.addEventListener("click", closeSkillTree);
     ui.resetProgress.addEventListener("click", resetProgression);
     ui.soundButton.addEventListener("click", () => { audio.setMuted(!audio.muted); ui.soundButton.classList.toggle("muted", audio.muted); ui.soundButton.setAttribute("aria-pressed", String(audio.muted)); });
@@ -7867,6 +8260,16 @@
     ui.mobileWeapon.addEventListener("pointerdown", (event) => { event.preventDefault(); cycleWeapon(); });
     ui.mobileDodge.addEventListener("pointerdown", (event) => { event.preventDefault(); dodge(); });
     ui.mobileLock.addEventListener("pointerdown", (event) => { event.preventDefault(); toggleTargetLock(); });
+    ui.mobileSlide.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      player.mobileSlideHeld = true;
+      player.slideInputPressed = true;
+      if (ui.mobileSlide.setPointerCapture) ui.mobileSlide.setPointerCapture(event.pointerId);
+    });
+    const releaseMobileSlide = () => { player.mobileSlideHeld = false; };
+    ui.mobileSlide.addEventListener("pointerup", releaseMobileSlide);
+    ui.mobileSlide.addEventListener("pointercancel", releaseMobileSlide);
+    ui.mobileSlide.addEventListener("lostpointercapture", releaseMobileSlide);
     ui.weaponRack.querySelectorAll("[data-weapon]").forEach((button) => button.addEventListener("click", () => equipWeapon(button.dataset.weapon)));
     setupJoystick();
     setupTouchLook();
@@ -7933,12 +8336,119 @@
     return { x: projected.x, y: projected.y };
   }
 
+  function findSlideTestSurface(kind) {
+    if (slideTestSurfaceCache[kind]) return Object.assign({}, slideTestSurfaceCache[kind]);
+    let best = null;
+    search: for (let z = -480; z <= 480; z += 24) {
+      for (let x = -480; x <= 480; x += 24) {
+        const y = terrainHeight(x, z);
+        if (y <= biome.waterLevel + 1 || hitsCollider(x, z, .9, y, y + 2.15)) continue;
+        const gradientSample = 1.5;
+        const gradientX = (terrainHeight(x + gradientSample, z) - terrainHeight(x - gradientSample, z)) / (gradientSample * 2);
+        const gradientZ = (terrainHeight(x, z + gradientSample) - terrainHeight(x, z - gradientSample)) / (gradientSample * 2);
+        const steepness = Math.atan(Math.hypot(gradientX, gradientZ)) * 180 / Math.PI;
+        if (kind === "flat" && steepness > 1.6) continue;
+        if (kind !== "flat" && (steepness < 9 || steepness > 34)) continue;
+        const direction = kind === "flat"
+          ? new THREE.Vector3(0, 0, -1)
+          : new THREE.Vector3(-gradientX, 0, -gradientZ).normalize().multiplyScalar(kind === "uphill" ? -1 : 1);
+        const info = terrainDescentInfo(direction, new THREE.Vector3(x, y, z));
+        if (kind === "downhill" && info.angle < 8) continue;
+        if (kind === "uphill" && info.angle > -8) continue;
+        const forwardY = terrainHeight(x + direction.x * 3, z + direction.z * 3);
+        if (forwardY <= biome.waterLevel + .35 || hitsCollider(x + direction.x * 2, z + direction.z * 2, .9, forwardY, forwardY + 1.2)) continue;
+        const score = kind === "flat" ? steepness : Math.abs(steepness - 15);
+        if (!best || score < best.score) best = { kind, x, y, z, dx: direction.x, dz: direction.z, angle: info.angle, steepness, score };
+        if ((kind === "flat" && score < .35) || (kind !== "flat" && score < 1.1)) break search;
+      }
+    }
+    if (best) slideTestSurfaceCache[kind] = Object.assign({}, best);
+    return best ? Object.assign({}, best) : null;
+  }
+
+  function prepareSlideTestSurface(kind) {
+    const sample = findSlideTestSurface(kind);
+    if (!sample) return null;
+    resetTraversalMotion();
+    player.root.position.set(sample.x, sample.y, sample.z);
+    player.lastSafePosition.copy(player.root.position);
+    player.grounded = true;
+    player.velocityY = 0;
+    player.stamina = maxStamina();
+    player.sprintExhausted = false;
+    player.sprintLatch = false;
+    player.superSprintLatch = false;
+    player.sprinting = false;
+    player.superSprinting = false;
+    cameraYaw = Math.atan2(-sample.dx, -sample.dz);
+    player.root.rotation.y = cameraYaw;
+    updateCamera(1, true);
+    return Object.assign({}, sample);
+  }
+
+  function chestInteractionProbe() {
+    if (!player.root) return { available: false };
+    let sample = null;
+    chests.some((chest) => {
+      const stance = chestInteractionStance(chest);
+      const access = chestInteractionDetails(chest, stance.foot, stance.facing, true);
+      if (!access.allowed) return false;
+      sample = { chest, stance, access };
+      return true;
+    });
+    if (!sample) return {
+      available: false,
+      chests: chests.length,
+      reasons: chests.slice(0, 5).map((chest) => {
+        const stance = chestInteractionStance(chest);
+        return chestInteractionDetails(chest, stance.foot, stance.facing, true).reason;
+      })
+    };
+    const valid = chestInteractionDetails(sample.chest, sample.stance.foot, sample.stance.facing, true);
+    const farFoot = sample.stance.foot.clone().addScaledVector(sample.stance.front, 4.2);
+    const farFacing = valid.latch.clone().sub(farFoot).setY(0).normalize();
+    const far = chestInteractionDetails(sample.chest, farFoot, farFacing, true);
+    const belowFoot = sample.stance.foot.clone();
+    belowFoot.y -= 3;
+    const belowFacing = valid.latch.clone().sub(belowFoot).setY(0).normalize();
+    const below = chestInteractionDetails(sample.chest, belowFoot, belowFacing, true);
+    const behindFoot = sample.chest.root.position.clone().addScaledVector(sample.stance.front, -2.15);
+    behindFoot.y = surfaceHeightAt(behindFoot.x, behindFoot.z, sample.chest.root.position.y + .95);
+    const behindFacing = valid.latch.clone().sub(behindFoot).setY(0).normalize();
+    const behind = chestInteractionDetails(sample.chest, behindFoot, behindFacing, true);
+    const facingAway = chestInteractionDetails(sample.chest, sample.stance.foot, sample.stance.facing.clone().negate(), true);
+    const airborne = chestInteractionDetails(sample.chest, sample.stance.foot, sample.stance.facing, false);
+    const midpoint = valid.origin.clone().lerp(valid.latch, .5);
+    const blocker = addCollider(midpoint.x, midpoint.z, .38, .38, 0, midpoint.y - .9, midpoint.y + .9);
+    const throughWall = chestInteractionDetails(sample.chest, sample.stance.foot, sample.stance.facing, true);
+    const blockerIndex = colliders.indexOf(blocker);
+    if (blockerIndex >= 0) colliders.splice(blockerIndex, 1);
+    return {
+      available: true,
+      id: sample.chest.id,
+      valid: valid.allowed,
+      validDistance: valid.distance,
+      farRejected: !far.allowed && far.distance > CHEST_INTERACTION_RANGE,
+      belowRejected: !below.allowed && below.verticalDifference > CHEST_LEVEL_TOLERANCE,
+      behindRejected: !behind.allowed && behind.approachDot < CHEST_FRONT_DOT,
+      facingAwayRejected: !facingAway.allowed && facingAway.facingDot < CHEST_FACING_DOT,
+      airborneRejected: !airborne.allowed && airborne.reason === "not-grounded",
+      wallRejected: !throughWall.allowed && throughWall.colliderBlocked,
+      maximumRange: CHEST_INTERACTION_RANGE,
+      maximumVerticalDifference: CHEST_LEVEL_TOLERANCE,
+      minimumFrontDot: CHEST_FRONT_DOT,
+      minimumFacingDot: CHEST_FACING_DOT
+    };
+  }
+
   window.ashenholdGame = {
     snapshot: () => ({
       state,
       position: player.root ? { x: player.root.position.x, y: player.root.position.y, z: player.root.position.z } : null,
       health: player.health, stamina: player.stamina, shout: player.shout, kills: player.kills,
       moving: player.moving, sprinting: player.sprinting, superSprinting: player.superSprinting,
+      grounded: player.grounded, airbornePhase: player.airbornePhase, velocityY: player.velocityY,
+      sliding: player.sliding, slideSpeed: player.slideSpeed, slideSlopeDegrees: player.slideSlopeDegrees,
       maxHealth: maxHealth(), maxStamina: maxStamina(), level: player.level, xp: player.xp,
       skillPoints: player.skillPoints, prestige: player.prestige, realmDepth: player.realmDepth, activeWeapon: player.activeWeapon,
       runLevel: player.runLevel, runXp: player.runXp, runSkillPoints: player.runSkillPoints,
@@ -8010,6 +8520,8 @@
       combat: {
         dodging: player.dodgeTime > 0, dodgeElapsed: player.dodgeElapsed, locked: lockedTarget ? lockedTarget.name : null,
         sprintPose: player.sprintPoseWeight || 0, sprintLatch: player.sprintLatch, superSprintLatch: player.superSprintLatch, sprintExhausted: player.sprintExhausted, secondWindReady: player.secondWindReady,
+        modelAnimation: player.modelState, airbornePhase: player.airbornePhase, landingTime: player.landingTime,
+        sliding: player.sliding, slideSpeed: player.slideSpeed, slideSlopeDegrees: player.slideSlopeDegrees, slideExitBlocked: player.slideExitBlocked, slideCollision: player.slideCollision,
         hitStopRemaining, threat: ambientDifficulty(), lightningArcs: effects.filter((effect) => effect.type === "lightning").length
       },
       quality: { scale: qualityScale, pixelRatio: renderer ? renderer.getPixelRatio() : 1 },
@@ -8121,7 +8633,47 @@
       objectiveInfo: () => currentObjective(),
       collectNearestRune: () => collectExperienceRune(nearestExperienceRune(9999)),
       soulPositions: () => dragonSouls.filter((soul) => !soul.claimed).map((soul) => ({ x: soul.root.position.x, z: soul.root.position.z, xp: soul.xp, grounded: soul.grounded })),
-      chestPositions: () => chests.filter((chest) => !chest.opened).map((chest) => ({ x: chest.root.position.x, z: chest.root.position.z, xp: chest.xp, powerUp: Object.assign({}, chest.powerUp) })),
+      chestPositions: () => chests.filter((chest) => !chest.opened).map((chest) => {
+        const stance = chestInteractionStance(chest);
+        const latch = stance.latch;
+        const access = chestInteractionDetails(chest);
+        return {
+          id: chest.id,
+          x: chest.root.position.x,
+          y: chest.root.position.y,
+          z: chest.root.position.z,
+          interaction: { x: stance.foot.x, y: stance.foot.y, z: stance.foot.z },
+          latch: { x: latch.x, y: latch.y, z: latch.z },
+          front: { x: stance.front.x, z: stance.front.z },
+          canInteract: access.allowed,
+          reason: access.reason,
+          xp: chest.xp,
+          powerUp: Object.assign({}, chest.powerUp)
+        };
+      }),
+      chestInteractionProbe,
+      positionAtChest: (id) => {
+        const candidates = id ? chests.filter((chest) => chest.id === id) : chests;
+        for (let index = 0; index < candidates.length; index += 1) {
+          const chest = candidates[index];
+          const stance = chestInteractionStance(chest);
+          if (!chestInteractionDetails(chest, stance.foot, stance.facing, true).allowed) continue;
+          resetTraversalMotion();
+          player.root.position.copy(stance.foot);
+          player.lastSafePosition.copy(stance.foot);
+          player.grounded = true;
+          player.velocityY = 0;
+          cameraYaw = Math.atan2(-stance.facing.x, -stance.facing.z);
+          player.root.rotation.y = cameraYaw;
+          updateCamera(1, true);
+          return chest.id;
+        }
+        return null;
+      },
+      openChest: (id) => {
+        const chest = id ? chests.find((item) => item.id === id) : nearestChest();
+        return openChest(chest);
+      },
       aimPoint: () => {
         const aim = computeCrosshairAim(160);
         const direction = new THREE.Vector3(-Math.sin(cameraYaw) * Math.cos(cameraPitch), -Math.sin(cameraPitch), -Math.cos(cameraYaw) * Math.cos(cameraPitch)).normalize();
@@ -8183,6 +8735,29 @@
         for (let i = 0; i < iterations; i += 1) update(.01);
       },
       zoom: (delta) => { cameraDistance = clamp(cameraDistance + delta, 5.1, 13.5); updateCamera(1, true); },
+      slideSurfaceProbe: () => ({ downhill: findSlideTestSurface("downhill"), flat: findSlideTestSurface("flat"), uphill: findSlideTestSurface("uphill") }),
+      prepareSlideSurface: (kind) => prepareSlideTestSurface(kind || "downhill"),
+      startPreparedSlide: (kind) => {
+        const sample = prepareSlideTestSurface(kind || "downhill");
+        if (!sample) return false;
+        return beginSlide(new THREE.Vector3(sample.dx, 0, sample.dz), terrainDescentInfo(new THREE.Vector3(sample.dx, 0, sample.dz)));
+      },
+      slideCollisionProbe: () => {
+        const sample = prepareSlideTestSurface("downhill");
+        if (!sample) return { available: false };
+        const direction = new THREE.Vector3(sample.dx, 0, sample.dz);
+        beginSlide(direction, terrainDescentInfo(direction));
+        const start = player.root.position.clone();
+        const center = start.clone().addScaledVector(direction, 2.1);
+        const blocker = addCollider(center.x, center.z, 4, .3, Math.atan2(direction.x, direction.z), start.y - .5, start.y + 2.4);
+        for (let index = 0; index < 80 && player.sliding; index += 1) updateSlide(.01, direction, true);
+        const distance = start.distanceTo(player.root.position);
+        const collision = player.slideCollision;
+        const blockerIndex = colliders.indexOf(blocker);
+        if (blockerIndex >= 0) colliders.splice(blockerIndex, 1);
+        finishSlide(true);
+        return { available: true, collision, distance, blocked: distance < 1.6 };
+      },
       openSkills: openSkillTree,
       closeSkills: closeSkillTree,
       resetProgression: clearProgressionData,

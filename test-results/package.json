@@ -9,6 +9,7 @@
     "audit": "node production-audit.cjs",
     "a11y": "node accessibility-audit.cjs",
     "payload": "node payload-audit.cjs",
+    "motion": "node motion-regression.cjs",
     "live": "node live-deployment-audit.cjs"
   },
   "devDependencies": {
