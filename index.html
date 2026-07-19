@@ -73,8 +73,10 @@
       </section>
 
       <nav class="hud-actions" aria-label="Game options">
-        <button id="skillsButton" class="skills-button" type="button" aria-label="Open skill tree" title="Skill Tree (K)">
+        <button id="skillsButton" class="skills-button" type="button" aria-label="Open skill tree" aria-keyshortcuts="K" title="Skill Tree (K)">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M12 7.2v4.2M12 11.4 6.8 16M12 11.4l5.2 4.6"/></svg>
+          <span>SKILLS</span>
+          <kbd aria-hidden="true">K</kbd>
           <i id="skillPointBadge">0</i>
         </button>
         <button id="soundButton" type="button" aria-label="Toggle sound" aria-pressed="false" title="Sound">
@@ -127,7 +129,7 @@
     </div>
 
     <aside class="controls-card">
-      <p><kbd>WASD</kbd> Move</p><p><kbd>SHIFT</kbd> Sprint</p><p><kbd>CTRL</kbd> Super Sprint</p><p><kbd>SPACE</kbd> High Jump</p>
+      <p><kbd>WASD</kbd> Move</p><p><kbd>SHIFT</kbd> Sprint</p><p><kbd>CTRL</kbd> Downhill Slide / Super Sprint</p><p><kbd>SPACE</kbd> High Jump</p>
       <p><kbd>CLICK</kbd> Attack</p><p><kbd>ALT / RMB</kbd> Dodge</p><p><kbd>TAB / MMB</kbd> Lock</p><p><kbd>1—4</kbd> Weapons</p><p><kbd>WHEEL</kbd> Camera</p>
       <p><kbd>Q</kbd> Shout</p><p><kbd>E</kbd> Interact / Tame</p><p><kbd>C</kbd> Shoulder</p><p><kbd>K</kbd> Skills</p><p><kbd>ESC</kbd> Pause</p>
     </aside>
@@ -141,6 +143,8 @@
       <button id="mobileWeapon" class="mobile-button weapon-button" type="button"><span>1</span><b>WEAPON</b></button>
       <button id="mobileDodge" class="mobile-button dodge-button" type="button"><span>↝</span><b>DODGE</b></button>
       <button id="mobileLock" class="mobile-button lock-button" type="button"><span>◎</span><b>LOCK</b></button>
+      <button id="mobileSlide" class="mobile-button slide-button" type="button" aria-label="Slide downhill or super sprint" aria-pressed="false"><span>▼</span><b>SLIDE</b></button>
+      <button id="mobileSkills" class="mobile-skills-button" type="button" aria-label="Open skill tree" aria-keyshortcuts="K"><span>✦</span><b>SKILLS</b><i id="mobileSkillPointBadge">0</i></button>
     </section>
 
     <section id="loadingScreen" class="screen loading-screen active">

@@ -117,8 +117,8 @@ async function boot(context, biome, seed, diagnostics, suffix) {
     test.purchaseSkill("run_damage");
     test.purchaseSkill("run_damage");
     const chest = test.chestPositions()[0];
-    test.teleport(chest.x, chest.z);
-    for (let attempt = 0; attempt < 3 && window.ashenholdGame.snapshot().chestsOpened === 0; attempt += 1) test.interact();
+    test.positionAtChest(chest.id);
+    test.openChest(chest.id);
     test.teleport(42, 118);
     test.collectNearestRune();
     test.saveRun();

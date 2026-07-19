@@ -41,7 +41,7 @@ The start screen is a new responsive command deck with an animated realm sigil, 
 - `WASD` / arrows: move
 - Mouse / touch drag: non-inverted 360-degree camera
 - `Shift`: sprint
-- `Control`: super sprint
+- `Control`: slide on a downhill grade; otherwise super sprint
 - `Space`: high jump
 - Left click / `F`: attack
 - `Alt` / right click: dodge roll with invincibility frames
