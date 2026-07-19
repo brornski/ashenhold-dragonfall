@@ -1,42 +1,40 @@
 # Ashenhold test harness
 
-Dev-only Playwright suites. Nothing here ships: `test-results/` is excluded from deployment via `.vercelignore`.
+Dev-only Playwright suites. The GitHub Pages workflow publishes a runtime-only artifact, so nothing in this directory ships with the game.
 
 ## Setup
 
-```sh
-cd test-results
+```powershell
+Set-Location test-results
 npm install
 npx playwright install chromium
 ```
 
 ## Run
 
-Serve the game first, from the repo root:
+Serve the repository root first:
 
-```sh
-cd C:\Users\baile\dragon-browser
+```powershell
 python -m http.server 4173 --bind 127.0.0.1
 ```
 
-Then, from `test-results/`:
+Then run from `test-results/`:
 
-- `npm run smoke` — fast deterministic gameplay regression (`?test&biome=jungle&seed=424242`)
-- `npm run audit` — full production audit (12-realm matrix)
-- `npm run a11y` — accessibility audit (axe-core)
-- `npm run payload` — startup payload budget (< 18 MB)
-- `npm run live` — post-deployment checks against the live Vercel URL (run only after `vercel --prod`)
+- `npm run smoke` - deterministic gameplay regression, including strongholds, relic power, taming, collision, sprint, and victory
+- `npm run audit` - multi-biome/seed production, progression, combat, save, scaling, and mobile audit
+- `npm run a11y` - axe-core scan of title, gameplay, skills, and mobile states
+- `npm run payload` - boot timing, transfer budget, renderer, diagnostics, and same-origin gate
+- `npm run live` - post-deployment HTTP/artifact audit against GitHub Pages
 
-`ASHENHOLD_BASE` overrides the target origin for the local suites.
+`ASHENHOLD_BASE` overrides the target. Reports and screenshots are written beside the runners and ignored by Git. Any false top-level check blocks release.
 
-Reports and screenshots are written next to the runners (`smoke-output.json`, `production-audit.json`, etc.). Any false top-level check blocks release.
+## Existing workstation cache
 
-## Legacy invocation
-
-Historically these ran with Playwright resolved from a machine-local cache:
+The original workstation can run without installing locally:
 
 ```powershell
-$env:NODE_PATH='C:\Users\baile\.cache\ashenhold-e2e\node_modules'; node test-results\e2e-smoke.cjs
+$env:NODE_PATH='C:\Users\baile\.cache\ashenhold-e2e\node_modules'
+node e2e-smoke.cjs
 ```
 
-That still works on machines with the cache, but `npm install` in this folder is the reproducible path.
+`npm install` remains the reproducible setup for other machines.

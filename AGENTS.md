@@ -5,59 +5,85 @@ This file applies to the entire repository. Read `GAME-DEVELOPER-GUIDE.md` and `
 ## Product contract
 
 - Product: Ashenhold: Dragonfall, a third-person browser action roguelite.
-- Stable production URL: https://dragon-browser-nine.vercel.app
-- Runtime: dependency-free static HTML/CSS/JavaScript, Three.js r128 and loaders vendored under `assets/vendor/`.
-- Main source: `app.js`. There is no build step or runtime package manifest; the dev-only test harness under `test-results/` carries its own pinned `package.json`.
-- World: 1,800 units; six biome-specific geometry families with per-biome gradient skies, signature prop sets, and stone-tinted architecture; two ascent structures per realm with walkable stairs (no floating slabs); five to seven seeded settlement POIs (hamlets, watchposts, ruin shrines—moon builds graveyards) from vendored CC0 packs; every seed changes terrain features, forts, and encounter RNG.
-- Camera: non-inverted 360-degree over-the-shoulder view; `C` swaps sides.
-- Combat: blade, bow, axe, staff; animation-timed release, dodge/i-frames, lock-on, telegraphs, hit-stop, shake, and knockback.
-- Assault: exactly five waves with targets 4, 6, 8, 10, 12. Initial delay is four seconds and inter-wave delay is eight seconds. Never create wave six.
-- Completion: the boss quest and wave five must both be complete. Runes grant XP only and never start or advance waves.
-- Relic chests: five per realm (three fort courtyard, two summit troves); open with `E` for Warden XP, +25 health, and +20 shout; claimed ids serialize in `world.chests` like runes.
-- Dragons: base HP 150 normal / 520 boss, velocity-lead fireball aiming, boss 3-shot volley; dragon kills spawn transient absorbable soul orbs (never serialized).
-- Progression: eight permanent branches plus three per-run branches, 60 total nodes, ranked prerequisites, exclusions, Warden prestige, realm depth, and independent weapon mastery.
-- Persistence: permanent key `ashenhold-progression-v3` (payload version 5), active-run key `ashenhold-active-run-v1` (payload version 1), realm session key `ashenhold-realm-v1`; `WORLD_LAYOUT_VERSION = 5`, stale active runs rejected, never wiped.
-- POI camp guards are leashed to their camp (radius 24), disengage and walk home beyond it, and never count toward assault-wave targets.
-- Settlement packs (KayKit Medieval Hexagon, KayKit Dungeon, Kenney Fantasy Town, Kenney Nature, Kenney Graveyard) are vendored locally under CC0 with license copies; `ATTRIBUTIONS.md` covers them per the attribution rule.
-- The super-sprint anime pose is a post-mixer additive bone overlay (self-resetting each frame, gated off during dodge/hit/attack/airborne); future clip additions must not fight it.
-- Realm rotation: victory and death both advance a deterministic ladder—jungle → shore → desert → snowy → mountains → moon, looping—with a fresh seed each time; deliberately not level-gated.
+- Stable play URL: https://brornski.github.io/ashenhold-dragonfall/
+- Source: https://github.com/brornski/ashenhold-dragonfall
+- Runtime: dependency-free static HTML/CSS/JavaScript with Three.js r128 and loaders vendored under `assets/vendor/`.
+- Main source: `app.js`. There is no runtime package manifest or build step; the dev-only harness is under `test-results/`.
+- World: 1,800 units, six biome geometry families, local PBR materials, two walkable ascent structures, three forts, a keep, and 8-11 seeded settlement POIs per realm.
+- POIs: hamlets, watchposts, shrines/graveyards, raider camps, and ruin clusters assembled from vendored CC0 models. Location guards and stronghold garrisons leash to their home areas.
+- Combat: blade, bow, axe, staff; animation-timed release, dodge/i-frames, target lock, telegraphs, hit-stop, shake, knockback, dragons, and tameable creatures.
+- Conquest: no wave mode remains. Every generated location is a stronghold with a level-scaled garrison. Forts/keep can gain golems at higher levels. Clearing grants a kind-specific bonus.
+- Completion: `questStage === 3` and every stronghold cleared. Runes and chests never advance conquest state.
+- Relic chests: every chest grants XP, healing, shout charge, and a deterministic permanent 1-3% bonus to damage, health, regeneration, sprint, stamina, or critical damage.
+- Taming: slowed/crit-weakened wargs and biome light creatures can be bonded with `E`; maximum two companions. Bonded creatures follow, fight, add traversal speed, persist in an active run, and count as handled garrison members.
+- Progression: nine permanent branches plus three per-run branches, 66 nodes total. `THE STRIDE` is the sprint branch and must retain a 100%+ maximum super-sprint improvement.
+- Sprint: latched hysteresis and an exhaustion lock prevent stamina-threshold flicker. The additive sprint pose, FOV, streaks, and trail effects consume the stable sprint flags.
+- Persistence: permanent key `ashenhold-progression-v3` (payload 6), active-run key `ashenhold-active-run-v1` (payload 1), realm session key `ashenhold-realm-v1`, `WORLD_LAYOUT_VERSION = 6`.
+- Realm rotation: jungle -> shore -> desert -> snowy -> mountains -> moon -> loop, with a fresh seed after victory or death.
 
 ## Non-negotiable implementation rules
 
 1. Preserve deterministic query overrides: `?test&biome=jungle&seed=424242`.
-2. Keep mutating test helpers behind `?test`. Normal production exposes only `window.ashenholdGame.snapshot()`.
+2. Keep mutating helpers behind `?test`; normal production exposes only read-only `window.ashenholdGame.snapshot()` and `window.ashenholdGame.modelCatalog()`.
 3. Keep test saves isolated unless the URL also contains `test-save`.
-4. If world generation changes incompatibly, bump `WORLD_LAYOUT_VERSION` so unsafe active runs are rejected.
-5. If save fields change, migrate old boolean skills and legacy single-weapon saves; never silently wipe progress.
-6. Imported animated models must be cloned safely, have their mixers advanced, and be uncached/disposed when enemies die or realms end.
-7. Every collider must be height-bounded and orientation-aware. Do not reintroduce infinite vertical blocking beneath platforms.
-8. Keep PBR color, OpenGL normal, and roughness maps local. Keep external runtime requests at zero.
-9. Preserve mobile fallbacks, adaptive pixel ratio, reduced-motion behavior, keyboard focus, and compact 844×390 landscape support.
-10. Add every third-party asset to `ATTRIBUTIONS.md` and retain its local license notice.
-11. Do not ship local test tools, handoff documents, workstation paths, design-reference art, or Vercel metadata. `.vercelignore` defines these exclusions.
-12. Do not claim AAA fidelity or production readiness from visual inspection alone; run the release gates below.
+4. Bump `WORLD_LAYOUT_VERSION` when generated geometry, POI placement, or collider topology changes incompatibly. Reject stale active runs; never wipe permanent progress.
+5. Migrate old boolean skill maps, legacy single-weapon mastery, and progression payloads without silently dropping user data. Refuse unknown future payload versions.
+6. Imported animated actors must be cloned through `SkeletonUtils`, advanced by a mixer, and uncached/disposed when removed.
+7. Colliders must be height-bounded and orientation-aware. Preserve movement substeps, wall sliding, step clearance, depenetration, and last-safe recovery.
+8. Keep all runtime models, textures, scripts, fonts, and PBR maps same-origin. External runtime requests are a release blocker.
+9. Preserve adaptive pixel ratio, far-garrison visibility culling, reduced-motion behavior, keyboard focus, touch controls, and 844x390 landscape support.
+10. Attribute every third-party asset in `ATTRIBUTIONS.md` and retain its local license notice.
+11. GitHub Pages must deploy a runtime-only artifact. Do not publish tests, handoff documents, tools, workstation paths, credentials, or reference art.
+12. A displayed skill node must have a gameplay effect and save contract. A location that appears in the stronghold total must be clearable without a soft lock.
+13. Do not claim a release from visual inspection alone. Run every gate below.
 
 ## Required edit and release loop
 
-From `C:\Users\baile\dragon-browser`:
+From the repository root:
 
-1. Inspect existing changes before editing and preserve unrelated user work.
-2. Edit text files with `apply_patch`.
-3. Run `node --check app.js` and syntax-check both test runners.
-4. Serve the folder on port 4173 over HTTP.
-5. Run the smoke suite:
+1. Inspect `git status` and preserve unrelated user changes.
+2. Edit source text with `apply_patch`.
+3. Run:
 
-   `$env:NODE_PATH='C:\Users\baile\.cache\ashenhold-e2e\node_modules'; node test-results\e2e-smoke.cjs`
+   ```powershell
+   node --check app.js
+   node --check test-results/e2e-smoke.cjs
+   node --check test-results/production-audit.cjs
+   node --check test-results/live-deployment-audit.cjs
+   ```
 
-6. Run the full release audit:
+4. Serve the repository over HTTP. Port 4173 is conventional; set `ASHENHOLD_BASE` if another port is used.
+5. Run the deterministic smoke, production audit, accessibility audit, and payload audit.
+6. Inspect every top-level check and generated screenshot. Any false gate, serious/critical accessibility violation, external request, or startup transfer above 18 MB blocks release.
+7. Merge to `main` only after the local gates pass. `.github/workflows/pages.yml` publishes the runtime-only artifact.
+8. Configure the Pages source as GitHub Actions if it is not already configured, wait for the deployment workflow, then run the live HTTP audit and browser smoke against the stable Pages URL.
 
-   `$env:NODE_PATH='C:\Users\baile\.cache\ashenhold-e2e\node_modules'; node test-results\production-audit.cjs`
+The reproducible harness is:
 
-7. Inspect `test-results/smoke-output.json`, `test-results/production-audit.json`, and screenshots. Any false top-level check blocks release.
-8. Run `test-results\accessibility-audit.cjs` and `test-results\payload-audit.cjs` with the same `NODE_PATH`; serious accessibility violations, third-party runtime requests, or a startup payload above budget block release.
-9. Deploy with `vercel --prod --yes` only after local gates pass.
-10. Run `node test-results\live-deployment-audit.cjs` against the immutable deployment and stable alias, then run the browser smoke against the stable URL. Verify boot, security headers, model/material requests, console diagnostics, and 404s for excluded files.
+```powershell
+Set-Location test-results
+npm install
+npx playwright install chromium
+npm run smoke
+npm run audit
+npm run a11y
+npm run payload
+```
 
-The smoke/audit suites can also run without `NODE_PATH`: `cd test-results && npm install` once, then `npm run smoke`, `npm run audit`, `npm run a11y`, `npm run payload`, or `npm run live`. If port 4173 is occupied, serve the folder on another port and set `ASHENHOLD_BASE=http://127.0.0.1:<port>/` for the suites.
+On the original workstation, the existing dependency cache can also be used:
 
-The full architecture, save envelope, balance surfaces, asset matrix, debug hooks, audit coverage, deployment commands, and limitations are in `GAME-DEVELOPER-GUIDE.md`.
+```powershell
+$env:NODE_PATH='C:\Users\baile\.cache\ashenhold-e2e\node_modules'
+node test-results\e2e-smoke.cjs
+```
+
+## Change-sensitive checks
+
+- Strongholds: check a low-level realm, a high-level respawn, per-kind rewards, non-lethal tame handling, full clear, and boss-plus-clear victory.
+- Collision: verify routes, stairs, door gaps, high-speed substeps, axis sliding, embedded-player recovery, water rejection, and zero spawn failures across multiple seeds.
+- Sprint: verify enter/exit thresholds, zero-stamina lockout, animation/FOV stability, capstone speed, launch shockwave, and trail damage.
+- Saves: verify progression migration, permanent relic restoration, stronghold cleared IDs, handled garrison members, companions, and next-realm cleanup.
+- Assets: verify active biome actors animate, dense model instances render, catalog paths exist, and all requests remain same-origin.
+- Deployment: verify layout marker 6, manifest scope under the repository path, core GLTF/PBR assets, runtime-only exclusions, and a clean live browser boot.
+
+The full architecture, balance tables, save envelopes, debug hooks, audit coverage, and honest limitations are in `GAME-DEVELOPER-GUIDE.md`.
