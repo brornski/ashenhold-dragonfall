@@ -216,7 +216,7 @@
   let chests = [];
   let dragonSouls = [];
   let runesCollected = 0;
-  let enemyDirector = freshEnemyDirector();
+  let strongholds = [];
   let outpostsDiscovered = 0;
   let runeHinted = false;
   const visualAssets = {};
@@ -227,22 +227,15 @@
   const tempQ = new THREE.Quaternion();
   const raycaster = new THREE.Raycaster();
 
-  function freshEnemyDirector() {
-    return {
-      phase: "intermission", wave: 0, maxWaves: 5,
-      timer: 4, intermissionDuration: 4, target: 0, spawned: 0, defeated: 0,
-      spawnTimer: 0, peakAlive: 0, completed: false, threat: 1,
-      rngState: ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0, spawnFailures: 0
-    };
-  }
+  const encounterRng = { state: ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0 };
 
   function encounterRandom() {
-    let value = enemyDirector.rngState >>> 0;
+    let value = encounterRng.state >>> 0;
     value += 0x6d2b79f5;
     let mixed = value;
     mixed = Math.imul(mixed ^ mixed >>> 15, mixed | 1);
     mixed ^= mixed + Math.imul(mixed ^ mixed >>> 7, mixed | 61);
-    enemyDirector.rngState = value >>> 0;
+    encounterRng.state = value >>> 0;
     return ((mixed ^ mixed >>> 14) >>> 0) / 4294967296;
   }
 
@@ -364,12 +357,12 @@
     return { version: WORLD_LAYOUT_VERSION, forts, routes, roadPhase: (seeded(salt + 990) - .5) * Math.PI, salt };
   }
   const POI_NAMES = {
-    snowy: { hamlet: ["RIMEFALL HAMLET", "FROSTHEARTH"], watchpost: ["PALEWATCH POST", "GLACIER LOOKOUT"], shrine: ["SHRINE OF THE HOAR", "FROSTBOUND SHRINE"] },
-    jungle: { hamlet: ["MOSSGATE HAMLET", "VINEBOROUGH CAMP"], watchpost: ["CANOPY WATCH", "THORNLOOK POST"], shrine: ["SHRINE OF VINES", "OVERGROWN ALTAR"] },
-    desert: { hamlet: ["EMBERWELL HAMLET", "DUNESIDE CAMP"], watchpost: ["SUNSCAR WATCH", "CINDER LOOKOUT"], shrine: ["SHRINE OF EMBERS", "GLASS ALTAR"] },
-    shore: { hamlet: ["TIDEHOLLOW HAMLET", "SALTMARSH CAMP"], watchpost: ["STORMSIGN WATCH", "REEF LOOKOUT"], shrine: ["SHRINE OF TIDES", "DROWNED ALTAR"] },
-    mountains: { hamlet: ["CRAGFALL HAMLET", "HIGHHEARTH"], watchpost: ["EAGLE LOOKOUT", "THUNDER WATCH"], shrine: ["SHRINE OF PEAKS", "SKY ALTAR"] },
-    moon: { hamlet: ["UMBRA HAMLET", "DUSKFALL CAMP"], watchpost: ["ECLIPSE WATCH POST", "VOIDGAZE LOOKOUT"], shrine: ["GRAVEYARD OF ECHOES", "MOONLIT CRYPTS"] }
+    snowy: { hamlet: ["RIMEFALL HAMLET", "FROSTHEARTH"], watchpost: ["PALEWATCH POST", "GLACIER LOOKOUT"], shrine: ["SHRINE OF THE HOAR", "FROSTBOUND SHRINE"], camp: ["WOLFSDRIFT CAMP", "RAZORICE CAMP"], ruin: ["RUINS OF ICEMERE", "SHATTERED VIGIL"] },
+    jungle: { hamlet: ["MOSSGATE HAMLET", "VINEBOROUGH CAMP"], watchpost: ["CANOPY WATCH", "THORNLOOK POST"], shrine: ["SHRINE OF VINES", "OVERGROWN ALTAR"], camp: ["FERNTOOTH CAMP", "THORNRAIDER CAMP"], ruin: ["SUNKEN RUINS", "BROKEN ZIGGURAT"] },
+    desert: { hamlet: ["EMBERWELL HAMLET", "DUNESIDE CAMP"], watchpost: ["SUNSCAR WATCH", "CINDER LOOKOUT"], shrine: ["SHRINE OF EMBERS", "GLASS ALTAR"], camp: ["SCORPION CAMP", "DUNEREAVER CAMP"], ruin: ["RUINS OF EMBERFALL", "GLASSFALL RUINS"] },
+    shore: { hamlet: ["TIDEHOLLOW HAMLET", "SALTMARSH CAMP"], watchpost: ["STORMSIGN WATCH", "REEF LOOKOUT"], shrine: ["SHRINE OF TIDES", "DROWNED ALTAR"], camp: ["TIDEWOLF CAMP", "WRECKER CAMP"], ruin: ["DROWNED RUINS", "SALTBOUND RUINS"] },
+    mountains: { hamlet: ["CRAGFALL HAMLET", "HIGHHEARTH"], watchpost: ["EAGLE LOOKOUT", "THUNDER WATCH"], shrine: ["SHRINE OF PEAKS", "SKY ALTAR"], camp: ["STORMCROW CAMP", "PEAKRAIDER CAMP"], ruin: ["RUINS OF THE SKYTHRONE", "THUNDERSHARD RUINS"] },
+    moon: { hamlet: ["UMBRA HAMLET", "DUSKFALL CAMP"], watchpost: ["ECLIPSE WATCH POST", "VOIDGAZE LOOKOUT"], shrine: ["GRAVEYARD OF ECHOES", "MOONLIT CRYPTS"], camp: ["UMBRAL CAMP", "NIGHTTALON CAMP"], ruin: ["RUINS OF THE ECLIPSE", "VOIDSCAR RUINS"] }
   };
   // Runs after worldLayout/terrainFeatures exist (rawTerrainHeight reads both), before foundationZones are built.
   function generatePoiLayout() {
@@ -378,11 +371,16 @@
     let hamletSlots = 2 + Math.floor(seeded(salt + 1) * 2);
     const watchSlots = 1 + Math.floor(seeded(salt + 2) * 2);
     const shrineSlots = 1 + Math.floor(seeded(salt + 3) * 2);
-    if (hamletSlots + watchSlots + shrineSlots < 5) hamletSlots = 3;
+    let campSlots = 2 + Math.floor(seeded(salt + 4) * 2);
+    const ruinSlots = 1 + Math.floor(seeded(salt + 5) * 2);
+    if (hamletSlots + watchSlots + shrineSlots + campSlots + ruinSlots < 8) hamletSlots = 3;
+    if (hamletSlots + watchSlots + shrineSlots + campSlots + ruinSlots > 11) campSlots = 2;
     const kinds = [];
     for (let i = 0; i < hamletSlots; i += 1) kinds.push("hamlet");
     for (let i = 0; i < watchSlots; i += 1) kinds.push("watchpost");
     for (let i = 0; i < shrineSlots; i += 1) kinds.push("shrine");
+    for (let i = 0; i < campSlots; i += 1) kinds.push("camp");
+    for (let i = 0; i < ruinSlots; i += 1) kinds.push("ruin");
     const anchors = [[START.x, START.z], [RUINS.x, RUINS.z], [RUNE_HOLLOW.x, RUNE_HOLLOW.z]];
     const pois = [];
     kinds.forEach((kind, slot) => {
@@ -698,14 +696,9 @@
         landmarks: landmarks.filter((landmark) => landmark.discovered).map((landmark) => landmark.id),
         runes: experienceRunes.filter((rune) => rune.claimed).map((rune) => rune.id),
         chests: chests.filter((chest) => chest.opened).map((chest) => chest.id),
-        deadDragons: dragons.filter((dragon) => dragon.dead).map((dragon) => dragon.name)
-      },
-      director: {
-        phase: enemyDirector.phase, wave: enemyDirector.wave, maxWaves: 5, timer: enemyDirector.timer,
-        intermissionDuration: enemyDirector.intermissionDuration, target: enemyDirector.target,
-        spawned: enemyDirector.spawned, defeated: enemyDirector.defeated, peakAlive: enemyDirector.peakAlive,
-        completed: enemyDirector.completed, threat: enemyDirector.threat, rngState: enemyDirector.rngState,
-        spawnFailures: enemyDirector.spawnFailures
+        deadDragons: dragons.filter((dragon) => dragon.dead).map((dragon) => dragon.name),
+        strongholds: strongholds.filter((stronghold) => stronghold.cleared).map((stronghold) => stronghold.id),
+        rngState: encounterRng.state
       }
     };
   }
@@ -735,8 +728,13 @@
     catch (error) { console.warn("Active run save could not be cleared", error); }
   }
 
+  function applySavedStrongholds(saved) {
+    const clearedIds = saved && saved.world && Array.isArray(saved.world.strongholds) ? saved.world.strongholds : [];
+    strongholds.forEach((stronghold) => { stronghold.cleared = clearedIds.indexOf(stronghold.id) !== -1; });
+  }
+
   function restoreActiveRun(saved) {
-    if (!saved || !saved.player || !saved.world || !saved.director) return false;
+    if (!saved || !saved.player || !saved.world) return false;
     const runPlayer = saved.player;
     player.runLevel = clamp(Math.floor(Number(runPlayer.runLevel) || 1), 1, 25);
     player.runXp = clamp(Math.floor(Number(runPlayer.runXp) || 0), 0, runXpTarget(player.runLevel) - 1);
@@ -796,20 +794,9 @@
       scene.remove(dragon.root);
     });
     if (bossSpawned && questStage >= 2 && !dragons.some((dragon) => dragon.boss)) spawnBoss(true);
-    const savedDirector = saved.director;
-    enemyDirector = freshEnemyDirector();
-    enemyDirector.wave = clamp(Math.floor(Number(savedDirector.wave) || 0), 0, 5);
-    enemyDirector.phase = ["intermission", "combat", "complete"].includes(savedDirector.phase) ? savedDirector.phase : "intermission";
-    enemyDirector.intermissionDuration = clamp(Number(savedDirector.intermissionDuration) || 8, 4, 20);
-    enemyDirector.timer = clamp(Number(savedDirector.timer) || 0, 0, enemyDirector.intermissionDuration);
-    enemyDirector.target = enemyDirector.wave ? 2 + enemyDirector.wave * 2 : 0;
-    enemyDirector.defeated = clamp(Math.floor(Number(savedDirector.defeated) || 0), 0, enemyDirector.target);
-    enemyDirector.spawned = enemyDirector.phase === "combat" ? enemyDirector.defeated : clamp(Math.floor(Number(savedDirector.spawned) || 0), enemyDirector.defeated, enemyDirector.target);
-    enemyDirector.completed = Boolean(savedDirector.completed) && enemyDirector.wave === 5;
-    enemyDirector.peakAlive = Math.max(0, Math.floor(Number(savedDirector.peakAlive) || 0));
-    enemyDirector.threat = clamp(Number(savedDirector.threat) || ambientDifficulty(), 1, 32);
-    enemyDirector.rngState = (Number(savedDirector.rngState) || enemyDirector.rngState) >>> 0;
-    enemyDirector.spawnFailures = Math.max(0, Math.floor(Number(savedDirector.spawnFailures) || 0));
+    applySavedStrongholds(saved);
+    const savedRngState = Number(saved.world.rngState) || (saved.director ? Number(saved.director.rngState) : 0);
+    encounterRng.state = savedRngState ? savedRngState >>> 0 : ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0;
     activeRunId = saved.runId || activeRunId;
     pendingRunState = null;
     return true;
@@ -2104,7 +2091,10 @@
 
   function createImportedWorld() {
     if (!visualAssets.models || !visualAssets.models.tower) return;
-    worldLayout.forts.forEach((fort) => createImportedFort(fort[0], fort[1], fort[2], fort[3], fort[4]));
+    worldLayout.forts.forEach((fort, index) => {
+      createImportedFort(fort[0], fort[1], fort[2], fort[3], fort[4]);
+      registerStronghold("fort-" + index, fort[4], "fort", fort[0], fort[1]);
+    });
     importedModel("siegeTower", 34, -178, 4.1, -.45, 0, { hx: 4.5, hz: 4.5 });
     importedModel("bridgePillar", -356, 55, 5.2, Math.PI / 2, 0, { hx: 5, hz: 8 });
     importedModel("tree", -330, 242, 5.5, .2, 0, null);
@@ -2339,6 +2329,8 @@
       if (routeIndex === 0) buildSpireRoute(route, routeIndex);
       else buildScaffoldRoute(route, routeIndex);
       verticalRouteReports.push(measureVerticalRoute(route[5]));
+      const summit = platforms.filter((platform) => platform.routeId === route[5]).sort((a, b) => b.stepIndex - a.stepIndex)[0];
+      registerStronghold("ascent-" + routeIndex, route[5], "ascent", summit ? summit.x : route[0], summit ? summit.z : route[1]);
     });
   }
 
@@ -2438,10 +2430,38 @@
 
   // --- Settlements / POIs (hamlets, watchposts, shrines from the vendored packs) ---
   const poiChestSpots = [];
-  const campGuardSpots = [];
   const poiDebugInfo = [];
   // Scales tuned from measured bboxes (kaykit-medieval sources are ~1/3 the assumed size).
   const POI_SCALES = { medieval: 3.2, town: 3.1, nature: 3.5, natureTree: 2.2, dungeon: 1.25, graveyard: 2.6, crypt: 4.6 };
+
+  // Base garrison composition per stronghold kind; resetActors adds level-scaled light spots
+  // and promotions on top. Clear bonuses are granted once, when the last member falls.
+  const STRONGHOLD_GARRISONS = {
+    fort: { light: 3, heavy: 2, warg: 0, golem: 0 },
+    hamlet: { light: 3, heavy: 0, warg: 1, golem: 0 },
+    watchpost: { light: 3, heavy: 0, warg: 1, golem: 0 },
+    shrine: { light: 2, heavy: 1, warg: 0, golem: 0 },
+    graveyard: { light: 4, heavy: 1, warg: 0, golem: 0 },
+    camp: { light: 3, heavy: 0, warg: 1, golem: 0 },
+    ruin: { light: 2, heavy: 1, warg: 0, golem: 0 },
+    ascent: { light: 2, heavy: 0, warg: 1, golem: 0 },
+    keep: { light: 4, heavy: 0, warg: 0, golem: 1 }
+  };
+  const STRONGHOLD_BONUSES = {
+    fort: { xp: 150, heal: .3, shout: 25, weaponXp: 50 },
+    hamlet: { xp: 100, heal: .2, shout: 25 },
+    watchpost: { xp: 110, heal: .2, shout: 25, weaponXp: 35 },
+    shrine: { xp: 120, heal: .2, shout: 25, runXp: 40 },
+    graveyard: { xp: 130, heal: .2, shout: 25, runXp: 40 },
+    camp: { xp: 90, heal: .2, shout: 25 },
+    ruin: { xp: 110, heal: .2, shout: 25 },
+    ascent: { xp: 80, heal: .2, shout: 25, stamina: true },
+    keep: { xp: 200, heal: .3, shout: 100 }
+  };
+  const STRONGHOLD_RINGS = {
+    fort: [8, 15], hamlet: [5, 10], watchpost: [5, 10], shrine: [4.5, 9], graveyard: [5, 11],
+    camp: [4.5, 9], ruin: [4.5, 9], ascent: [5, 11], keep: [9, 17]
+  };
 
   function addPoiChestSpot(poi, x, z, xp) {
     poiChestSpots.push({ idSuffix: poiChestSpots.length, name: poi.name + " CACHE", x, z, xp: Math.round(xp) });
@@ -2461,26 +2481,35 @@
     return mesh;
   }
 
-  function seedCampGuards(poi, salt, count, debug, ringInner, ringOuter, baseY) {
-    const inner = ringInner || 4.5;
-    const outer = ringOuter || 8;
-    const footY = Number.isFinite(baseY) ? baseY : terrainHeight(poi.x, poi.z);
-    for (let i = 0; i < count; i += 1) {
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const angle = seeded(salt + i * 7 + attempt * 37 + 1) * Math.PI * 2;
-        const distance = inner + seeded(salt + i * 7 + attempt * 37 + 2) * Math.max(.5, outer - inner);
-        const gx = poi.x + Math.cos(angle) * distance;
-        const gz = poi.z + Math.sin(angle) * distance;
-        if (hitsCollider(gx, gz, .9, footY, footY + 3.4)) continue;
-        campGuardSpots.push({
-          type: i % 3 === 2 ? "warg" : "biomeLight",
-          x: gx, z: gz,
-          campX: poi.x, campZ: poi.z, campName: poi.name
-        });
-        if (debug) debug.guards += 1;
+  // Strongholds are world gen: every fort, settlement, ascent summit and the keep registers once,
+  // with seeded garrison spots ringed around its center (extra light/golem slots cover level scaling).
+  function registerStronghold(id, name, kind, x, z) {
+    const base = STRONGHOLD_GARRISONS[kind] || STRONGHOLD_GARRISONS.hamlet;
+    const stronghold = { id, name, kind, x, z, members: [], cleared: false, spots: [], baseCount: base.light + base.heavy + base.warg + base.golem };
+    const salt = worldLayout.salt + 8100 + strongholds.length * 137;
+    const golemSlots = base.golem + (kind === "fort" || kind === "keep" ? 1 : 0);
+    const plan = [];
+    for (let i = 0; i < base.heavy; i += 1) plan.push("biomeHeavy");
+    for (let i = 0; i < base.warg; i += 1) plan.push("warg");
+    for (let i = 0; i < golemSlots; i += 1) plan.push("golem");
+    for (let i = 0; i < base.light + 4; i += 1) plan.push("biomeLight");
+    const ring = STRONGHOLD_RINGS[kind] || STRONGHOLD_RINGS.hamlet;
+    plan.forEach((type, index) => {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const angle = seeded(salt + index * 7 + attempt * 37 + 1) * Math.PI * 2;
+        const distance = ring[0] + seeded(salt + index * 7 + attempt * 37 + 2) * (ring[1] - ring[0]);
+        const gx = x + Math.cos(angle) * distance;
+        const gz = z + Math.sin(angle) * distance;
+        const gy = terrainHeight(gx, gz);
+        if (gy <= biome.waterLevel + .35) continue;
+        if (Math.abs(terrainHeight(gx + 1.5, gz) - gy) + Math.abs(terrainHeight(gx, gz + 1.5) - gy) > .9) continue;
+        if (hitsCollider(gx, gz, .9, gy, gy + 3.4)) continue;
+        stronghold.spots.push({ type, x: gx, z: gz, roll: seeded(salt + index * 7 + attempt * 37 + 3) });
         break;
       }
-    }
+    });
+    strongholds.push(stronghold);
+    return stronghold;
   }
 
   function buildPoiFallback(poi, baseY) {
@@ -2570,7 +2599,6 @@
     createFire(fx, fz, !isCoarse);
     addPoiChestSpot(poi, chestX, chestZ, 60 + Math.floor(seeded(salt + 32) * 31));
     debug.chests += 1;
-    seedCampGuards(poi, salt + 40, 2 + Math.floor(seeded(salt + 33) * 3), debug, 4.5, 8, baseY);
   }
 
   function buildWatchpost(poi, poiIndex, debug) {
@@ -2629,7 +2657,6 @@
     }
     if (models.flagRed) placePackModel("flagRed", poi.x + doorDir.x * (halfZ + 1.5) + sideDir.x * 1.9, poi.z + doorDir.z * (halfZ + 1.5) + sideDir.z * 1.9, POI_SCALES.medieval, facing, { baseY });
     createFire(tentX + sideDir.x * 1.7, tentZ + sideDir.z * 1.7, !isCoarse);
-    seedCampGuards(poi, salt + 40, 2 + Math.floor(seeded(salt + 33) * 3), debug, halfX + 1.5, halfX + 6, baseY);
   }
 
   function buildShrine(poi, poiIndex, debug) {
@@ -2748,20 +2775,106 @@
     debug.chests += 1;
   }
 
+  function buildRaiderCamp(poi, poiIndex, debug) {
+    const models = visualAssets.models || {};
+    const baseY = terrainHeight(poi.x, poi.z);
+    if (!models.tent && !models.tentDetailed) { buildPoiFallback(poi, baseY); return; }
+    const salt = worldLayout.salt + 6500 + poiIndex * 113;
+    const fireAngle = seeded(salt + 1) * Math.PI * 2;
+    const fx = poi.x + Math.cos(fireAngle) * 1.6;
+    const fz = poi.z + Math.sin(fireAngle) * 1.6;
+    if (models.campfireStones) placePackModel("campfireStones", fx, fz, POI_SCALES.nature, fireAngle, { baseY });
+    createFire(fx, fz, !isCoarse);
+    ["tent", "tentDetailed"].filter((key) => models[key]).forEach((key, index) => {
+      const angle = poi.rotation + index * Math.PI * .82 + (seeded(salt + 2 + index * 3) - .5) * .4;
+      const radius = 4.6 + seeded(salt + 3 + index * 3) * 1.6;
+      const tx = poi.x + Math.cos(angle) * radius;
+      const tz = poi.z + Math.sin(angle) * radius;
+      const facing = Math.atan2(fx - tx, fz - tz);
+      const scale = key === "tent" ? POI_SCALES.medieval : POI_SCALES.nature;
+      if (!placePackModel(key, tx, tz, scale, facing, { baseY })) return;
+      const size = packModelSize(key);
+      addCollider(tx, tz, Math.max(.3, size.sx * scale * .45), Math.max(.3, size.sz * scale * .45), facing, baseY - 1, baseY + Math.min(size.sy * scale, 3));
+    });
+    const dressingKeys = ["crateBig", "crateOpen", "sack", "weaponrack", "barrel"].filter((key) => models[key]);
+    const dressingCount = 3 + Math.floor(seeded(salt + 8) * 3);
+    for (let i = 0; i < dressingCount && dressingKeys.length; i += 1) {
+      const key = dressingKeys[Math.floor(seeded(salt + 9 + i * 5) * dressingKeys.length)];
+      const angle = seeded(salt + 10 + i * 5) * Math.PI * 2;
+      const radius = 2.8 + seeded(salt + 11 + i * 5) * 4.4;
+      const dx = poi.x + Math.cos(angle) * radius;
+      const dz = poi.z + Math.sin(angle) * radius;
+      if (Math.hypot(dx - fx, dz - fz) < 1.8) continue;
+      const rotation = seeded(salt + 12 + i * 5) * Math.PI * 2;
+      if (!placePackModel(key, dx, dz, POI_SCALES.medieval, rotation, { baseY })) continue;
+      const size = packModelSize(key);
+      addCollider(dx, dz, Math.max(.2, size.sx * POI_SCALES.medieval * .45), Math.max(.2, size.sz * POI_SCALES.medieval * .45), rotation, baseY - 1, baseY + Math.min(size.sy * POI_SCALES.medieval, 2.8));
+    }
+    const chestAngle = seeded(salt + 20) * Math.PI * 2;
+    addPoiChestSpot(poi, poi.x + Math.cos(chestAngle) * 3.2, poi.z + Math.sin(chestAngle) * 3.2, 70 + Math.floor(seeded(salt + 21) * 31));
+    debug.chests += 1;
+  }
+
+  function buildRuinCluster(poi, poiIndex, debug) {
+    const models = visualAssets.models || {};
+    const baseY = terrainHeight(poi.x, poi.z);
+    const salt = worldLayout.salt + 6600 + poiIndex * 127;
+    const ruinKeys = ["dngWallBroken", "dngWallCracked", "dngColumn", "dngWallArched"].filter((key) => models[key]);
+    if (!ruinKeys.length) { buildPoiFallback(poi, baseY); return; }
+    const wallCount = 2 + Math.floor(seeded(salt + 1) * 3);
+    const gapAngle = seeded(salt + 2) * Math.PI * 2;
+    for (let i = 0; i < wallCount; i += 1) {
+      const key = ruinKeys[Math.floor(seeded(salt + 3 + i * 3) * ruinKeys.length)];
+      const angle = gapAngle + .7 + (wallCount > 1 ? i / (wallCount - 1) : 0) * (Math.PI * 2 - 1.4);
+      const radius = 6 + seeded(salt + 4 + i * 3) * 2.6;
+      const wx = poi.x + Math.cos(angle) * radius;
+      const wz = poi.z + Math.sin(angle) * radius;
+      const size = packModelSize(key);
+      const wallFacing = poiTangentRotation(angle, size);
+      if (!placePackModel(key, wx, wz, POI_SCALES.dungeon, wallFacing, { baseY })) continue;
+      addCollider(wx, wz, size.sx * POI_SCALES.dungeon * .5, size.sz * POI_SCALES.dungeon * .5, wallFacing, baseY - 1, baseY + Math.min(size.sy * POI_SCALES.dungeon, 5));
+    }
+    const statueKeys = ["statueObelisk", "statueColumnDamaged", "statueHead", "statueColumn"].filter((key) => models[key]);
+    if (statueKeys.length) {
+      const key = statueKeys[Math.floor(seeded(salt + 14) * statueKeys.length)];
+      const statuePoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 2.6, -2.2);
+      if (placePackModel(key, statuePoint.x, statuePoint.z, POI_SCALES.nature, poi.rotation, { baseY })) {
+        const size = packModelSize(key);
+        addCollider(statuePoint.x, statuePoint.z, Math.max(.3, size.sx * POI_SCALES.nature * .45), Math.max(.3, size.sz * POI_SCALES.nature * .45), poi.rotation, baseY - 1, baseY + Math.min(size.sy * POI_SCALES.nature, 6));
+      }
+    }
+    // Altar slab matches the shrine's procedural one; the ruin predates the graveyard pack.
+    const altarPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, 2.4);
+    const altar = new THREE.Mesh(new THREE.BoxGeometry(1.6, .95, 1.05), boxStoneMaterial(1.6, .95, 1.05));
+    altar.position.set(altarPoint.x, baseY + .475, altarPoint.z);
+    altar.rotation.y = poi.rotation;
+    altar.castShadow = !isCoarse;
+    altar.receiveShadow = true;
+    scene.add(altar);
+    addCollider(altarPoint.x, altarPoint.z, .8, .53, poi.rotation, baseY - 1, baseY + .95);
+    const chestPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, 4.6);
+    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 16) * 21));
+    debug.chests += 1;
+  }
+
   function createSettlements() {
     poiChestSpots.length = 0;
-    campGuardSpots.length = 0;
     poiDebugInfo.length = 0;
     (worldLayout.pois || []).forEach((poi, poiIndex) => {
       const debug = { kind: poi.kind, name: poi.name, chests: 0, guards: 0, collidersAdded: 0 };
       const collidersBefore = colliders.length;
       if (poi.kind === "hamlet") buildHamlet(poi, poiIndex, debug);
       else if (poi.kind === "watchpost") buildWatchpost(poi, poiIndex, debug);
+      else if (poi.kind === "camp") buildRaiderCamp(poi, poiIndex, debug);
+      else if (poi.kind === "ruin") buildRuinCluster(poi, poiIndex, debug);
       else if (realm.biome === "moon") buildGraveyard(poi, poiIndex, debug);
       else buildShrine(poi, poiIndex, debug);
       debug.collidersAdded = colliders.length - collidersBefore;
       poiDebugInfo.push(debug);
+      const stronghold = registerStronghold("poi-" + poiIndex, poi.name, poi.kind === "shrine" && realm.biome === "moon" ? "graveyard" : poi.kind, poi.x, poi.z);
+      debug.guards = stronghold.baseCount;
     });
+    registerStronghold("keep", "ASHENHOLD KEEP", "keep", RUINS.x, RUINS.z);
   }
 
   function createChests() {
@@ -3656,7 +3769,7 @@
       playerVelocity: new THREE.Vector3(), lastPlayerPos: player.root ? player.root.position.clone() : new THREE.Vector3(),
       hitRadius: boss ? 7.4 : 4.7, lastDamageSource: null, lastWeaponId: null,
       kind: "dragon", rank: boss ? "THE WORLD-BURNER" : "ANCIENT DRAGON",
-      xpReward: boss ? 950 : 320, healthReward: boss ? 35 : 12, isWaveEnemy: false
+      xpReward: boss ? 950 : 320, healthReward: boss ? 35 : 12
     };
     root.traverse((object) => { if (object.isMesh) object.userData.dragon = dragon; });
     dragons.push(dragon);
@@ -3690,16 +3803,15 @@
     enemy.animationState = nextState;
   }
 
-  function createGroundEnemy(type, x, z, difficulty, options) {
+  function createGroundEnemy(type, x, z, difficulty) {
     const root = new THREE.Group();
     let modelRoot = root;
     let mixer = null;
     const parts = {};
     const threat = Math.max(1, Number(difficulty) || 1);
     const tier = clamp(Math.floor(threat), 1, 8);
-    const config = options || {};
-    const healthScale = Math.pow(1.075, threat - 1) * (1 + Math.max(0, enemyDirector.wave - 1) * .045);
-    const damageScale = Math.pow(1.035, threat - 1) * (1 + Math.max(0, enemyDirector.wave - 1) * .035);
+    const healthScale = Math.pow(1.075, threat - 1);
+    const damageScale = Math.pow(1.035, threat - 1);
     const iron = new THREE.MeshStandardMaterial({ color: 0x313a3d, roughness: .58, metalness: .5, envMapIntensity: .45 });
     const bone = new THREE.MeshStandardMaterial({ color: 0x7d8178, roughness: .92, metalness: .02 });
     const ember = new THREE.MeshStandardMaterial({ color: 0x8e3d25, emissive: 0x3e0c05, emissiveIntensity: .72, roughness: .7 });
@@ -3815,7 +3927,7 @@
       attackTimer: 0, attackDelivered: false, walkCycle: encounterRandom() * 10, hitRadius: stats.hitRadius,
       xpReward: Math.round(stats.xp * (1 + tier * .08)), healthReward: stats.heal,
       boss: false, elite: type === "golem" || type === "biomeHeavy", dead: false, deathTime: 0, engaged: true,
-      isWaveEnemy: Boolean(config.wave), isAmbient: Boolean(config.ambient), tier, threat,
+      tier, threat, strongholdId: null,
       actions, animationState, lastDamageSource: null, lastWeaponId: null, hitStun: 0, phase: encounterRandom() * Math.PI * 2,
       impulse: new THREE.Vector3(), telegraph: null, bleedStacks: 0, bleedTime: 0, slowTime: 0
     };
@@ -3825,87 +3937,33 @@
     return enemy;
   }
 
-  function ambientEnemyCap() {
-    return (isCoarse ? 3 : 4) + Math.min(3, Math.floor((player.level - 1) / 3));
-  }
-
   function ambientDifficulty() {
     const permanentRanks = Object.keys(player.skills).reduce((sum, id) => sum + skillRank(id), 0);
     const masteryPower = WEAPON_IDS.reduce((sum, id) => sum + masteryFor(id).level - 1, 0) / 4;
-    return clamp(1 + (player.level - 1) * .42 + masteryPower * .32 + permanentRanks * .055 + player.realmDepth * 1.35 + Math.max(0, enemyDirector.wave - 1) * .9, 1, 32);
+    return clamp(1 + (player.level - 1) * .42 + masteryPower * .32 + permanentRanks * .055 + player.realmDepth * 1.35, 1, 32);
   }
 
-  function chooseAmbientEnemyType(tier) {
-    const index = enemyDirector.spawned;
-    const wave = Math.max(1, enemyDirector.wave);
-    if (wave >= 3 && (index + wave) % (wave >= 5 ? 3 : 5) === 0) return "biomeHeavy";
-    if ((index + wave) % 3 === 0 && tier < 16) return "warg";
-    if (wave >= 4 && encounterRandom() > .72) return "biomeHeavy";
-    return "biomeLight";
-  }
-
-  function validEnemySpawn(x, z, minimumDistance) {
-    if (x < -HALF_WORLD + 8 || x > HALF_WORLD - 8 || z < -HALF_WORLD + 8 || z > HALF_WORLD - 8) return false;
-    const y = terrainHeight(x, z);
-    const sample = 1.4;
-    const slope = Math.max(Math.abs(terrainHeight(x + sample, z) - terrainHeight(x - sample, z)), Math.abs(terrainHeight(x, z + sample) - terrainHeight(x, z - sample))) / (sample * 2);
-    const distance = Math.hypot(x - player.root.position.x, z - player.root.position.z);
-    return distance >= (minimumDistance || 28) && y > biome.waterLevel + .35 && y < 260 && Math.abs(y - player.root.position.y) <= 34 && slope <= 1.22 && !hitsCollider(x, z, 1.7, y, y + 3.4);
-  }
-
-  function fallbackEnemySpawn() {
-    const phase = encounterRandom() * Math.PI * 2;
-    for (let ring = 0; ring < 4; ring += 1) {
-      const radius = 30 + ring * 11;
-      for (let index = 0; index < 24; index += 1) {
-        const angle = phase + index / 24 * Math.PI * 2;
-        const x = player.root.position.x + Math.cos(angle) * radius;
-        const z = player.root.position.z + Math.sin(angle) * radius;
-        if (validEnemySpawn(x, z, 22)) return { x, z };
-      }
-    }
-    const towardCenter = new THREE.Vector3(-player.root.position.x, 0, -player.root.position.z).normalize();
-    const x = clamp(player.root.position.x + towardCenter.x * 26, -HALF_WORLD + 10, HALF_WORLD - 10);
-    const z = clamp(player.root.position.z + towardCenter.z * 26, -HALF_WORLD + 10, HALF_WORLD - 10);
-    return validEnemySpawn(x, z, 16) ? { x, z } : null;
-  }
-
-  function spawnAmbientEnemy() {
+  function nearestUnclearedStronghold() {
     if (!player.root) return null;
-    const tier = ambientDifficulty();
-    let position = null;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const angle = encounterRandom() * Math.PI * 2;
-      const radius = 31 + encounterRandom() * 27;
-      const x = player.root.position.x + Math.cos(angle) * radius;
-      const z = player.root.position.z + Math.sin(angle) * radius;
-      if (validEnemySpawn(x, z, 28)) { position = { x, z }; break; }
-    }
-    if (!position) position = fallbackEnemySpawn();
-    if (position) {
-      const enemy = createGroundEnemy(chooseAmbientEnemyType(tier), position.x, position.z, tier, { ambient: true, wave: true });
-      enemyDirector.spawned += 1;
-      createShockwave(enemy.root.position.clone().add(new THREE.Vector3(0, .08, 0)), 5.5, .55, 0x476b74);
-      return enemy;
-    }
-    enemyDirector.spawnFailures += 1;
-    return null;
+    let best = null;
+    let bestDistance = Infinity;
+    strongholds.forEach((stronghold) => {
+      if (stronghold.cleared) return;
+      const distance = Math.hypot(stronghold.x - player.root.position.x, stronghold.z - player.root.position.z);
+      if (distance < bestDistance) { best = stronghold; bestDistance = distance; }
+    });
+    return best;
   }
 
-  function updateAssaultUI() {
+  function updateStrongholdUI() {
     if (!ui.waveHud) return;
-    ui.waveHud.classList.toggle("active", state === "playing" && !enemyDirector.completed);
-    if (enemyDirector.phase === "intermission") {
-      const nextWave = Math.min(enemyDirector.maxWaves, enemyDirector.wave + 1);
-      ui.waveNumber.textContent = nextWave + " / " + enemyDirector.maxWaves;
-      ui.waveEnemyCount.textContent = "NEXT WAVE IN " + Math.max(0, Math.ceil(enemyDirector.timer)) + "s";
-      ui.waveProgress.style.width = clamp(enemyDirector.timer / enemyDirector.intermissionDuration * 100, 0, 100) + "%";
-    } else {
-      const remaining = Math.max(0, enemyDirector.target - enemyDirector.defeated);
-      ui.waveNumber.textContent = enemyDirector.wave + " / " + enemyDirector.maxWaves;
-      ui.waveEnemyCount.textContent = remaining + (remaining === 1 ? " ENEMY REMAINS" : " ENEMIES REMAIN");
-      ui.waveProgress.style.width = (enemyDirector.target ? clamp(enemyDirector.defeated / enemyDirector.target * 100, 0, 100) : 0) + "%";
-    }
+    const total = strongholds.length;
+    const cleared = strongholds.filter((stronghold) => stronghold.cleared).length;
+    const nearest = nearestUnclearedStronghold();
+    ui.waveHud.classList.toggle("active", state === "playing");
+    ui.waveNumber.textContent = cleared + " / " + total;
+    ui.waveProgress.style.width = (total ? clamp(cleared / total * 100, 0, 100) : 0) + "%";
+    ui.waveEnemyCount.textContent = nearest ? "CLEAR " + nearest.name : cleared >= total ? "THE WORLD-BURNER AWAITS" : "CLEAR ALL TO FACE VHAROK";
   }
 
   function disposeGroundEnemy(enemy) {
@@ -3923,82 +3981,16 @@
     });
   }
 
-  function startAutomaticWave() {
-    if (enemyDirector.completed || enemyDirector.wave >= enemyDirector.maxWaves) return;
-    enemyDirector.wave += 1;
-    enemyDirector.phase = "combat";
-    enemyDirector.target = 2 + enemyDirector.wave * 2;
-    enemyDirector.spawned = 0;
-    enemyDirector.defeated = 0;
-    enemyDirector.spawnTimer = 0;
-    enemyDirector.threat = ambientDifficulty();
-    if (hasSkill("run_rebirth")) player.secondWindReady = true;
-    updateAssaultUI();
-    showProgressionBanner("ENEMY ASSAULT", "WAVE " + enemyDirector.wave + " / " + enemyDirector.maxWaves, enemyDirector.target + " level-scaled enemies incoming");
-    markRunDirty(true);
-  }
-
-  function finishAutomaticWave() {
-    if (enemyDirector.phase !== "combat") return;
-    const recovery = Math.round(maxHealth() * (hasSkill("immortal_warden") ? .2 : .14));
-    player.health = Math.min(maxHealth(), player.health + recovery);
-    player.stamina = maxStamina();
-    grantRunXp(42 + enemyDirector.wave * 12, "WAVE CLEAR");
-    if (enemyDirector.wave >= enemyDirector.maxWaves) {
-      enemyDirector.completed = true;
-      enemyDirector.phase = "complete";
-      ui.waveEnemyCount.textContent = "ASSAULT CLEARED";
-      ui.waveProgress.style.width = "100%";
-      grantXp(300);
-      grantRunXp(260, "FIVE-WAVE CLEAR");
-      showProgressionBanner("ASSAULT BROKEN", "FIVE WAVES SURVIVED", questStage === 3 ? "The realm is fully conquered" : "Slay the realm boss to complete the run");
-      markRunDirty(true);
-      checkRunCompletion();
-      return;
-    }
-    enemyDirector.phase = "intermission";
-    enemyDirector.intermissionDuration = 8;
-    enemyDirector.timer = enemyDirector.intermissionDuration;
-    updateAssaultUI();
-    showProgressionBanner("WAVE CLEARED", "RECOVER & UPGRADE", "Next assault in 8 seconds - press K to spend run points");
-    markRunDirty(true);
-  }
-
-  function updateEnemyDirector(dt) {
+  function pruneGroundEnemies() {
     const retained = [];
     groundEnemies.forEach((enemy) => {
-      const distance = player.root ? distance2D(enemy.root.position, player.root.position) : 0;
-      const expiredCorpse = enemy.dead && enemy.deathTime > 6.5;
-      const leftEncounter = enemy.isAmbient && !enemy.dead && distance > 285;
-      if (expiredCorpse || leftEncounter) {
+      if (enemy.dead && enemy.deathTime > 6.5) {
         scene.remove(enemy.root);
         disposeGroundEnemy(enemy);
-        if (leftEncounter) enemyDirector.spawned = Math.max(enemyDirector.defeated, enemyDirector.spawned - 1);
       }
       else retained.push(enemy);
     });
     groundEnemies = retained;
-    const alive = groundEnemies.filter((enemy) => enemy.isAmbient && !enemy.dead).length;
-    enemyDirector.peakAlive = Math.max(enemyDirector.peakAlive, alive);
-    if (enemyDirector.completed) return;
-    if (enemyDirector.phase === "intermission") {
-      enemyDirector.timer = Math.max(0, enemyDirector.timer - dt);
-      updateAssaultUI();
-      if (enemyDirector.timer <= 0) startAutomaticWave();
-      return;
-    }
-    if (enemyDirector.defeated >= enemyDirector.target && enemyDirector.spawned >= enemyDirector.target) {
-      finishAutomaticWave();
-      return;
-    }
-    enemyDirector.spawnTimer -= dt;
-    if (enemyDirector.spawned >= enemyDirector.target || alive >= ambientEnemyCap() || enemyDirector.spawnTimer > 0) {
-      updateAssaultUI();
-      return;
-    }
-    const spawned = spawnAmbientEnemy();
-    enemyDirector.spawnTimer = spawned ? .7 : 1.4;
-    updateAssaultUI();
   }
 
   function animateGroundEnemy(enemy, dt, moving) {
@@ -4210,15 +4202,30 @@
     });
     const wanderAngle = seeded(worldLayout.salt + 1600) * Math.PI * 2;
     createDragon(worldProfile.dragonNames[3], Math.cos(wanderAngle) * 360, Math.sin(wanderAngle) * 360, false);
-    // Camp guards are world gen: seeded positions from createSettlements, spawned outside the wave
-    // director (no ambient/wave flags), with the encounter RNG stream restored so combat stays deterministic.
-    const guardRngState = enemyDirector.rngState;
-    campGuardSpots.forEach((spot) => {
-      const guard = createGroundEnemy(spot.type, spot.x, spot.z, ambientDifficulty());
-      guard.camp = { x: spot.campX, z: spot.campZ, radius: 24 };
-      guard.name = spot.campName + " " + guard.name;
+    // Garrisons are world gen: seeded spots from registerStronghold, spawned with level-scaled
+    // count and promotions, with the encounter RNG stream restored so combat stays deterministic.
+    const garrisonRngState = encounterRng.state;
+    strongholds.forEach((stronghold) => {
+      stronghold.members = [];
+      if (stronghold.cleared) return;
+      const base = STRONGHOLD_GARRISONS[stronghold.kind] || STRONGHOLD_GARRISONS.hamlet;
+      const countBonus = Math.min(4, Math.floor((player.level - 1) / 6));
+      const promoteRoll = Math.min(.45, player.level * .02);
+      const golemCount = base.golem + ((stronghold.kind === "fort" && player.level >= 10) || (stronghold.kind === "keep" && player.level >= 14) ? 1 : 0);
+      const threat = ambientDifficulty();
+      const plan = stronghold.spots.filter((spot) => spot.type === "biomeHeavy" || spot.type === "warg")
+        .concat(stronghold.spots.filter((spot) => spot.type === "golem").slice(0, golemCount))
+        .concat(stronghold.spots.filter((spot) => spot.type === "biomeLight").slice(0, base.light + countBonus)
+          .map((spot) => ({ x: spot.x, z: spot.z, type: spot.roll < promoteRoll ? "biomeHeavy" : "biomeLight" })));
+      plan.forEach((spot) => {
+        const enemy = createGroundEnemy(spot.type, spot.x, spot.z, threat);
+        enemy.strongholdId = stronghold.id;
+        enemy.camp = { x: stronghold.x, z: stronghold.z, radius: stronghold.kind === "keep" ? 40 : 30 };
+        enemy.name = stronghold.name + " " + enemy.name;
+        stronghold.members.push(enemy);
+      });
     });
-    enemyDirector.rngState = guardRngState;
+    encounterRng.state = garrisonRngState;
   }
 
   function createLandmarks() {
@@ -4247,7 +4254,9 @@
     audio.init();
     outpostsDiscovered = 0;
     runeHinted = false;
-    enemyDirector = freshEnemyDirector();
+    encounterRng.state = ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0;
+    strongholds.forEach((stronghold) => { stronghold.cleared = false; stronghold.members = []; });
+    if (resumeSave) applySavedStrongholds(resumeSave);
     resetExperienceRunes();
     resetChests();
     resetActors();
@@ -4294,11 +4303,10 @@
     ui.title.classList.remove("active");
     ui.pause.classList.remove("active");
     ui.skills.classList.remove("active");
-    ui.waveHud.classList.add("active");
     ui.end.classList.remove("active", "victory");
     updateQuestUI();
     updateProgressionUI();
-    updateAssaultUI();
+    updateStrongholdUI();
     updateCamera(1, true);
     if (!isCoarse && !testMode) requestPointer();
     showLocation(biome.name, resumed ? "RUN RESTORED" : "ENTERING REALM " + (player.realmDepth + 1));
@@ -4515,6 +4523,18 @@
     bone.quaternion.multiply(_sq2.setFromAxisAngle(_sv, angle));
   }
 
+  // Restore the clean post-mixer pose saved last frame. r128 mixers skip writing
+  // constant-value tracks (unchanged-buffer optimization), so without this the
+  // overlay accumulates into the bones whenever the current clip holds a bone still.
+  function restoreSprintPoseBones() {
+    if (!player.sprintPoseApplied) return;
+    player.sprintPoseApplied = false;
+    if (!player.sprintBones || !player.sprintPoseSnapshot) return;
+    Object.keys(player.sprintBones).forEach((key) => {
+      if (player.sprintBones[key]) player.sprintBones[key].quaternion.copy(player.sprintPoseSnapshot[key]);
+    });
+  }
+
   function updateSprintPose(dt) {
     let target = player.superSprinting ? 1 : player.sprinting ? .65 : 0;
     if (player.dodgeTime > 0 || player.hitReaction > 0 || player.attackTime > 0 || !player.grounded || !player.moving || state !== "playing") target = 0;
@@ -4522,21 +4542,29 @@
     const weight = player.sprintPoseWeight;
     if (weight < .001 || !player.sprintBones) return;
     const bones = player.sprintBones;
+    if (!player.sprintPoseSnapshot) {
+      player.sprintPoseSnapshot = {};
+      Object.keys(bones).forEach((key) => { player.sprintPoseSnapshot[key] = new THREE.Quaternion(); });
+    }
+    Object.keys(bones).forEach((key) => { if (bones[key]) player.sprintPoseSnapshot[key].copy(bones[key].quaternion); });
+    player.sprintPoseApplied = true;
     _sprintRight.set(1, 0, 0).applyQuaternion(player.root.quaternion);
     // Sign convention (verified via screenshot probe): positive angle about world-right
-    // pitches the bone BACKWARD, so the forward lean uses negative angles.
-    addBoneWorldAxisRotation(bones.torso, _sprintRight, -.32 * weight);
-    addBoneWorldAxisRotation(bones.abdomen, _sprintRight, -.1 * weight);
-    addBoneWorldAxisRotation(bones.neck, _sprintRight, .26 * weight);
+    // pitches up-pointing bones BACKWARD, so the forward lean uses negative angles.
+    // Arms hang down, so the same positive rotation swings the fists FORWARD —
+    // swept-back arms therefore also use negative angles.
+    addBoneWorldAxisRotation(bones.torso, _sprintRight, -.38 * weight);
+    addBoneWorldAxisRotation(bones.abdomen, _sprintRight, -.15 * weight);
+    addBoneWorldAxisRotation(bones.neck, _sprintRight, .25 * weight);
     addBoneWorldAxisRotation(bones.head, _sprintRight, .14 * weight);
     addBoneWorldAxisRotation(bones.shoulderL, _sprintRight, .1 * weight);
     addBoneWorldAxisRotation(bones.shoulderR, _sprintRight, .1 * weight);
-    addBoneWorldAxisRotation(bones.upperArmL, _sprintRight, .45 * weight);
-    addBoneWorldAxisRotation(bones.upperArmR, _sprintRight, .45 * weight);
-    addBoneWorldAxisRotation(bones.upperArmL, _sprintUp, .15 * weight);
-    addBoneWorldAxisRotation(bones.upperArmR, _sprintUp, -.15 * weight);
-    addBoneWorldAxisRotation(bones.lowerArmL, _sprintRight, -.15 * weight);
-    addBoneWorldAxisRotation(bones.lowerArmR, _sprintRight, -.15 * weight);
+    addBoneWorldAxisRotation(bones.upperArmL, _sprintRight, -.6 * weight);
+    addBoneWorldAxisRotation(bones.upperArmR, _sprintRight, -.6 * weight);
+    addBoneWorldAxisRotation(bones.upperArmL, _sprintUp, .18 * weight);
+    addBoneWorldAxisRotation(bones.upperArmR, _sprintUp, -.18 * weight);
+    addBoneWorldAxisRotation(bones.lowerArmL, _sprintRight, -.2 * weight);
+    addBoneWorldAxisRotation(bones.lowerArmR, _sprintRight, -.2 * weight);
   }
 
   function animatePlayer(dt, moving) {
@@ -4617,6 +4645,7 @@
       else if (moving) modelState = player.sprinting ? "run" : "walk";
       setPlayerModelAction(modelState);
       if (modelState === "run" && player.modelActions.run) player.modelActions.run.setEffectiveTimeScale(player.superSprinting ? 1.25 : 1.15);
+      restoreSprintPoseBones();
       player.modelMixer.update(dt);
       updateSprintPose(dt);
     }
@@ -6028,7 +6057,6 @@
   };
 
   if (testMode) {
-    window.__ASHENHOLD_DEBUG_PLAYER__ = player; // TEMP-DEBUG (remove before done)
     window.__ASHENHOLD_TEST__ = {
       start: startGame,
       teleport: (x, z) => {

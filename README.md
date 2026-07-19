@@ -1,5 +1,7 @@
 # Ashenhold: Dragonfall
 
+> **Work-in-progress checkpoint:** this branch preserves Kimi's incomplete Ashenhold 5.4 stronghold refactor. It is not the live build and still contains unresolved runtime references from the removed wave director. Use `main` for the tested playable release.
+
 A third-person 3D dark-fantasy action roguelite built for the browser with Three.js.
 
 ## Play
