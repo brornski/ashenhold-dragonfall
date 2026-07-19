@@ -20,9 +20,9 @@
     endCopy: $("endCopy"), finalKills: $("finalKills"), finalDistance: $("finalDistance"), finalExplored: $("finalExplored"),
     webglError: $("webglError"), joystick: $("joystick"), joystickKnob: $("joystickKnob"), lookPad: $("lookPad"),
     mobileAttack: $("mobileAttack"), mobileShout: $("mobileShout"), mobileJump: $("mobileJump"), mobileWeapon: $("mobileWeapon"),
-    mobileDodge: $("mobileDodge"), mobileLock: $("mobileLock"),
+    mobileDodge: $("mobileDodge"), mobileLock: $("mobileLock"), mobileSlide: $("mobileSlide"), mobileSkills: $("mobileSkills"),
     skills: $("skillsScreen"), skillsButton: $("skillsButton"), closeSkills: $("closeSkillsButton"),
-    resetProgress: $("resetProgressButton"), skillBranches: $("skillBranches"), skillPointBadge: $("skillPointBadge"),
+    resetProgress: $("resetProgressButton"), skillBranches: $("skillBranches"), skillPointBadge: $("skillPointBadge"), mobileSkillPointBadge: $("mobileSkillPointBadge"),
     playerLevel: $("playerLevel"), levelXpBar: $("levelXpBar"), levelXpText: $("levelXpText"),
     weaponLevel: $("weaponLevel"), weaponXpBar: $("weaponXpBar"), weaponXpText: $("weaponXpText"),
     treePlayerLevel: $("treePlayerLevel"), treeLevelXpBar: $("treeLevelXpBar"), treeLevelXpText: $("treeLevelXpText"),
@@ -56,7 +56,38 @@
   const persistenceDisabled = testMode && !launchParams.has("test-save");
   const REALM_KEY = "ashenhold-realm-v1";
   const RUN_SAVE_KEY = "ashenhold-active-run-v1";
-  const WORLD_LAYOUT_VERSION = 6;
+  const WORLD_LAYOUT_VERSION = 7;
+  const CANONICAL_WORLD_SCALE = Object.freeze({
+    unitMeters: 1, wardenHeight: 1.9, doorHeight: 2.8, doorWidth: 2.4,
+    houseHeight: [8, 12], castleWallHeight: [9, 15], gateHeight: [7, 10], towerHeight: [18, 32]
+  });
+  // Imported packs use unrelated source units. These targets are measured in the game's
+  // canonical one-unit-per-meter space and converted from each loaded model's bounding box.
+  const MODEL_SCALE_TARGETS = Object.freeze({
+    tower: { role: "castle tower", targetHeight: 21 }, towerTop: { role: "tower crown", targetSpan: 15.5 },
+    wall: { role: "castle wall", targetSpan: 16, targetHeight: 12.5 }, wallCorner: { role: "castle corner", targetSpan: 16, targetHeight: 12.5 },
+    gate: { role: "castle gate", targetSpan: 14, targetHeight: 9.5 }, doorway: { role: "castle doorway", targetSpan: 14, targetHeight: 12.5 },
+    stairs: { role: "castle stairs", targetSpan: 10 }, bridge: { role: "bridge", targetSpan: 18, targetHeight: 7.5 },
+    bridgePillar: { role: "bridge pier", targetHeight: 14 }, siegeTower: { role: "siege tower", targetHeight: 17 },
+    tavern: { role: "two-storey tavern", targetHeight: 10.5 }, market: { role: "market hall", targetHeight: 8.5 },
+    blacksmith: { role: "blacksmith", targetHeight: 8.5 }, homeA: { role: "dwelling", targetHeight: 8.5 },
+    homeB: { role: "dwelling", targetHeight: 9 }, windmill: { role: "windmill", targetHeight: 17 },
+    towerA: { role: "watchtower", targetHeight: 19 }, towerB: { role: "watchtower", targetHeight: 22 },
+    church: { role: "church", targetHeight: 13 }, ruinedHouse: { role: "ruined dwelling", targetHeight: 9 },
+    crypt: { role: "crypt", targetHeight: 9.5 }, cryptA: { role: "crypt", targetHeight: 9 },
+    cryptSmall: { role: "small crypt", targetHeight: 7.5 }, tree: { role: "old-growth tree", targetHeight: 32 },
+    treePalm: { role: "coastal tree", targetHeight: 22 }, treePalmBend: { role: "jungle tree", targetHeight: 27 },
+    treePineA: { role: "conifer", targetHeight: 27 }, treePineB: { role: "conifer", targetHeight: 30 },
+    pineCrooked: { role: "crooked pine", targetHeight: 24 }
+  });
+  const SKY_PROFILES = Object.freeze({
+    jungle: { id: "verdant-canopy", features: ["humid-cloud-decks", "sun-shafts", "green-gold-haze"], halo: [520, 230, -420], haloScale: 150 },
+    shore: { id: "tempest-coast", features: ["storm-shelves", "rain-shafts", "sea-horizon"], halo: [650, 145, -330], haloScale: 120 },
+    desert: { id: "ember-dust", features: ["dust-bands", "white-hot-sun", "heat-horizon"], halo: [720, 195, -210], haloScale: 190 },
+    snowy: { id: "frozen-aurora", features: ["aurora-ribbons", "snow-clouds", "ice-horizon"], halo: [610, 205, -370], haloScale: 135 },
+    mountains: { id: "high-altitude", features: ["massive-clouds", "distant-peaks", "altitude-blue"], halo: [690, 235, -270], haloScale: 145 },
+    moon: { id: "celestial-void", features: ["starfield", "eclipse-moon", "violet-nebula"], halo: [690, 260, -160], haloScale: 105 }
+  });
   const BIOMES = {
     snowy: { name: "FROSTBOUND WILDS", textureId: "snow", relief: 1.05, base: 2.6, fog: 0x869ca6, fogDensity: .00195, ground: 0x718087, cliff: 0x7d898d, grass: 0x50625c, grassStrength: .42, frost: 0xc9d4d5, frostStart: 16, water: 0x315663, waterLevel: -3.2, waterOpacity: .62, sky: 0xb2c5ce, sun: 0xffead2, sunIntensity: 1.22, hemi: 0xa9bdc4, exposure: 1.1, skyZenith: 0x6b87a0, skyHorizon: 0xdfe9ec, skyGlow: 0xdceef4, stoneTint: 0xcfdde2, particleSize: 1.4, particleOpacity: .5, particleFall: .55, particleCount: 1 },
     jungle: { name: "VERDANT RUINS", textureId: "jungle", relief: .72, base: 3.2, fog: 0x1b352c, fogDensity: .00305, ground: 0x344a32, cliff: 0x465448, grass: 0x284b2d, grassStrength: 1.0, frost: 0x7a8a76, frostStart: 125, water: 0x1e514c, waterLevel: -2.4, waterOpacity: .72, sky: 0x71968d, sun: 0xffd5a7, sunIntensity: 1.12, hemi: 0x759a82, exposure: 1.02, skyZenith: 0x1d3a33, skyHorizon: 0x7fae8f, skyGlow: 0xe8c87a, stoneTint: 0x718a64, particleSize: 1.05, particleOpacity: .38, particleFall: .7, particleCount: .9 },
@@ -213,6 +244,17 @@
   let verticalRouteReports = [];
   let biomePropsReport = { kind: "none", total: 0, byKind: {} };
   let importedModelInstances = 0;
+  let modelScaleRegistry = {};
+  let skyReport = { id: "unbuilt", signature: "", features: [], featureCount: 0, gradientStops: 0, horizonBlend: false };
+  let forestChunks = [];
+  let forestVisibilityTimer = 0;
+  let forestReport = {
+    profile: "none", total: 0, heroes: 0, chunks: 0, visible: 0,
+    nearChunks: 0, farChunks: 0, culledChunks: 0, nearTrees: 0, farTrees: 0,
+    instancedMeshes: 0, heroColliders: 0, maxTrunkDiameter: 0
+  };
+  let infrastructureReport = { total: 0, byKind: {}, colliders: 0, importedModels: 0 };
+  let captureFlags = [];
   let groundEnemies = [];
   let experienceRunes = [];
   let chests = [];
@@ -235,6 +277,7 @@
   const raycaster = new THREE.Raycaster();
 
   const encounterRng = { state: ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0 };
+  const slideTestSurfaceCache = {};
 
   function encounterRandom() {
     let value = encounterRng.state >>> 0;
@@ -309,6 +352,20 @@
     sprintLatch: false,
     superSprintLatch: false,
     sprintExhausted: false,
+    sliding: false,
+    slideSpeed: 0,
+    slideDirection: new THREE.Vector3(0, 0, -1),
+    slideTime: 0,
+    slideSlopeDegrees: 0,
+    slideInputPressed: false,
+    slideExitBlocked: false,
+    slideCollision: false,
+    slideFxTimer: 0,
+    mobileSlideHeld: false,
+    airMomentum: new THREE.Vector3(),
+    airbornePhase: "grounded",
+    landingTime: 0,
+    landingImpact: 0,
     stormstrideTimer: 0,
     jumpTime: 0,
     attackVariant: 0,
@@ -445,14 +502,55 @@
   }
   const terrainFeatures = buildTerrainFeatures();
   worldLayout.pois = generatePoiLayout();
+  function generateInfrastructureLayout() {
+    const salt = worldLayout.salt + 10400;
+    const palettes = {
+      jungle: ["collapsed-wall", "road-shrine", "abandoned-farm", "hunter-platform", "broken-cart", "root-vigil"],
+      shore: ["collapsed-wall", "road-shrine", "fisher-camp", "broken-cart", "watch-platform", "drowned-pier"],
+      desert: ["buried-wall", "road-shrine", "abandoned-farm", "broken-cart", "waystone", "petrified-vigil"],
+      snowy: ["collapsed-wall", "road-shrine", "hunter-platform", "broken-cart", "waystone", "frozen-camp"],
+      mountains: ["collapsed-wall", "road-shrine", "watch-platform", "broken-cart", "waystone", "fallen-bridge"],
+      moon: ["collapsed-wall", "void-shrine", "ruined-habitation", "broken-cart", "waystone", "crystal-vigil"]
+    };
+    const kinds = palettes[realm.biome] || palettes.jungle;
+    const target = 24 + Math.floor(seeded(salt + 1) * 9);
+    const sites = [];
+    const anchors = [[START.x, START.z, 52], [TITLE_VANTAGE.x, TITLE_VANTAGE.z, 42], [RUINS.x, RUINS.z - 24, 86], [RUNE_HOLLOW.x, RUNE_HOLLOW.z, 38]];
+    for (let slot = 0; slot < target; slot += 1) {
+      for (let attempt = 0; attempt < 96; attempt += 1) {
+        const roll = salt + slot * 419 + attempt * 17;
+        const x = (seeded(roll + 1) - .5) * 1480;
+        const z = (seeded(roll + 2) - .5) * 1480;
+        if (Math.abs(x) > 740 || Math.abs(z) > 740) continue;
+        const y = rawTerrainHeight(x, z);
+        if (y <= biome.waterLevel + .8) continue;
+        const slope = Math.abs(rawTerrainHeight(x + 2, z) - y) + Math.abs(rawTerrainHeight(x, z + 2) - y);
+        if (slope > 1.25) continue;
+        if (z > -195 && z < 245 && Math.abs(x - roadCenterAt(z)) < 25) continue;
+        let clear = anchors.every((anchor) => Math.hypot(x - anchor[0], z - anchor[1]) >= anchor[2]);
+        for (let index = 0; index < worldLayout.forts.length && clear; index += 1) clear = Math.hypot(x - worldLayout.forts[index][0], z - worldLayout.forts[index][1]) >= 78;
+        for (let index = 0; index < worldLayout.routes.length && clear; index += 1) clear = Math.hypot(x - worldLayout.routes[index][0], z - worldLayout.routes[index][1]) >= 58;
+        for (let index = 0; index < worldLayout.pois.length && clear; index += 1) clear = Math.hypot(x - worldLayout.pois[index].x, z - worldLayout.pois[index].z) >= 54;
+        for (let index = 0; index < sites.length && clear; index += 1) clear = Math.hypot(x - sites[index].x, z - sites[index].z) >= 35;
+        if (!clear) continue;
+        sites.push({
+          id: "micro-" + slot, kind: kinds[Math.floor(seeded(roll + 3) * kinds.length)],
+          x, z, rotation: seeded(roll + 4) * Math.PI * 2, variant: Math.floor(seeded(roll + 5) * 4)
+        });
+        break;
+      }
+    }
+    return sites;
+  }
+  worldLayout.infrastructure = generateInfrastructureLayout();
   const foundationZones = [
     { id: "title-vantage", x: TITLE_VANTAGE.x, z: TITLE_VANTAGE.z, inner: 14, outer: 28, lift: 0 },
     { id: "start", x: START.x, z: START.z, inner: 18, outer: 42, lift: .2 },
-    { id: "keep", x: RUINS.x, z: RUINS.z - 24, inner: 42, outer: 70, lift: 0 },
+    { id: "keep", x: RUINS.x, z: RUINS.z - 27, inner: 47, outer: 84, lift: 0 },
     { id: "rune-hollow", x: RUNE_HOLLOW.x, z: RUNE_HOLLOW.z, inner: 10, outer: 24, lift: 0 }
-  ].concat(worldLayout.forts.map((fort, index) => ({ id: "fort-" + index, x: fort[0], z: fort[1], inner: 30, outer: 58, lift: .15 })))
+  ].concat(worldLayout.forts.map((fort, index) => ({ id: "fort-" + index, x: fort[0], z: fort[1], inner: 38, outer: 68, lift: .15 })))
     .concat(worldLayout.routes.map((route, index) => ({ id: "route-" + index, x: route[0], z: route[1], inner: 16, outer: 34, lift: .25 })))
-    .concat(worldLayout.pois.map((poi, index) => ({ id: "poi-" + index, x: poi.x, z: poi.z, inner: 14, outer: 30, lift: .18 })));
+    .concat(worldLayout.pois.map((poi, index) => ({ id: "poi-" + index, x: poi.x, z: poi.z, inner: poi.kind === "hamlet" ? 23 : 17, outer: poi.kind === "hamlet" ? 44 : 35, lift: .18 })));
   const foundationTargets = new Map();
   function roadCenterAt(z) {
     const t = clamp((215 - z) / 368, 0, 1);
@@ -1036,7 +1134,9 @@
     if (ui.mobileWeapon) ui.mobileWeapon.querySelector("span").textContent = String(WEAPON_IDS.indexOf(player.activeWeapon) + 1);
     ui.treeSkillPoints.textContent = player.skillPoints + " + " + player.runSkillPoints;
     ui.skillPointBadge.textContent = player.skillPoints + player.runSkillPoints;
+    if (ui.mobileSkillPointBadge) ui.mobileSkillPointBadge.textContent = player.skillPoints + player.runSkillPoints;
     ui.skillsButton.classList.toggle("no-points", player.skillPoints + player.runSkillPoints < 1);
+    if (ui.mobileSkills) ui.mobileSkills.classList.toggle("no-points", player.skillPoints + player.runSkillPoints < 1);
     if (ui.skillBranches.children.length) {
       ui.skillBranches.querySelectorAll("[data-skill]").forEach((button) => {
         const node = skillById.get(button.dataset.skill);
@@ -1072,7 +1172,7 @@
     game.dataset.state = state;
     ui.skills.classList.remove("active");
     lastTime = performance.now();
-    if (!isCoarse && !testMode) requestPointer();
+    if (!isCoarse && !testMode) showMessage("CLICK THE REALM TO RECAPTURE THE MOUSE", "#9fcbd4");
   }
 
   function clearProgressionData() {
@@ -1271,6 +1371,55 @@
     });
   }
 
+  function measureLoadedModelRegistry() {
+    modelScaleRegistry = {};
+    const assets = visualAssets.models || {};
+    Object.keys(assets).forEach((id) => {
+      const sceneRoot = assets[id] && assets[id].scene;
+      if (!sceneRoot) return;
+      sceneRoot.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(sceneRoot);
+      const sx = Math.max(.01, box.max.x - box.min.x);
+      const sy = Math.max(.01, box.max.y - box.min.y);
+      const sz = Math.max(.01, box.max.z - box.min.z);
+      const target = MODEL_SCALE_TARGETS[id] || null;
+      const canonicalScale = target
+        ? target.targetSpan ? target.targetSpan / Math.max(sx, sz) : target.targetHeight / sy
+        : 1;
+      const canonicalScaleY = target && target.targetHeight ? target.targetHeight / sy : canonicalScale;
+      modelScaleRegistry[id] = {
+        id, role: target ? target.role : "prop", sx, sy, sz,
+        minX: box.min.x, minY: box.min.y, minZ: box.min.z,
+        maxX: box.max.x, maxY: box.max.y, maxZ: box.max.z,
+        canonicalScale, canonicalScaleY,
+        targetHeight: target && target.targetHeight || null,
+        targetSpan: target && target.targetSpan || null,
+        worldWidth: sx * canonicalScale, worldHeight: sy * canonicalScaleY, worldDepth: sz * canonicalScale
+      };
+    });
+  }
+
+  function canonicalModelScale(id, multiplier) {
+    const metric = modelScaleRegistry[id];
+    return (metric ? metric.canonicalScale : 1) * (multiplier == null ? 1 : multiplier);
+  }
+
+  function modelVerticalScale(id, horizontalScale) {
+    const metric = modelScaleRegistry[id];
+    if (!metric || !metric.canonicalScale) return horizontalScale;
+    return horizontalScale * metric.canonicalScaleY / metric.canonicalScale;
+  }
+
+  function scaledModelCollider(id, scale, heightLimit) {
+    const metric = modelScaleRegistry[id];
+    if (!metric) return null;
+    const verticalScale = modelVerticalScale(id, scale);
+    return {
+      hx: metric.sx * scale * .46, hz: metric.sz * scale * .46,
+      minY: 0, maxY: Math.min(metric.sy * verticalScale, heightLimit == null ? Infinity : heightLimit)
+    };
+  }
+
   async function loadModelAssets() {
     visualAssets.models = {};
     if (!THREE.GLTFLoader) {
@@ -1374,6 +1523,7 @@
       if (result.status === "fulfilled") visualAssets.models[id] = result.value;
       else console.warn("3D model failed to load:", entries[index][1], result.reason);
     });
+    measureLoadedModelRegistry();
   }
 
   async function boot() {
@@ -1397,6 +1547,7 @@
       createRuins();
       createWilderness();
       createImportedWorld();
+      createInfrastructure();
       createVerticalRoutes();
       createExperienceRunes();
       createSettlements();
@@ -1478,6 +1629,97 @@
     glowGradient.addColorStop(1, "rgba(" + glowRgb + ",0)");
     context.fillStyle = glowGradient;
     context.fillRect(0, 0, 1024, 512);
+    const profile = SKY_PROFILES[realm.biome] || SKY_PROFILES.jungle;
+    const skySalt = 13100 + BIOME_IDS.indexOf(realm.biome) * 1000;
+    let featureCount = 0;
+    const ellipse = (x, y, rx, ry, color, alpha) => {
+      context.save();
+      context.globalAlpha = alpha;
+      context.fillStyle = color;
+      context.beginPath();
+      context.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+      featureCount += 1;
+    };
+    if (realm.biome === "jungle") {
+      for (let index = 0; index < 28; index += 1) {
+        ellipse(seeded(skySalt + index * 5) * 1100 - 38, 165 + seeded(skySalt + index * 5 + 1) * 135,
+          42 + seeded(skySalt + index * 5 + 2) * 95, 9 + seeded(skySalt + index * 5 + 3) * 24, "#17392e", .12 + seeded(skySalt + index * 5 + 4) * .14);
+      }
+      context.save();
+      context.globalCompositeOperation = "screen";
+      for (let index = 0; index < 7; index += 1) {
+        const x = 410 + index * 45 + seeded(skySalt + 300 + index) * 70;
+        const shaft = context.createLinearGradient(x, 112, x + 80, 390);
+        shaft.addColorStop(0, "rgba(238,215,135,.2)");
+        shaft.addColorStop(1, "rgba(238,215,135,0)");
+        context.fillStyle = shaft;
+        context.beginPath();
+        context.moveTo(x, 100); context.lineTo(x + 25, 100); context.lineTo(x + 145, 420); context.lineTo(x + 65, 420); context.closePath(); context.fill();
+        featureCount += 1;
+      }
+      context.restore();
+    } else if (realm.biome === "shore") {
+      for (let index = 0; index < 24; index += 1) {
+        ellipse(seeded(skySalt + index * 7) * 1120 - 48, 100 + seeded(skySalt + index * 7 + 1) * 170,
+          55 + seeded(skySalt + index * 7 + 2) * 120, 13 + seeded(skySalt + index * 7 + 3) * 32, index % 3 ? "#233c46" : "#72898e", .18 + seeded(skySalt + index * 7 + 4) * .22);
+      }
+      context.save();
+      context.strokeStyle = "rgba(168,204,210,.15)";
+      context.lineWidth = 3;
+      for (let index = 0; index < 15; index += 1) {
+        const x = 40 + seeded(skySalt + 500 + index * 3) * 950;
+        context.beginPath(); context.moveTo(x, 205); context.lineTo(x - 75, 420); context.stroke();
+        featureCount += 1;
+      }
+      context.restore();
+    } else if (realm.biome === "desert") {
+      for (let index = 0; index < 15; index += 1) {
+        ellipse(seeded(skySalt + index * 7) * 1080 - 28, 250 + seeded(skySalt + index * 7 + 1) * 95,
+          80 + seeded(skySalt + index * 7 + 2) * 150, 12 + seeded(skySalt + index * 7 + 3) * 25, index % 2 ? "#9d6c43" : "#d7a066", .09 + seeded(skySalt + index * 7 + 4) * .16);
+      }
+      const heat = context.createLinearGradient(0, 230, 0, 340);
+      heat.addColorStop(0, "rgba(255,205,121,0)"); heat.addColorStop(.55, "rgba(255,190,101,.21)"); heat.addColorStop(1, "rgba(111,64,39,0)");
+      context.fillStyle = heat; context.fillRect(0, 220, 1024, 140); featureCount += 1;
+    } else if (realm.biome === "snowy") {
+      context.save();
+      context.globalCompositeOperation = "screen";
+      context.lineCap = "round";
+      for (let band = 0; band < 5; band += 1) {
+        context.strokeStyle = band % 2 ? "rgba(102,226,195,.2)" : "rgba(126,155,255,.18)";
+        context.lineWidth = 16 + band * 5;
+        context.beginPath();
+        context.moveTo(-40, 95 + band * 18);
+        context.bezierCurveTo(230, 28 + band * 11, 470, 205 - band * 9, 760, 82 + band * 13);
+        context.bezierCurveTo(870, 45 + band * 12, 960, 100 + band * 16, 1070, 64 + band * 10);
+        context.stroke(); featureCount += 1;
+      }
+      context.restore();
+      for (let index = 0; index < 16; index += 1) ellipse(seeded(skySalt + index * 5) * 1100 - 38, 190 + seeded(skySalt + index * 5 + 1) * 105, 46 + seeded(skySalt + index * 5 + 2) * 90, 10 + seeded(skySalt + index * 5 + 3) * 20, "#d5e0e3", .08 + seeded(skySalt + index * 5 + 4) * .12);
+    } else if (realm.biome === "mountains") {
+      for (let index = 0; index < 22; index += 1) ellipse(seeded(skySalt + index * 6) * 1120 - 48, 85 + seeded(skySalt + index * 6 + 1) * 170, 48 + seeded(skySalt + index * 6 + 2) * 115, 12 + seeded(skySalt + index * 6 + 3) * 30, index % 2 ? "#394b5a" : "#c5d0d4", .1 + seeded(skySalt + index * 6 + 4) * .18);
+      context.save(); context.fillStyle = "rgba(32,42,51,.35)"; context.beginPath(); context.moveTo(0, 330);
+      for (let x = 0; x <= 1024; x += 42) context.lineTo(x, 330 - seeded(skySalt + 700 + x) * 88);
+      context.lineTo(1024, 390); context.lineTo(0, 390); context.closePath(); context.fill(); context.restore(); featureCount += 1;
+    } else {
+      context.save(); context.fillStyle = "rgba(221,231,255,.88)";
+      for (let index = 0; index < 190; index += 1) {
+        const radius = .45 + seeded(skySalt + index * 5 + 2) * 1.45;
+        context.globalAlpha = .25 + seeded(skySalt + index * 5 + 3) * .7;
+        context.beginPath(); context.arc(seeded(skySalt + index * 5) * 1024, seeded(skySalt + index * 5 + 1) * 330, radius, 0, Math.PI * 2); context.fill();
+      }
+      context.restore(); featureCount += 190;
+      const nebula = context.createRadialGradient(220, 115, 8, 220, 115, 280);
+      nebula.addColorStop(0, "rgba(142,102,210,.24)"); nebula.addColorStop(.5, "rgba(85,64,151,.11)"); nebula.addColorStop(1, "rgba(35,29,77,0)");
+      context.fillStyle = nebula; context.fillRect(0, 0, 560, 390); featureCount += 1;
+      ellipse(790, 112, 54, 54, "#bac7ff", .62); ellipse(807, 100, 51, 51, "#171a31", .94);
+    }
+    skyReport = {
+      id: profile.id, features: profile.features.slice(), featureCount,
+      signature: profile.id + ":" + biome.skyZenith.toString(16) + ":" + featureCount,
+      gradientStops: 5, horizonBlend: true
+    };
     const texture = new THREE.CanvasTexture(surface);
     texture.encoding = THREE.sRGBEncoding;
     texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -1537,8 +1779,9 @@
       map: haloTexture, color: biome.skyGlow || biome.sun, transparent: true, opacity: realm.biome === "moon" ? .72 : .52,
       blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false
     }));
-    halo.position.set(760, 180, -150);
-    halo.scale.setScalar(realm.biome === "moon" ? 105 : 170);
+    const skyProfile = SKY_PROFILES[realm.biome] || SKY_PROFILES.jungle;
+    halo.position.set(skyProfile.halo[0], skyProfile.halo[1], skyProfile.halo[2]);
+    halo.scale.setScalar(skyProfile.haloScale);
     halo.renderOrder = -90;
     sky.add(halo);
 
@@ -1859,44 +2102,46 @@
     ruins.name = "Ashenhold Keep";
     scene.add(ruins);
     const z = RUINS.z;
-    addStoneBox(ruins, -24, z - 25, 5, 11, 52, 0, true);
-    addStoneBox(ruins, 24, z - 25, 5, 11, 52, 0, true);
-    addStoneBox(ruins, -16, z - 51, 19, 9, 5, 0, true);
-    addStoneBox(ruins, 16, z - 51, 19, 13, 5, 0, true);
-    addStoneBox(ruins, -17, z + 2, 15, 8, 4, 0, true);
-    addStoneBox(ruins, 17, z + 2, 15, 6, 4, 0, true);
+    // Canonical keep: a roughly 80 x 82 metre defensible enclosure, with a nine-metre gate.
+    addStoneBox(ruins, -38, z - 27, 6, 15, 82, 0, true);
+    addStoneBox(ruins, 38, z - 27, 6, 15, 82, 0, true);
+    addStoneBox(ruins, -20, z - 68, 34, 14, 6, 0, true);
+    addStoneBox(ruins, 20, z - 68, 34, 17, 6, 0, true);
+    addStoneBox(ruins, -21, z + 14, 31, 13, 6, 0, true);
+    addStoneBox(ruins, 21, z + 14, 31, 11, 6, 0, true);
 
-    const towerGeometry = new THREE.CylinderGeometry(7.2, 8, 17, 9);
-    [[-25, z - 51], [25, z - 51], [-25, z + 2], [25, z + 2]].forEach((point, index) => {
+    const towerGeometry = new THREE.CylinderGeometry(9.2, 10.2, 26, 10);
+    [[-38, z - 68], [38, z - 68], [-38, z + 14], [38, z + 14]].forEach((point, index) => {
       const tower = new THREE.Mesh(towerGeometry, index % 2 ? darkStoneMaterial : stoneMaterial);
-      tower.position.set(point[0], terrainHeight(point[0], point[1]) + 8.5, point[1]);
+      const towerBase = terrainHeight(point[0], point[1]);
+      tower.position.set(point[0], towerBase + 13, point[1]);
       tower.rotation.y = index * .38;
       tower.castShadow = !isCoarse;
       tower.receiveShadow = true;
       ruins.add(tower);
-      colliders.push({ x: point[0], z: point[1], hx: 6.2, hz: 6.2 });
-      for (let b = 0; b < 6; b += 1) {
+      addCollider(point[0], point[1], 8.8, 8.8, 0, towerBase, towerBase + 27);
+      for (let b = 0; b < 8; b += 1) {
         if ((b + index) % 3 === 0) continue;
-        const angle = b / 6 * Math.PI * 2;
-        const battlement = new THREE.Mesh(new THREE.BoxGeometry(2.7, 2.5, 2.7), stoneMaterial);
-        battlement.position.set(point[0] + Math.cos(angle) * 6.2, tower.position.y + 9, point[1] + Math.sin(angle) * 6.2);
+        const angle = b / 8 * Math.PI * 2;
+        const battlement = new THREE.Mesh(new THREE.BoxGeometry(3.1, 3, 3.1), stoneMaterial);
+        battlement.position.set(point[0] + Math.cos(angle) * 8.2, tower.position.y + 14, point[1] + Math.sin(angle) * 8.2);
         battlement.castShadow = !isCoarse;
         ruins.add(battlement);
       }
     });
 
-    [-4.8, 4.8].forEach((x) => addStoneBox(ruins, x, z + 7, 3.2, 11, 3.5, 0, true));
-    addStoneBox(ruins, 0, z + 7, 13, 2.8, 3.5, 0, false).position.y += 8.2;
+    [-5.6, 5.6].forEach((x) => addStoneBox(ruins, x, z + 14, 3.4, 14, 5.8, 0, true));
+    addStoneBox(ruins, 0, z + 14, 14.6, 3.2, 5.8, 0, false).position.y += 10.3;
 
-    const obelisk = new THREE.Mesh(new THREE.ConeGeometry(2.3, 12, 4), darkStoneMaterial);
-    obelisk.position.set(0, terrainHeight(0, z - 26) + 6, z - 26);
+    const obelisk = new THREE.Mesh(new THREE.ConeGeometry(3.2, 17, 4), darkStoneMaterial);
+    obelisk.position.set(0, terrainHeight(0, z - 27) + 8.5, z - 27);
     obelisk.rotation.y = Math.PI / 4;
     obelisk.castShadow = !isCoarse;
     ruins.add(obelisk);
 
-    createFire(-10, z - 15, true);
-    createFire(12, z - 34, false);
-    createFire(0, z + 15, false);
+    createFire(-16, z - 12, true);
+    createFire(18, z - 43, false);
+    createFire(0, z + 24, false);
   }
 
   function createFire(x, z, withLight) {
@@ -1946,6 +2191,169 @@
     scene.add(group);
   }
 
+  const FOREST_PROFILES = Object.freeze({
+    jungle: { id: "primeval-broadleaf", desktop: 3600, coarse: 2200, minHeight: 18, maxHeight: 38, heroMin: 50, heroMax: 82, heroChance: .016, trunk: 1.28, crown: "broad", leaf: 0x214d2d, bark: 0x2b2119 },
+    snowy: { id: "ancient-conifer", desktop: 3000, coarse: 1800, minHeight: 16, maxHeight: 34, heroMin: 43, heroMax: 68, heroChance: .013, trunk: 1.05, crown: "conifer", leaf: 0x526a68, bark: 0x332c29 },
+    shore: { id: "storm-coast-grove", desktop: 2500, coarse: 1500, minHeight: 15, maxHeight: 31, heroMin: 40, heroMax: 62, heroChance: .012, trunk: .92, crown: "broad", leaf: 0x3b6650, bark: 0x3c2c21 },
+    mountains: { id: "wind-carved-pine", desktop: 2200, coarse: 1400, minHeight: 13, maxHeight: 29, heroMin: 38, heroMax: 58, heroChance: .011, trunk: .9, crown: "conifer", leaf: 0x40574c, bark: 0x332b29 },
+    desert: { id: "petrified-forest", desktop: 2000, coarse: 900, minHeight: 10, maxHeight: 24, heroMin: 32, heroMax: 52, heroChance: .01, trunk: 1.1, crown: "dead", leaf: 0x73543e, bark: 0x503727 },
+    moon: { id: "umbra-deadwood", desktop: 2200, coarse: 1200, minHeight: 11, maxHeight: 27, heroMin: 35, heroMax: 57, heroChance: .012, trunk: 1.06, crown: "crystal", leaf: 0x686a94, bark: 0x282638 }
+  });
+
+  function forestPlacementClear(x, z, padding) {
+    const clearance = padding || 0;
+    if (z > -205 && z < 255 && Math.abs(x - roadCenterAt(z)) < 18 + clearance) return false;
+    if (Math.hypot(x - START.x, z - START.z) < 48 + clearance) return false;
+    if (Math.hypot(x - TITLE_VANTAGE.x, z - TITLE_VANTAGE.z) < 34 + clearance) return false;
+    if (Math.hypot(x - RUINS.x, z - (RUINS.z - 27)) < 88 + clearance) return false;
+    if (Math.hypot(x - RUNE_HOLLOW.x, z - RUNE_HOLLOW.z) < 28 + clearance) return false;
+    for (let index = 0; index < worldLayout.forts.length; index += 1) if (Math.hypot(x - worldLayout.forts[index][0], z - worldLayout.forts[index][1]) < 66 + clearance) return false;
+    for (let index = 0; index < worldLayout.routes.length; index += 1) if (Math.hypot(x - worldLayout.routes[index][0], z - worldLayout.routes[index][1]) < 44 + clearance) return false;
+    for (let index = 0; index < worldLayout.pois.length; index += 1) if (Math.hypot(x - worldLayout.pois[index].x, z - worldLayout.pois[index].z) < 38 + clearance) return false;
+    for (let index = 0; index < worldLayout.infrastructure.length; index += 1) if (Math.hypot(x - worldLayout.infrastructure[index].x, z - worldLayout.infrastructure[index].z) < 12 + clearance) return false;
+    return true;
+  }
+
+  function createAncientForest() {
+    const profile = FOREST_PROFILES[realm.biome] || FOREST_PROFILES.jungle;
+    const target = isCoarse ? profile.coarse : profile.desktop;
+    const placements = [];
+    const salt = worldLayout.salt + 15200;
+    for (let attempt = 0; placements.length < target && attempt < target * 16; attempt += 1) {
+      const roll = salt + attempt * 19;
+      const x = (seeded(roll + 1) - .5) * 1660;
+      const z = (seeded(roll + 2) - .5) * 1660;
+      if (!forestPlacementClear(x, z, 1.5)) continue;
+      const y = terrainHeight(x, z);
+      if (y <= biome.waterLevel + .45) continue;
+      const slope = Math.abs(terrainHeight(x + 1.5, z) - y) + Math.abs(terrainHeight(x, z + 1.5) - y);
+      if (slope > 1.35) continue;
+      const hero = seeded(roll + 3) < profile.heroChance;
+      const height = hero
+        ? lerp(profile.heroMin, profile.heroMax, seeded(roll + 4))
+        : lerp(profile.minHeight, profile.maxHeight, seeded(roll + 4));
+      const trunkRadius = hero
+        ? lerp(2.3, realm.biome === "jungle" ? 6.7 : 5.2, seeded(roll + 5))
+        : (.38 + seeded(roll + 5) * .78) * profile.trunk;
+      const crownRadius = hero ? height * (.18 + seeded(roll + 6) * .08) : height * (.14 + seeded(roll + 6) * .065);
+      placements.push({ x, y, z, height, trunkRadius, crownRadius, hero, rotation: seeded(roll + 7) * Math.PI * 2 });
+    }
+    const chunkSize = 180;
+    const buckets = new Map();
+    placements.forEach((tree) => {
+      const gx = Math.floor((tree.x + HALF_WORLD) / chunkSize);
+      const gz = Math.floor((tree.z + HALF_WORLD) / chunkSize);
+      const key = gx + ":" + gz;
+      if (!buckets.has(key)) buckets.set(key, { gx, gz, trees: [] });
+      buckets.get(key).trees.push(tree);
+    });
+    const trunkGeometry = new THREE.CylinderGeometry(.45, .65, 1, isCoarse ? 5 : 7);
+    const crownGeometry = profile.crown === "conifer" ? new THREE.ConeGeometry(1, 1, isCoarse ? 5 : 7)
+      : profile.crown === "crystal" ? new THREE.OctahedronGeometry(1, 0)
+      : profile.crown === "dead" ? new THREE.ConeGeometry(.45, 1, 5)
+      : new THREE.SphereGeometry(1, isCoarse ? 5 : 7, isCoarse ? 4 : 6);
+    const farGeometry = new THREE.ConeGeometry(.72, 1, 5);
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: profile.bark, roughness: 1, metalness: 0 });
+    const crownMaterial = new THREE.MeshStandardMaterial({
+      color: profile.leaf, roughness: .96, metalness: profile.crown === "crystal" ? .2 : 0,
+      emissive: profile.crown === "crystal" ? 0x26264d : 0x000000,
+      emissiveIntensity: profile.crown === "crystal" ? .35 : 0
+    });
+    const farMaterial = new THREE.MeshLambertMaterial({ color: new THREE.Color(profile.leaf).multiplyScalar(.72) });
+    const matrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    forestChunks = [];
+    let heroColliderBudget = isCoarse ? 12 : 28;
+    const colliderCountBefore = colliders.length;
+    buckets.forEach((bucket) => {
+      const centerX = -HALF_WORLD + (bucket.gx + .5) * chunkSize;
+      const centerZ = -HALF_WORLD + (bucket.gz + .5) * chunkSize;
+      const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, bucket.trees.length);
+      const crownMesh = new THREE.InstancedMesh(crownGeometry, crownMaterial, bucket.trees.length);
+      const farMesh = new THREE.InstancedMesh(farGeometry, farMaterial, bucket.trees.length);
+      bucket.trees.forEach((tree, index) => {
+        quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), tree.rotation);
+        matrix.compose(
+          new THREE.Vector3(tree.x - centerX, tree.y + tree.height * .5, tree.z - centerZ), quaternion,
+          new THREE.Vector3(tree.trunkRadius / .65, tree.height, tree.trunkRadius / .65)
+        );
+        trunkMesh.setMatrixAt(index, matrix);
+        const crownHeight = profile.crown === "dead" ? tree.height * .42 : tree.height * (tree.hero ? .52 : .46);
+        const crownY = tree.y + tree.height * (profile.crown === "conifer" ? .7 : .78);
+        matrix.compose(
+          new THREE.Vector3(tree.x - centerX, crownY, tree.z - centerZ), quaternion,
+          new THREE.Vector3(tree.crownRadius, crownHeight, tree.crownRadius)
+        );
+        crownMesh.setMatrixAt(index, matrix);
+        matrix.compose(
+          new THREE.Vector3(tree.x - centerX, tree.y + tree.height * .5, tree.z - centerZ), quaternion,
+          new THREE.Vector3(Math.max(tree.trunkRadius * 1.5, tree.crownRadius * .72), tree.height, Math.max(tree.trunkRadius * 1.5, tree.crownRadius * .72))
+        );
+        farMesh.setMatrixAt(index, matrix);
+        if (tree.hero && heroColliderBudget > 0) {
+          addCollider(tree.x, tree.z, tree.trunkRadius * .72, tree.trunkRadius * .72, 0, tree.y, tree.y + tree.height);
+          heroColliderBudget -= 1;
+        }
+      });
+      [trunkMesh, crownMesh, farMesh].forEach((mesh) => {
+        mesh.position.set(centerX, 0, centerZ);
+        mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.frustumCulled = false;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+      });
+      trunkMesh.castShadow = !isCoarse;
+      crownMesh.castShadow = false;
+      farMesh.castShadow = false;
+      forestChunks.push({ centerX, centerZ, count: bucket.trees.length, nearMeshes: [trunkMesh, crownMesh], farMesh });
+    });
+    forestReport = {
+      profile: profile.id, total: placements.length,
+      heroes: placements.filter((tree) => tree.hero).length,
+      chunks: forestChunks.length, visible: 0,
+      nearChunks: 0, farChunks: 0, culledChunks: forestChunks.length,
+      nearTrees: 0, farTrees: 0,
+      instancedMeshes: forestChunks.length * 3,
+      heroColliders: colliders.length - colliderCountBefore,
+      maxTrunkDiameter: placements.reduce((maximum, tree) => Math.max(maximum, tree.trunkRadius * 2), 0),
+      potentialDrawCalls: forestChunks.length * 3
+    };
+    updateAncientForestVisibility(true);
+  }
+
+  function updateAncientForestVisibility(force) {
+    if (!force) {
+      forestVisibilityTimer -= .016;
+      if (forestVisibilityTimer > 0) return;
+    }
+    forestVisibilityTimer = .35;
+    const focus = player.root ? player.root.position : TITLE_VANTAGE;
+    const nearDistance = isCoarse ? 150 : 255;
+    const farDistance = (isCoarse ? 390 : 650) * Math.max(.72, qualityScale);
+    let visible = 0;
+    let nearChunks = 0;
+    let farChunks = 0;
+    let nearTrees = 0;
+    let farTrees = 0;
+    forestChunks.forEach((chunk) => {
+      const distance = Math.hypot(chunk.centerX - focus.x, chunk.centerZ - focus.z);
+      const near = distance < nearDistance;
+      const far = !near && distance < farDistance;
+      chunk.nearMeshes.forEach((mesh) => { mesh.visible = near; });
+      chunk.farMesh.visible = far;
+      if (near) { nearChunks += 1; nearTrees += chunk.count; }
+      else if (far) { farChunks += 1; farTrees += chunk.count; }
+      if (near || far) visible += chunk.count;
+    });
+    forestReport.visible = visible;
+    forestReport.nearChunks = nearChunks;
+    forestReport.farChunks = farChunks;
+    forestReport.culledChunks = Math.max(0, forestChunks.length - nearChunks - farChunks);
+    forestReport.nearTrees = nearTrees;
+    forestReport.farTrees = farTrees;
+  }
+
   function createWilderness() {
     const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
     const rockMaterial = new THREE.MeshStandardMaterial({ color: biome.cliff, roughness: .98 });
@@ -1965,14 +2373,7 @@
     rocks.receiveShadow = true;
     scene.add(rocks);
 
-    const treeDensity = realm.biome === "moon" ? 0 : realm.biome === "desert" ? .22 : realm.biome === "jungle" ? 1.7 : realm.biome === "shore" ? .72 : 1;
-    const treeCount = Math.round((isCoarse ? 20 : 38) * treeDensity);
-    for (let i = 0; i < treeCount; i += 1) {
-      let x = (seeded(i * 17 + 8) - .5) * 900;
-      let z = (seeded(i * 23 + 2) - .5) * 900;
-      if (Math.abs(x) < 23 && z > -180 && z < 230) x += x < 0 ? -35 : 35;
-      createDeadTree(x, z, .75 + seeded(i * 31) * .8, seeded(i * 19) * Math.PI * 2);
-    }
+    createAncientForest();
 
     if (!visualAssets.models || !visualAssets.models.tower) {
       createWatchtower(154, 74);
@@ -2014,10 +2415,13 @@
     if (!asset) return null;
     const root = asset.scene.clone(true);
     root.name = "Imported " + id;
-    root.scale.setScalar(scale || 1);
+    const horizontalScale = scale || 1;
+    const verticalScale = modelVerticalScale(id, horizontalScale);
+    root.scale.set(horizontalScale, verticalScale, horizontalScale);
     root.rotation.y = rotation || 0;
     const groundY = Number.isFinite(baseY) ? baseY : terrainHeight(x, z);
-    root.position.set(x, groundY + (yOffset || 0), z);
+    const metric = modelScaleRegistry[id];
+    root.position.set(x, groundY + (yOffset || 0) - (metric ? metric.minY * verticalScale : 0), z);
     const wooden = id === "catapult" || id === "siegeTower";
     const ironwork = id === "gate";
     const palette = id === "tree" ? worldFoliageMaterial : wooden ? worldWoodMaterial : ironwork ? worldIronMaterial : darkStoneMaterial;
@@ -2044,21 +2448,13 @@
   }
 
   // --- POI pack placement (keeps original atlas materials; importedModel would override them) ---
-  const packModelMetrics = {};
   function packModelSize(key) {
-    if (!packModelMetrics[key]) {
-      const asset = visualAssets.models && visualAssets.models[key];
-      if (!asset) return null;
-      const box = new THREE.Box3().setFromObject(asset.scene);
-      packModelMetrics[key] = {
-        sx: Math.max(.05, box.max.x - box.min.x),
-        sy: Math.max(.05, box.max.y - box.min.y),
-        sz: Math.max(.05, box.max.z - box.min.z),
-        cx: (box.min.x + box.max.x) / 2,
-        cz: (box.min.z + box.max.z) / 2
-      };
-    }
-    return packModelMetrics[key];
+    const metric = modelScaleRegistry[key];
+    if (!metric) return null;
+    return Object.assign({
+      cx: (metric.minX + metric.maxX) / 2,
+      cz: (metric.minZ + metric.maxZ) / 2
+    }, metric);
   }
 
   function placePackModel(key, x, z, scale, rotation, opts) {
@@ -2067,10 +2463,13 @@
     const options = opts || {};
     const root = asset.scene.clone(true);
     root.name = "Pack " + key;
-    root.scale.setScalar(scale || 1);
+    const horizontalScale = scale || 1;
+    const verticalScale = modelVerticalScale(key, horizontalScale);
+    root.scale.set(horizontalScale, verticalScale, horizontalScale);
     root.rotation.y = rotation || 0;
     const baseY = Number.isFinite(options.baseY) ? options.baseY : terrainHeight(x, z);
-    root.position.set(x, baseY + (options.yOffset || 0), z);
+    const metric = modelScaleRegistry[key];
+    root.position.set(x, baseY + (options.yOffset || 0) - (metric ? metric.minY * verticalScale : 0), z);
     root.traverse((object) => {
       if (!object.isMesh) return;
       object.castShadow = !isCoarse;
@@ -2111,6 +2510,16 @@
     });
   }
 
+  function addGatewayColliders(x, z, rotation, width, depth, baseY, height, doorGap) {
+    const gap = clamp(Math.max(CANONICAL_WORLD_SCALE.doorWidth, doorGap || 4.8), 2.4, width - 1.2);
+    const postWidth = Math.max(.5, (width - gap) / 2);
+    [-1, 1].forEach((side) => {
+      const localX = side * (gap / 2 + postWidth / 2);
+      const point = poiLocalToWorld(x, z, rotation, localX, 0);
+      addCollider(point.x, point.z, postWidth / 2, depth / 2, rotation, baseY, baseY + height);
+    });
+  }
+
   // Align a model's long horizontal axis (measured from its bbox) tangent to a placement angle.
   function poiTangentRotation(angle, size) {
     return -angle - (size.sx >= size.sz ? Math.PI / 2 : 0);
@@ -2120,8 +2529,13 @@
     const fort = new THREE.Group();
     fort.name = name;
     scene.add(fort);
-    const spacing = 17 * scale / 4;
-    const towerScale = scale;
+    const fortMultiplier = clamp(scale / 4.45, .9, 1.12);
+    const spacing = 29 * fortMultiplier;
+    const towerScale = canonicalModelScale("tower", fortMultiplier);
+    const towerTopScale = canonicalModelScale("towerTop", fortMultiplier);
+    const wallScale = canonicalModelScale("wall", fortMultiplier);
+    const gateScale = canonicalModelScale("gate", fortMultiplier);
+    const doorwayScale = canonicalModelScale("doorway", fortMultiplier);
     const fortBaseY = terrainHeight(x, z);
     const cosine = Math.cos(rotation);
     const sine = Math.sin(rotation);
@@ -2136,22 +2550,32 @@
       return model;
     };
     [[-spacing,-spacing],[spacing,-spacing],[-spacing,spacing],[spacing,spacing]].forEach((offset, index) => {
-      place("tower", offset[0], offset[1], towerScale, index * Math.PI / 2, 0, { hx: 3.8 * scale / 4, hz: 3.8 * scale / 4 });
-      place("towerTop", offset[0], offset[1], towerScale, index * Math.PI / 2, 7.75 * scale / 4);
+      place("tower", offset[0], offset[1], towerScale, index * Math.PI / 2, 0, scaledModelCollider("tower", towerScale, 24 * fortMultiplier));
+      const towerHeight = modelScaleRegistry.tower ? modelScaleRegistry.tower.sy * towerScale : 21 * fortMultiplier;
+      place("towerTop", offset[0], offset[1], towerTopScale, index * Math.PI / 2, towerHeight - .35 * fortMultiplier);
     });
     [-.5,.5].forEach((side) => {
-      place("wall", side * spacing, -spacing, scale, 0, 0, { hx: 4.2 * scale / 4, hz: 1.3 * scale / 4 });
-      place("wall", side * spacing, spacing, scale, 0, 0, { hx: 4.2 * scale / 4, hz: 1.3 * scale / 4 });
-      place("wall", -spacing, side * spacing, scale, Math.PI / 2, 0, { hx: 1.3 * scale / 4, hz: 4.2 * scale / 4 });
-      place("wall", spacing, side * spacing, scale, Math.PI / 2, 0, { hx: 1.3 * scale / 4, hz: 4.2 * scale / 4 });
+      const wallCollider = scaledModelCollider("wall", wallScale, 13 * fortMultiplier);
+      place("wall", side * spacing, -spacing, wallScale, 0, 0, wallCollider);
+      place("wall", side * spacing, spacing, wallScale, 0, 0, wallCollider);
+      place("wall", -spacing, side * spacing, wallScale, Math.PI / 2, 0, wallCollider);
+      place("wall", spacing, side * spacing, wallScale, Math.PI / 2, 0, wallCollider);
     });
-    place("gate", 0, spacing, scale, 0, 0, null);
-    place("doorway", 0, -spacing, scale, 0, 0, null);
-    place("stairs", 0, -spacing * .55, scale * .9, Math.PI, 0, null);
-    place("catapult", spacing * .25, -spacing * .18, scale * .78, .55, 0, null);
-    place("rock", -spacing * .3, spacing * .15, scale * .72, 0, 0, null);
-    const fireA = worldPoint(-5, 2);
-    const fireB = worldPoint(6, -5);
+    // Kenney's gate and doorway run along their source Z axis. Turn that long axis
+    // onto the fort wall plane so the visible opening matches the traversal gap.
+    place("gate", 0, spacing, gateScale, Math.PI / 2, 0, null);
+    place("doorway", 0, -spacing, doorwayScale, Math.PI / 2, 0, null);
+    const gateMetric = modelScaleRegistry.gate;
+    const doorwayMetric = modelScaleRegistry.doorway;
+    addGatewayColliders(x - Math.sin(rotation) * spacing, z + Math.cos(rotation) * spacing, rotation,
+      gateMetric ? Math.max(gateMetric.sx, gateMetric.sz) * gateScale : 14, gateMetric ? Math.min(gateMetric.sx, gateMetric.sz) * gateScale : 2.2, fortBaseY, 9.5 * fortMultiplier, 5.4 * fortMultiplier);
+    addGatewayColliders(x + Math.sin(rotation) * spacing, z - Math.cos(rotation) * spacing, rotation,
+      doorwayMetric ? Math.max(doorwayMetric.sx, doorwayMetric.sz) * doorwayScale : 14, doorwayMetric ? Math.min(doorwayMetric.sx, doorwayMetric.sz) * doorwayScale : 2.2, fortBaseY, 12.5 * fortMultiplier, 4.8 * fortMultiplier);
+    place("stairs", 0, -spacing * .52, canonicalModelScale("stairs", fortMultiplier), Math.PI, 0, null);
+    place("catapult", spacing * .25, -spacing * .18, 3.4 * fortMultiplier, .55, 0, null);
+    place("rock", -spacing * .3, spacing * .15, 3.2 * fortMultiplier, 0, 0, null);
+    const fireA = worldPoint(-10, 5);
+    const fireB = worldPoint(12, -9);
     createFire(fireA.x, fireA.z, !isCoarse);
     createFire(fireB.x, fireB.z, false);
   }
@@ -2162,10 +2586,12 @@
       createImportedFort(fort[0], fort[1], fort[2], fort[3], fort[4]);
       registerStronghold("fort-" + index, fort[4], "fort", fort[0], fort[1]);
     });
-    importedModel("siegeTower", 34, -178, 4.1, -.45, 0, { hx: 4.5, hz: 4.5 });
-    importedModel("bridgePillar", -356, 55, 5.2, Math.PI / 2, 0, { hx: 5, hz: 8 });
-    importedModel("tree", -330, 242, 5.5, .2, 0, null);
-    importedModel("tree", 295, -310, 5.2, -1.1, 0, null);
+    const siegeScale = canonicalModelScale("siegeTower");
+    const pierScale = canonicalModelScale("bridgePillar");
+    importedModel("siegeTower", 34, -178, siegeScale, -.45, 0, scaledModelCollider("siegeTower", siegeScale, 17));
+    importedModel("bridgePillar", -356, 55, pierScale, Math.PI / 2, 0, scaledModelCollider("bridgePillar", pierScale, 14));
+    importedModel("tree", -330, 242, canonicalModelScale("tree", 1.35), .2, 0, null);
+    importedModel("tree", 295, -310, canonicalModelScale("tree", 1.2), -1.1, 0, null);
     importedModel("rock", 410, -165, 6.4, .7, 0, null);
     for (let i = 0; i < 4; i += 1) {
       const angle = seeded(7200 + i * 5) * Math.PI * 2;
@@ -2173,10 +2599,13 @@
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius;
       const rotation = seeded(7202 + i * 5) * Math.PI * 2;
-      const scale = 3.45 + seeded(7203 + i * 5) * .75;
-      importedModel("tower", x, z, scale, rotation, 0, { hx: 3.6, hz: 3.6 });
-      importedModel("towerTop", x, z, scale, rotation, 7.75 * scale / 4, null);
-      importedModel("wall", x + Math.cos(rotation) * 7.5, z + Math.sin(rotation) * 7.5, scale, rotation + Math.PI / 2, 0, null);
+      const multiplier = .86 + seeded(7203 + i * 5) * .18;
+      const towerScale = canonicalModelScale("tower", multiplier);
+      const topScale = canonicalModelScale("towerTop", multiplier);
+      const wallScale = canonicalModelScale("wall", multiplier);
+      importedModel("tower", x, z, towerScale, rotation, 0, scaledModelCollider("tower", towerScale, 22));
+      importedModel("towerTop", x, z, topScale, rotation, (modelScaleRegistry.tower ? modelScaleRegistry.tower.sy * towerScale : 21) - .3, null);
+      importedModel("wall", x + Math.cos(rotation) * 10, z + Math.sin(rotation) * 10, wallScale, rotation + Math.PI / 2, 0, scaledModelCollider("wall", wallScale, 11));
     }
     const dressingCount = realm.biome === "jungle" ? 15 : realm.biome === "moon" ? 10 : realm.biome === "desert" ? 7 : 9;
     for (let i = 0; i < dressingCount; i += 1) {
@@ -2184,8 +2613,92 @@
       const z = (seeded(7601 + i * 9) - .5) * 930;
       if (Math.abs(x) < 28 && z > -185 && z < 235) continue;
       const id = realm.biome === "jungle" ? "tree" : "rock";
-      importedModel(id, x, z, 3.2 + seeded(7602 + i * 9) * 3.4, seeded(7603 + i * 9) * Math.PI * 2, 0, null);
+      importedModel(id, x, z, id === "tree" ? canonicalModelScale("tree", .8 + seeded(7602 + i * 9) * .7) : 3.2 + seeded(7602 + i * 9) * 3.4, seeded(7603 + i * 9) * Math.PI * 2, 0, null);
     }
+  }
+
+  function createInfrastructure() {
+    const beforeColliders = colliders.length;
+    const beforeImported = importedModelInstances;
+    const byKind = {};
+    const addWoodBox = (group, x, z, width, height, depth, rotation, collider) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), worldWoodMaterial);
+      const baseY = terrainHeight(x, z);
+      mesh.position.set(x, baseY + height / 2, z);
+      mesh.rotation.y = rotation || 0;
+      mesh.castShadow = !isCoarse;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+      if (collider) addCollider(x, z, width / 2, depth / 2, rotation || 0, baseY, baseY + height);
+      return mesh;
+    };
+    (worldLayout.infrastructure || []).forEach((site, index) => {
+      byKind[site.kind] = (byKind[site.kind] || 0) + 1;
+      const group = new THREE.Group();
+      group.name = "Micro landmark " + site.id + " " + site.kind;
+      scene.add(group);
+      const point = (localX, localZ) => poiLocalToWorld(site.x, site.z, site.rotation, localX, localZ);
+      const baseY = terrainHeight(site.x, site.z);
+      if (/wall|bridge/.test(site.kind)) {
+        const lengths = [5.8, 4.6, 3.5];
+        lengths.forEach((length, segment) => {
+          const local = point((segment - 1) * 4.1, (segment % 2) * 1.2);
+          addStoneBox(group, local.x, local.z, length, 2.8 + segment * .8, 1.25, site.rotation + (segment - 1) * .16, segment === 1);
+        });
+        if (site.kind === "fallen-bridge" || site.kind === "drowned-pier") {
+          [-1, 1].forEach((side) => {
+            const local = point(side * 4.8, -3.2);
+            addWoodBox(group, local.x, local.z, 4.8, .42, 1.8, site.rotation + .28 * side, false);
+          });
+        }
+      } else if (/farm|habitation/.test(site.kind)) {
+        if (visualAssets.models && visualAssets.models.ruinedHouse) {
+          const scale = canonicalModelScale("ruinedHouse", .9 + site.variant * .035);
+          placePackModel("ruinedHouse", site.x, site.z, scale, site.rotation, { baseY });
+          const size = packModelSize("ruinedHouse");
+          addBuildingColliders(site.x, site.z, site.rotation, size.sx * scale / 2, size.sz * scale / 2, baseY, size.sy * scale, 3, size.cx * scale, size.cz * scale);
+        } else addStoneBox(group, site.x, site.z, 8, 5.5, 6.5, site.rotation, true);
+        const field = point(8, 1);
+        for (let row = -1; row <= 1; row += 1) addWoodBox(group, field.x + Math.cos(site.rotation) * row * 1.8, field.z - Math.sin(site.rotation) * row * 1.8, 5.5, .18, .22, site.rotation, false);
+      } else if (/platform/.test(site.kind)) {
+        const deckY = baseY + 4.5;
+        [[-2.4,-2.4],[2.4,-2.4],[-2.4,2.4],[2.4,2.4]].forEach((offset) => {
+          const local = point(offset[0], offset[1]);
+          const mesh = new THREE.Mesh(new THREE.CylinderGeometry(.22, .3, 4.5, 6), worldWoodMaterial);
+          mesh.position.set(local.x, baseY + 2.25, local.z);
+          mesh.castShadow = !isCoarse;
+          group.add(mesh);
+        });
+        const deck = new THREE.Mesh(new THREE.BoxGeometry(6, .35, 6), worldWoodMaterial);
+        deck.position.set(site.x, deckY, site.z); deck.rotation.y = site.rotation; deck.castShadow = !isCoarse; deck.receiveShadow = true; group.add(deck);
+      } else if (/camp/.test(site.kind)) {
+        const tentKey = visualAssets.models && visualAssets.models.tentDetailed ? "tentDetailed" : visualAssets.models && visualAssets.models.tent ? "tent" : null;
+        if (tentKey) placePackModel(tentKey, site.x, site.z, tentKey === "tent" ? 3.4 : 3.6, site.rotation, { baseY });
+        createFire(site.x + Math.cos(site.rotation) * 3.5, site.z + Math.sin(site.rotation) * 3.5, false);
+      } else if (site.kind === "broken-cart") {
+        if (visualAssets.models && visualAssets.models.cart) placePackModel("cart", site.x, site.z, 3.5, site.rotation, { baseY });
+        const crate = point(2.8, 1.2);
+        if (visualAssets.models && visualAssets.models.crateBig) placePackModel("crateBig", crate.x, crate.z, 3.1, site.rotation + .4, { baseY });
+      } else {
+        const height = /crystal|void/.test(site.kind) ? 9.5 : /root|petrified/.test(site.kind) ? 8 : 6.5;
+        const material = /crystal|void/.test(site.kind) ? new THREE.MeshStandardMaterial({ color: 0x7776bd, emissive: 0x2f2b69, emissiveIntensity: .7, roughness: .36, metalness: .22 }) : darkStoneMaterial;
+        const marker = new THREE.Mesh(new THREE.ConeGeometry(1.05, height, /crystal/.test(site.kind) ? 5 : 4), material);
+        marker.position.set(site.x, baseY + height / 2, site.z); marker.rotation.y = site.rotation; marker.castShadow = !isCoarse; group.add(marker);
+        addCollider(site.x, site.z, .72, .72, site.rotation, baseY, baseY + height);
+        for (let stone = 0; stone < 3; stone += 1) {
+          const angle = site.rotation + stone / 3 * Math.PI * 2;
+          const local = { x: site.x + Math.cos(angle) * 2.2, z: site.z + Math.sin(angle) * 2.2 };
+          addStoneBox(group, local.x, local.z, 1.1, .65 + stone * .14, .8, angle, false);
+        }
+      }
+      group.userData.infrastructure = { id: site.id, kind: site.kind, index };
+    });
+    infrastructureReport = {
+      total: (worldLayout.infrastructure || []).length,
+      byKind,
+      colliders: colliders.length - beforeColliders,
+      importedModels: importedModelInstances - beforeImported
+    };
   }
 
   function addPlatform(x, z, width, depth, topY, rotation, metadata) {
@@ -2530,8 +3043,16 @@
     camp: [4.5, 9], ruin: [4.5, 9], ascent: [5, 11], keep: [9, 17]
   };
 
-  function addPoiChestSpot(poi, x, z, xp) {
-    poiChestSpots.push({ idSuffix: poiChestSpots.length, name: poi.name + " CACHE", x, z, xp: Math.round(xp) });
+  function addPoiChestSpot(poi, x, z, xp, rotation) {
+    const radialRotation = Math.atan2(x - poi.x, z - poi.z);
+    poiChestSpots.push({
+      idSuffix: poiChestSpots.length,
+      name: poi.name + " CACHE",
+      x,
+      z,
+      xp: Math.round(xp),
+      rotation: Number.isFinite(rotation) ? rotation : radialRotation
+    });
   }
 
   // addRoutePlatform with a yaw: keeps watchpost decks aligned to their (rotated) tower shell so
@@ -2556,6 +3077,86 @@
     scene.add(ring);
     stronghold.marker = ring;
     stronghold.markerMaterial = material;
+  }
+
+  function createCaptureFlag(stronghold) {
+    if (!stronghold || (stronghold.kind !== "shrine" && stronghold.kind !== "graveyard")) return null;
+    const salt = worldLayout.salt + 17400 + strongholds.length * 61;
+    const angle = seeded(salt + 1) * Math.PI * 2;
+    const radius = stronghold.kind === "graveyard" ? 8.2 : 6.8;
+    const x = stronghold.x + Math.cos(angle) * radius;
+    const z = stronghold.z + Math.sin(angle) * radius;
+    const baseY = surfaceHeightAt(x, z, 999);
+    const height = stronghold.kind === "graveyard" ? 17 : 15;
+    const root = new THREE.Group();
+    root.name = "Warden capture flag " + stronghold.id;
+    root.position.set(x, baseY, z);
+    root.rotation.y = seeded(salt + 2) * Math.PI * 2;
+    const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x283b45, roughness: .42, metalness: .62 });
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(.09, .13, height, 8), poleMaterial);
+    pole.position.y = height / 2;
+    pole.castShadow = !isCoarse;
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(.72, .9, .34, 10), darkStoneMaterial);
+    foot.position.y = .17;
+    foot.receiveShadow = true;
+    const finial = new THREE.Mesh(new THREE.ConeGeometry(.25, .72, 5), poleMaterial);
+    finial.position.y = height + .34;
+    const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, 4.9, 6), poleMaterial);
+    crossbar.rotation.z = Math.PI / 2;
+    crossbar.position.set(2.25, height - 1.05, 0);
+    const clothGeometry = new THREE.PlaneGeometry(4.7, 2.8, 8, 4);
+    const clothMaterial = new THREE.MeshStandardMaterial({
+      color: 0x367fd3, emissive: 0x12365f, emissiveIntensity: .42,
+      roughness: .74, metalness: .03, side: THREE.DoubleSide
+    });
+    const cloth = new THREE.Mesh(clothGeometry, clothMaterial);
+    cloth.position.set(2.42, height - 2.52, 0);
+    cloth.castShadow = !isCoarse;
+    const sigilMaterial = new THREE.MeshBasicMaterial({ color: 0xc7efff, transparent: true, opacity: .88, side: THREE.DoubleSide, depthWrite: false });
+    const sigil = new THREE.Mesh(new THREE.RingGeometry(.36, .49, 4), sigilMaterial);
+    sigil.position.set(2.12, height - 2.48, .025);
+    sigil.rotation.z = Math.PI / 4;
+    root.add(foot, pole, finial, crossbar, cloth, sigil);
+    scene.add(root);
+    const flag = {
+      strongholdId: stronghold.id, root, cloth, baseY, height, raise: 0, target: 0,
+      phase: seeded(salt + 3) * Math.PI * 2,
+      basePositions: new Float32Array(clothGeometry.attributes.position.array)
+    };
+    root.visible = false;
+    stronghold.captureFlag = flag;
+    captureFlags.push(flag);
+    return flag;
+  }
+
+  function setCaptureFlag(stronghold, captured, animate) {
+    const flag = stronghold && stronghold.captureFlag;
+    if (!flag) return;
+    flag.target = captured ? 1 : 0;
+    if (!captured) {
+      flag.raise = 0;
+      flag.root.visible = false;
+      return;
+    }
+    flag.root.visible = true;
+    flag.raise = animate ? 0 : 1;
+    flag.root.position.y = flag.baseY - flag.height * (1 - flag.raise);
+  }
+
+  function updateCaptureFlags(dt) {
+    captureFlags.forEach((flag) => {
+      if (!flag.root.visible) return;
+      if (flag.raise < flag.target) flag.raise = Math.min(flag.target, flag.raise + dt / 1.65);
+      const eased = 1 - Math.pow(1 - flag.raise, 3);
+      flag.root.position.y = flag.baseY - flag.height * (1 - eased);
+      const positions = flag.cloth.geometry.attributes.position;
+      for (let index = 0; index < positions.count; index += 1) {
+        const baseX = flag.basePositions[index * 3];
+        const tether = clamp((baseX + 2.35) / 4.7, 0, 1);
+        positions.setZ(index, Math.sin(elapsed * 3.2 + flag.phase + baseX * 1.35) * .18 * tether + Math.sin(elapsed * 5.1 + index) * .035 * tether);
+      }
+      positions.needsUpdate = true;
+    });
   }
 
   function decorateStrongholdSite(stronghold, salt) {
@@ -2607,6 +3208,7 @@
     });
     strongholds.push(stronghold);
     createStrongholdMarker(stronghold);
+    createCaptureFlag(stronghold);
     decorateStrongholdSite(stronghold, salt);
     return stronghold;
   }
@@ -2647,13 +3249,14 @@
     const buildings = picks.filter((key) => models[key]);
     buildings.forEach((key, index) => {
       const angle = poi.rotation + index / buildings.length * Math.PI * 2 + (seeded(salt + 10 + index * 3) - .5) * .45;
-      const radius = 9 + seeded(salt + 11 + index * 3) * 5;
+      const radius = 16 + seeded(salt + 11 + index * 3) * 7;
       const bx = poi.x + Math.cos(angle) * radius;
       const bz = poi.z + Math.sin(angle) * radius;
       const facing = Math.atan2(poi.x - bx, poi.z - bz);
-      if (!placePackModel(key, bx, bz, POI_SCALES.medieval, facing, { baseY })) return;
+      const buildingScale = canonicalModelScale(key);
+      if (!placePackModel(key, bx, bz, buildingScale, facing, { baseY })) return;
       const size = packModelSize(key);
-      addBuildingColliders(bx, bz, facing, size.sx * POI_SCALES.medieval / 2, size.sz * POI_SCALES.medieval / 2, baseY, size.sy * POI_SCALES.medieval, 1.8, size.cx * POI_SCALES.medieval, size.cz * POI_SCALES.medieval);
+      addBuildingColliders(bx, bz, facing, size.sx * buildingScale / 2, size.sz * buildingScale / 2, baseY, size.sy * buildingScale, 3.1, size.cx * buildingScale, size.cz * buildingScale);
     });
     const dressingKeys = ["barrel", "crateBig", "crateOpen", "sack", "tent", "weaponrack", "flagRed", "bannerRed", "bannerGreen", "cart", "stallBench"];
     const dressingColliders = { barrel: true, crateBig: true, crateOpen: true, tent: true, weaponrack: true, cart: true, stallBench: true };
@@ -2692,7 +3295,7 @@
     const treeKey = { snowy: "treePineA", jungle: "treePalmBend", desert: "cactusTall", shore: "treePalm", mountains: "treePineB" }[realm.biome];
     if (treeKey && models[treeKey]) {
       const angle = seeded(salt + 26) * Math.PI * 2;
-      placePackModel(treeKey, poi.x + Math.cos(angle) * 13.5, poi.z + Math.sin(angle) * 13.5, POI_SCALES.natureTree, seeded(salt + 27) * Math.PI * 2, {});
+      placePackModel(treeKey, poi.x + Math.cos(angle) * 24, poi.z + Math.sin(angle) * 24, canonicalModelScale(treeKey, .9), seeded(salt + 27) * Math.PI * 2, {});
     }
     if (models.campfireStones) placePackModel("campfireStones", fx, fz, POI_SCALES.nature, fireAngle, { baseY });
     createFire(fx, fz, !isCoarse);
@@ -2710,20 +3313,20 @@
     if (!towerKey) { buildPoiFallback(poi, baseY); return; }
     const facing = poi.rotation;
     const size = packModelSize(towerKey);
-    let towerScale = POI_SCALES.medieval * 1.4;
+    let towerScale = canonicalModelScale(towerKey);
     const footprint = Math.min(size.sx, size.sz) * towerScale;
-    if (footprint < 4.6) towerScale *= 4.6 / Math.max(.5, footprint);
+    if (footprint < 8.5) towerScale *= 8.5 / Math.max(.5, footprint);
     placePackModel(towerKey, poi.x, poi.z, towerScale, facing, { baseY });
     const halfX = size.sx * towerScale / 2;
     const halfZ = size.sz * towerScale / 2;
     // Gameplay-critical door: 2.4 gap so the r.8 capsule clears the front quarters with margin.
-    addBuildingColliders(poi.x, poi.z, facing, halfX, halfZ, baseY, size.sy * towerScale, 2.4, size.cx * towerScale, size.cz * towerScale);
+    addBuildingColliders(poi.x, poi.z, facing, halfX, halfZ, baseY, size.sy * towerScale, 3.1, size.cx * towerScale, size.cz * towerScale);
     // Interior wood steps to an upper floor; plain platforms so surfaceHeightAt just works.
     // Full-width strips (threshold +.75, mid +1.5, deck +2.25) so an r.8 capsule can climb
     // without clipping the next tier's collider band; decks align with the rotated shell.
     const innerX = halfX - .7;
     const innerZ = halfZ - .7;
-    const floorTop = baseY + 2.25;
+    const floorTop = baseY + 3;
     const strip = Math.min(1.2, innerZ - .6);
     const stepAt = (localX, localZ, width, depth, topY) => {
       const point = poiLocalToWorld(poi.x, poi.z, facing, localX, localZ);
@@ -2731,9 +3334,10 @@
     };
     stepAt(0, innerZ - strip / 2, innerX * 2, strip, baseY + .75);
     stepAt(0, innerZ - strip * 1.5, innerX * 2, strip, baseY + 1.5);
-    stepAt(0, -strip, innerX * 2, innerZ * 2 - strip * 2, floorTop);
+    stepAt(0, innerZ - strip * 2.5, innerX * 2, strip, baseY + 2.25);
+    stepAt(0, -strip * 1.5, innerX * 2, Math.max(1.4, innerZ * 2 - strip * 3), floorTop);
     const chestPoint = poiLocalToWorld(poi.x, poi.z, facing, 0, -strip);
-    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 100 + Math.floor(seeded(salt + 8) * 41));
+    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 100 + Math.floor(seeded(salt + 8) * 41), facing);
     debug.chests += 1;
     const doorDir = { x: Math.sin(facing), z: Math.cos(facing) };
     const sideDir = { x: Math.cos(facing), z: -Math.sin(facing) };
@@ -2798,7 +3402,7 @@
     scene.add(altar);
     addCollider(altarPoint.x, altarPoint.z, .8, .53, poi.rotation, baseY - 1, baseY + .95);
     const chestPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, 5.1);
-    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 12) * 31));
+    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 12) * 31), poi.rotation);
     debug.chests += 1;
   }
 
@@ -2810,14 +3414,15 @@
     const cryptKeys = ["crypt", "cryptA", "cryptSmall"].filter((key) => models[key]);
     const cryptKey = cryptKeys[Math.floor(seeded(salt + 1) * cryptKeys.length)];
     const cryptSize = packModelSize(cryptKey);
-    const cryptHalf = cryptSize.sz * POI_SCALES.crypt / 2;
+    const cryptScale = canonicalModelScale(cryptKey);
+    const cryptHalf = cryptSize.sz * cryptScale / 2;
     const cryptZ = -6.4;
     const altarZ = cryptZ + cryptHalf + 1.2;
     const chestZ = altarZ + 1.7;
     const rowStart = Math.max(-.6, chestZ + 1.3);
     const cryptPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, cryptZ);
-    placePackModel(cryptKey, cryptPoint.x, cryptPoint.z, POI_SCALES.crypt, poi.rotation, { baseY });
-    addCollider(cryptPoint.x, cryptPoint.z, cryptSize.sx * POI_SCALES.crypt * .5, cryptSize.sz * POI_SCALES.crypt * .5, poi.rotation, baseY - 1, baseY + Math.min(cryptSize.sy * POI_SCALES.crypt, 6));
+    placePackModel(cryptKey, cryptPoint.x, cryptPoint.z, cryptScale, poi.rotation, { baseY });
+    addBuildingColliders(cryptPoint.x, cryptPoint.z, poi.rotation, cryptSize.sx * cryptScale * .5, cryptSize.sz * cryptScale * .5, baseY, cryptSize.sy * cryptScale, 3, cryptSize.cx * cryptScale, cryptSize.cz * cryptScale);
     if (models.altarStone) {
       const altarPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, altarZ);
       placePackModel("altarStone", altarPoint.x, altarPoint.z, POI_SCALES.graveyard, poi.rotation, { baseY });
@@ -2870,7 +3475,7 @@
       if (placePackModel("pineCrooked", pinePoint.x, pinePoint.z, POI_SCALES.graveyard, seeded(salt + 14) * Math.PI * 2, { baseY })) addCollider(pinePoint.x, pinePoint.z, .5, .5, 0, baseY - 1, baseY + 3);
     }
     const chestPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, chestZ);
-    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 12) * 31));
+    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 12) * 31), poi.rotation);
     debug.chests += 1;
   }
 
@@ -2952,7 +3557,7 @@
     scene.add(altar);
     addCollider(altarPoint.x, altarPoint.z, .8, .53, poi.rotation, baseY - 1, baseY + .95);
     const chestPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, 4.6);
-    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 16) * 21));
+    addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 90 + Math.floor(seeded(salt + 16) * 21), poi.rotation);
     debug.chests += 1;
   }
 
@@ -2981,12 +3586,13 @@
     const definitions = worldLayout.forts.map((fort, index) => ({
       id: "chest-fort-" + index, name: fort[4] + " CHEST", xp: 70 + index * 20,
       x: fort[0] + Math.cos(fort[2]) * 4 - Math.sin(fort[2]) * 6,
-      z: fort[1] + Math.sin(fort[2]) * 4 + Math.cos(fort[2]) * 6
+      z: fort[1] + Math.sin(fort[2]) * 4 + Math.cos(fort[2]) * 6,
+      rotation: fort[2]
     })).concat(routeSummits.filter(Boolean).map((summit, index) => ({
       id: "chest-route-" + index, name: worldLayout.routes[index][5] + " TROVE", xp: 130 + index * 30,
-      x: summit.x + (index ? 1.5 : 2.4), z: summit.z
+      x: summit.x + (index ? 1.5 : 2.4), z: summit.z, rotation: -Math.PI / 2
     }))).concat(poiChestSpots.map((spot, index) => ({
-      id: "chest-poi-" + index, name: spot.name, xp: spot.xp, x: spot.x, z: spot.z
+      id: "chest-poi-" + index, name: spot.name, xp: spot.xp, x: spot.x, z: spot.z, rotation: spot.rotation
     })));
     const bandMaterial = new THREE.MeshStandardMaterial({ color: 0x2e3436, roughness: .58, metalness: .7, envMapIntensity: .35 });
     const powerTypes = ["damage", "health", "regen", "sprint", "stamina", "critDamage"];
@@ -3010,16 +3616,20 @@
       const lockMaterial = new THREE.MeshStandardMaterial({ color: 0xe8b45a, emissive: 0xe8b45a, emissiveIntensity: 1.2, roughness: .35, metalness: .55 });
       const lock = new THREE.Mesh(new THREE.BoxGeometry(.22, .26, .12), lockMaterial);
       lock.position.set(0, .82, .56);
+      const interactionAnchor = new THREE.Object3D();
+      interactionAnchor.name = "Chest front latch interaction anchor";
+      interactionAnchor.position.set(0, .86, .72);
       const marker = new THREE.Mesh(new THREE.RingGeometry(1.15, 1.22, 30), new THREE.MeshBasicMaterial({ color: 0xe8b45a, transparent: true, opacity: .5, side: THREE.DoubleSide, depthWrite: false }));
       marker.rotation.x = -Math.PI / 2;
       marker.position.y = .04;
-      root.add(base, lid, bandA, bandB, lock, marker);
+      root.add(base, lid, bandA, bandB, lock, marker, interactionAnchor);
       root.position.set(definition.x, surfaceHeightAt(definition.x, definition.z, 999), definition.z);
+      root.rotation.y = definition.rotation || 0;
       root.traverse((object) => { if (object.isMesh) { object.castShadow = !isCoarse; object.receiveShadow = true; } });
       scene.add(root);
       chests.push({
         id: definition.id, name: definition.name, xp: definition.xp,
-        root, lid, lockMaterial, marker, opened: false, openTime: 0, phase: index * 1.71,
+        root, lid, lockMaterial, marker, interactionAnchor, opened: false, openTime: 0, phase: index * 1.71,
         powerUp: { type: powerType, amount: powerAmount }
       });
     });
@@ -3035,16 +3645,107 @@
     });
   }
 
+  function segmentIntersectsChestCollider(start, end, box) {
+    const cosine = Math.cos(box.rotation || 0);
+    const sine = Math.sin(box.rotation || 0);
+    const startDx = start.x - box.x;
+    const startDz = start.z - box.z;
+    const localStart = {
+      x: startDx * cosine - startDz * sine,
+      y: start.y,
+      z: startDx * sine + startDz * cosine
+    };
+    const endDx = end.x - box.x;
+    const endDz = end.z - box.z;
+    const localEnd = {
+      x: endDx * cosine - endDz * sine,
+      y: end.y,
+      z: endDx * sine + endDz * cosine
+    };
+    let near = 0;
+    let far = 1;
+    const clipAxis = (origin, delta, minimum, maximum) => {
+      if (!Number.isFinite(minimum) && !Number.isFinite(maximum)) return true;
+      if (Math.abs(delta) < .00001) return origin >= minimum && origin <= maximum;
+      let first = (minimum - origin) / delta;
+      let second = (maximum - origin) / delta;
+      if (first > second) { const swap = first; first = second; second = swap; }
+      near = Math.max(near, first);
+      far = Math.min(far, second);
+      return near <= far;
+    };
+    return clipAxis(localStart.x, localEnd.x - localStart.x, -box.hx, box.hx)
+      && clipAxis(localStart.z, localEnd.z - localStart.z, -box.hz, box.hz)
+      && clipAxis(localStart.y, localEnd.y - localStart.y, box.minY, box.maxY)
+      && far >= .025 && near <= .975;
+  }
+
+  const CHEST_INTERACTION_RANGE = 3.5;
+  const CHEST_LEVEL_TOLERANCE = 1.65;
+  const CHEST_FRONT_DOT = .35;
+  const CHEST_FACING_DOT = .15;
+
+  function chestFrontVector(chest) {
+    return new THREE.Vector3(0, 0, 1).applyQuaternion(chest.root.quaternion).setY(0).normalize();
+  }
+
+  function chestInteractionStance(chest, distance) {
+    const front = chestFrontVector(chest);
+    const foot = chest.root.position.clone().addScaledVector(front, distance == null ? 2.15 : distance);
+    foot.y = surfaceHeightAt(foot.x, foot.z, chest.root.position.y + .95);
+    const latch = chest.interactionAnchor.getWorldPosition(new THREE.Vector3());
+    const facing = latch.clone().sub(foot).setY(0).normalize();
+    return { foot, front, facing, latch };
+  }
+
+  function chestInteractionDetails(chest, footOverride, facingOverride, groundedOverride) {
+    if (!chest || chest.opened || !player.root) return { allowed: false, reason: "unavailable" };
+    const foot = footOverride ? footOverride.clone() : player.root.position.clone();
+    const origin = foot.clone().add(new THREE.Vector3(0, 1.28, 0));
+    const latch = chest.interactionAnchor.getWorldPosition(new THREE.Vector3());
+    const distance = origin.distanceTo(latch);
+    const verticalDifference = Math.abs(foot.y - chest.root.position.y);
+    const front = chestFrontVector(chest);
+    const approach = foot.clone().sub(chest.root.position).setY(0);
+    const approachDot = approach.lengthSq() < .001 ? -1 : approach.normalize().dot(front);
+    const toLatch = latch.clone().sub(origin).setY(0);
+    const facing = facingOverride
+      ? facingOverride.clone().setY(0).normalize()
+      : new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+    const facingDot = toLatch.lengthSq() < .001 ? -1 : facing.dot(toLatch.normalize());
+    const ownSurface = surfaceHeightAt(foot.x, foot.z, foot.y + .95);
+    const onOwnSurface = Math.abs(ownSurface - foot.y) <= .55;
+    const colliderBlocked = colliders.some((box) => segmentIntersectsChestCollider(origin, latch, box));
+    let terrainBlocked = false;
+    for (let sample = 1; sample < 12 && !terrainBlocked; sample += 1) {
+      const amount = sample / 12;
+      const point = origin.clone().lerp(latch, amount);
+      if (terrainHeight(point.x, point.z) > point.y - .08) terrainBlocked = true;
+    }
+    const grounded = groundedOverride == null ? (footOverride ? onOwnSurface : player.grounded) : Boolean(groundedOverride);
+    const allowed = grounded && onOwnSurface && distance <= CHEST_INTERACTION_RANGE && verticalDifference <= CHEST_LEVEL_TOLERANCE
+      && approachDot >= CHEST_FRONT_DOT && facingDot >= CHEST_FACING_DOT && !colliderBlocked && !terrainBlocked;
+    let reason = "ready";
+    if (!grounded || !onOwnSurface) reason = "not-grounded";
+    else if (distance > CHEST_INTERACTION_RANGE) reason = "too-far";
+    else if (verticalDifference > CHEST_LEVEL_TOLERANCE) reason = "wrong-level";
+    else if (approachDot < CHEST_FRONT_DOT) reason = "wrong-side";
+    else if (facingDot < CHEST_FACING_DOT) reason = "not-facing";
+    else if (colliderBlocked || terrainBlocked) reason = "blocked-line-of-sight";
+    return { allowed, reason, distance, verticalDifference, approachDot, facingDot, colliderBlocked, terrainBlocked, origin, latch };
+  }
+
   function nearestChest(maxDistance) {
     if (!player.root) return null;
-    const maximum = maxDistance == null ? 11 : maxDistance;
+    const maximum = Math.min(CHEST_INTERACTION_RANGE, maxDistance == null ? CHEST_INTERACTION_RANGE : Math.max(0, maxDistance));
     return chests
-      .filter((chest) => !chest.opened && distance2D(player.root.position, chest.root.position) <= maximum)
-      .sort((a, b) => distance2D(player.root.position, a.root.position) - distance2D(player.root.position, b.root.position))[0] || null;
+      .map((chest) => ({ chest, access: chestInteractionDetails(chest) }))
+      .filter((entry) => !entry.chest.opened && entry.access.allowed && entry.access.distance <= maximum)
+      .sort((a, b) => a.access.distance - b.access.distance)[0]?.chest || null;
   }
 
   function openChest(chest) {
-    if (!chest || chest.opened || state !== "playing") return false;
+    if (!chest || chest.opened || state !== "playing" || !chestInteractionDetails(chest).allowed) return false;
     chest.opened = true;
     chest.openTime = .01;
     const oldMaximumHealth = maxHealth();
@@ -3646,7 +4347,14 @@
       upperArmL: bone("UpperArm.L"),
       upperArmR: bone("UpperArm.R"),
       lowerArmL: bone("LowerArm.L"),
-      lowerArmR: bone("LowerArm.R")
+      lowerArmR: bone("LowerArm.R"),
+      hips: bone("Hips"),
+      upperLegL: bone("UpperLeg.L"),
+      upperLegR: bone("UpperLeg.R"),
+      lowerLegL: bone("LowerLeg.L"),
+      lowerLegR: bone("LowerLeg.R"),
+      footL: bone("Foot.L"),
+      footR: bone("Foot.R")
     } : null;
     player.sprintPoseSnapshot = null;
     player.sprintPoseApplied = false;
@@ -4099,12 +4807,14 @@
     stronghold.markerMaterial.color.setHex(stronghold.cleared ? 0x67d6b1 : 0xe26b3f);
     stronghold.markerMaterial.opacity = stronghold.cleared ? .16 : .42;
     if (stronghold.marker) stronghold.marker.scale.setScalar(stronghold.cleared ? .82 : 1);
+    setCaptureFlag(stronghold, stronghold.cleared, false);
   }
 
   function clearStronghold(stronghold, grantRewards) {
     if (!stronghold || stronghold.cleared) return false;
     stronghold.cleared = true;
     updateStrongholdMarker(stronghold);
+    setCaptureFlag(stronghold, true, grantRewards !== false);
     const reward = STRONGHOLD_BONUSES[stronghold.kind] || STRONGHOLD_BONUSES.hamlet;
     if (grantRewards !== false) {
       grantXp(reward.xp);
@@ -5440,6 +6150,24 @@
     })));
   }
 
+  function resetTraversalMotion() {
+    player.sliding = false;
+    player.slideSpeed = 0;
+    player.slideDirection.set(0, 0, -1);
+    player.slideTime = 0;
+    player.slideSlopeDegrees = 0;
+    player.slideInputPressed = false;
+    player.slideExitBlocked = false;
+    player.slideCollision = false;
+    player.slideFxTimer = 0;
+    player.mobileSlideHeld = false;
+    player.airMomentum.set(0, 0, 0);
+    player.airbornePhase = "grounded";
+    player.landingTime = 0;
+    player.landingImpact = 0;
+    if (player.modelRoot) player.modelRoot.position.y = 0;
+  }
+
   function startGame(forceFresh) {
     if (state === "ended" && !testMode) {
       window.location.reload();
@@ -5468,6 +6196,7 @@
     player.sprintExhausted = false;
     player.sprinting = false;
     player.superSprinting = false;
+    resetTraversalMotion();
     player.stormstrideTimer = 0;
     player.attackCooldown = 0;
     player.attackTime = 0;
@@ -5558,6 +6287,128 @@
     return height;
   }
 
+  function strideSprintPower() {
+    return 1 + skillRank("gale_pace") * .15 + relicBonus("sprint") / 100 + bondedPaceBonus();
+  }
+
+  function strideSuperPower() {
+    return 1 + skillRank("windstep") * .055 + skillRank("gale_pace") * .1 + skillRank("tempest_pace") * .25 + (hasSkill("stormstride") ? .25 : 0) + relicBonus("sprint") / 100 + bondedPaceBonus();
+  }
+
+  function terrainDescentInfo(direction, position) {
+    const origin = position || player.root.position;
+    const heading = direction.clone().setY(0);
+    if (heading.lengthSq() < .0001) heading.set(0, 0, -1);
+    heading.normalize();
+    const sample = 1.8;
+    const current = terrainHeight(origin.x, origin.z);
+    const ahead = terrainHeight(origin.x + heading.x * sample, origin.z + heading.z * sample);
+    const crossSample = 1.25;
+    const gradientX = (terrainHeight(origin.x + crossSample, origin.z) - terrainHeight(origin.x - crossSample, origin.z)) / (crossSample * 2);
+    const gradientZ = (terrainHeight(origin.x, origin.z + crossSample) - terrainHeight(origin.x, origin.z - crossSample)) / (crossSample * 2);
+    const downhill = new THREE.Vector3(-gradientX, 0, -gradientZ);
+    if (downhill.lengthSq() < .0001) downhill.copy(heading);
+    else downhill.normalize();
+    return {
+      angle: Math.atan2(current - ahead, sample) * 180 / Math.PI,
+      steepness: Math.atan(Math.hypot(gradientX, gradientZ)) * 180 / Math.PI,
+      current,
+      ahead,
+      downhill,
+      onTerrain: Math.abs(origin.y - current) <= .48,
+      aboveWater: current > biome.waterLevel + .35
+    };
+  }
+
+  function canStandAtPlayer() {
+    return !hitsCollider(player.root.position.x, player.root.position.z, .72, player.root.position.y, player.root.position.y + 2.15);
+  }
+
+  function beginSlide(direction, slope) {
+    if (!player.root || !direction || direction.lengthSq() < .001 || !player.grounded || player.sliding || player.dodgeTime > 0 || player.attackTime > 0 || player.stamina <= 8) return false;
+    const descent = slope || terrainDescentInfo(direction);
+    if (!descent.onTerrain || !descent.aboveWater || descent.angle < 8) return false;
+    player.sliding = true;
+    player.slideDirection.copy(direction).setY(0).normalize();
+    player.slideSpeed = Math.max(13.5, 17.2 * strideSprintPower());
+    player.slideTime = 0;
+    player.slideSlopeDegrees = descent.angle;
+    player.slideExitBlocked = false;
+    player.slideCollision = false;
+    player.slideFxTimer = 0;
+    player.sprintLatch = false;
+    player.superSprintLatch = false;
+    player.sprinting = false;
+    player.superSprinting = false;
+    audio.tone(92, 58, .15, "triangle", .014);
+    showMessage("DOWNHILL SLIDE", "#e8c98c");
+    return true;
+  }
+
+  function finishSlide(forceAirborne) {
+    if (!player.sliding) return true;
+    if (!forceAirborne && player.grounded && !canStandAtPlayer()) {
+      player.slideExitBlocked = true;
+      player.slideSpeed = Math.min(player.slideSpeed, 2.5);
+      return false;
+    }
+    player.sliding = false;
+    player.slideExitBlocked = false;
+    player.slideSpeed = forceAirborne ? player.slideSpeed : 0;
+    player.slideSlopeDegrees = 0;
+    return true;
+  }
+
+  function updateSlide(dt, inputDirection, slideHeld) {
+    if (!player.sliding) return false;
+    if (!player.grounded) {
+      player.airMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
+      finishSlide(true);
+      return false;
+    }
+    const terrain = terrainHeight(player.root.position.x, player.root.position.z);
+    if (!slideHeld || player.attackTime > 0 || player.dodgeTime > 0 || terrain <= biome.waterLevel + .35 || Math.abs(player.root.position.y - terrain) > .48) {
+      if (finishSlide(false)) return false;
+    }
+    if (inputDirection && inputDirection.lengthSq() > .01) {
+      const steering = inputDirection.clone().setY(0).normalize();
+      if (steering.dot(player.slideDirection) > -.15) player.slideDirection.lerp(steering, clamp(dt * 1.25, 0, .18)).normalize();
+    }
+    const descent = terrainDescentInfo(player.slideDirection);
+    player.slideSlopeDegrees = descent.angle;
+    player.slideDirection.lerp(descent.downhill, clamp(dt * .72, 0, .11)).normalize();
+    if (descent.angle < -4) {
+      if (finishSlide(false)) return false;
+    }
+    const slopeAcceleration = Math.sin(Math.max(0, descent.angle) * Math.PI / 180) * 30;
+    const friction = descent.angle >= 4 ? 2.4 : descent.angle > 0 ? 6.5 : 12.5;
+    player.slideSpeed = clamp(player.slideSpeed + (slopeAcceleration - friction) * dt, 0, 43 * Math.min(1.45, strideSprintPower()));
+    const marathonEfficiency = clamp(1 - skillRank("marathon") * .25, .35, 1);
+    player.stamina = Math.max(0, player.stamina - 5 * marathonEfficiency * dt);
+    const intended = player.slideSpeed * dt;
+    const startX = player.root.position.x;
+    const startZ = player.root.position.z;
+    const moved = movePlayer(player.slideDirection.x * intended, player.slideDirection.z * intended);
+    const forwardProgress = (player.root.position.x - startX) * player.slideDirection.x + (player.root.position.z - startZ) * player.slideDirection.z;
+    player.distance += moved;
+    player.slideTime += dt;
+    player.moving = moved > .001;
+    player.root.rotation.y = rotateToward(player.root.rotation.y, Math.atan2(-player.slideDirection.x, -player.slideDirection.z), dt * 12);
+    if (intended > .04 && forwardProgress < intended * .32) {
+      player.slideCollision = true;
+      player.slideSpeed *= .28;
+      cameraTrauma = Math.max(cameraTrauma, .18);
+      if (finishSlide(false)) return false;
+    }
+    if (player.slideSpeed < 4.5 && player.slideTime > .2 && finishSlide(false)) return false;
+    player.slideFxTimer -= dt;
+    if (!isCoarse && !reducedMotion && player.slideFxTimer <= 0) {
+      player.slideFxTimer = .075;
+      spawnSlideDust();
+    }
+    return player.sliding;
+  }
+
   function updatePlayer(dt) {
     const previousAttackTime = player.attackTime;
     player.attackCooldown = Math.max(0, player.attackCooldown - dt);
@@ -5596,11 +6447,18 @@
     inputZ += -mobileMove.y;
     const magnitude = Math.hypot(inputX, inputZ);
     let moving = magnitude > .08;
-    player.moving = moving;
+    const forward = new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+    const right = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
+    const inputDirection = moving ? forward.clone().multiplyScalar(inputZ / Math.max(1, magnitude)).add(right.clone().multiplyScalar(inputX / Math.max(1, magnitude))).normalize() : null;
+    player.moving = moving || player.sliding;
     const wasSuperSprinting = player.superSprinting;
-    const touchSuperSprint = isCoarse && magnitude > .92;
-    const wantsSuperSprint = moving && (keys.has("control") || touchSuperSprint);
-    const wantsSprint = moving && (wantsSuperSprint || keys.has("shift") || (isCoarse && magnitude > .68) || magnitude > 1.15);
+    const slideHeld = keys.has("control") || player.mobileSlideHeld;
+    const touchSuperSprint = isCoarse && magnitude > .92 && !player.mobileSlideHeld;
+    const rawWantsSuperSprint = moving && (keys.has("control") || player.mobileSlideHeld || touchSuperSprint);
+    const wantsSprint = moving && (rawWantsSuperSprint || keys.has("shift") || (isCoarse && magnitude > .68) || magnitude > 1.15);
+    if (player.slideInputPressed && inputDirection && wantsSprint && !player.sprintExhausted) beginSlide(inputDirection, terrainDescentInfo(inputDirection));
+    player.slideInputPressed = false;
+    const wantsSuperSprint = rawWantsSuperSprint && !player.sliding;
     if (player.stamina <= 0) player.sprintExhausted = true;
     if (player.sprintExhausted && player.stamina >= 10) player.sprintExhausted = false;
     if (!wantsSprint || player.sprintExhausted) player.sprintLatch = false;
@@ -5610,14 +6468,16 @@
     else if (!player.superSprintLatch && player.stamina > 12) player.superSprintLatch = true;
     else if (player.superSprintLatch && player.stamina <= 5) player.superSprintLatch = false;
     if (player.superSprintLatch) player.sprintLatch = true;
-    player.superSprinting = moving && player.dodgeTime <= 0 && player.superSprintLatch;
-    player.sprinting = moving && player.dodgeTime <= 0 && (player.sprintLatch || player.superSprinting);
+    player.superSprinting = moving && player.grounded && !player.sliding && player.dodgeTime <= 0 && player.superSprintLatch;
+    player.sprinting = moving && player.grounded && !player.sliding && player.dodgeTime <= 0 && (player.sprintLatch || player.superSprinting);
     const staminaRecovery = (moving ? 16 : 25) * (1 + skillRank("endurance") * .06) * (1 + relicBonus("regen") / 100)
       * (player.sprinting ? 1 + skillRank("second_lungs") * .3 : 1);
-    player.stamina = Math.min(maxStamina(), player.stamina + staminaRecovery * dt);
+    if (!player.sliding) player.stamina = Math.min(maxStamina(), player.stamina + staminaRecovery * dt);
     if (!wasSuperSprinting && player.superSprinting && hasSkill("stormlaunch")) triggerStormlaunch();
 
-    if (player.dodgeTime > 0) {
+    if (player.sliding) {
+      moving = updateSlide(dt, inputDirection, slideHeld) || moving;
+    } else if (player.dodgeTime > 0) {
       moving = true;
       const dodgeProgress = clamp(player.dodgeElapsed / .58, 0, 1);
       const dodgeSpeed = lerp(21, 7.5, dodgeProgress);
@@ -5627,13 +6487,11 @@
     } else if (moving) {
       inputX /= Math.max(1, magnitude);
       inputZ /= Math.max(1, magnitude);
-      const forward = new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
-      const right = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
-      const direction = forward.multiplyScalar(inputZ).add(right.multiplyScalar(inputX)).normalize();
+      const direction = inputDirection;
       const superSprinting = player.superSprinting;
       const sprinting = player.sprinting;
-      const sprintPower = 1 + skillRank("gale_pace") * .15 + relicBonus("sprint") / 100 + bondedPaceBonus();
-      const superPower = 1 + skillRank("windstep") * .055 + skillRank("gale_pace") * .1 + skillRank("tempest_pace") * .25 + (hasSkill("stormstride") ? .25 : 0) + relicBonus("sprint") / 100 + bondedPaceBonus();
+      const sprintPower = strideSprintPower();
+      const superPower = strideSuperPower();
       const speed = superSprinting ? 25.5 * superPower : sprinting ? 17.2 * sprintPower : 7.8;
       const marathonEfficiency = clamp(1 - skillRank("marathon") * .25, .35, 1);
       if (superSprinting) player.stamina = Math.max(0, player.stamina - 34 * marathonEfficiency * (1 - skillRank("windstep") * .09) * dt);
@@ -5653,38 +6511,64 @@
       player.walkCycle += dt * (superSprinting ? 24 : sprinting ? 17.5 : 9.2);
     }
 
+    if (!player.grounded && player.airMomentum.lengthSq() > .01) {
+      player.distance += movePlayer(player.airMomentum.x * dt, player.airMomentum.z * dt);
+      player.airMomentum.multiplyScalar(Math.pow(.2, dt));
+      if (player.airMomentum.lengthSq() < .04) player.airMomentum.set(0, 0, 0);
+    }
+
     updateStormstrideTrail(dt);
 
     const currentY = player.root.position.y;
     const landingHeight = surfaceHeightAt(player.root.position.x, player.root.position.z, currentY);
     if (player.grounded && currentY - landingHeight > .9) {
+      if (player.sliding) {
+        player.airMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
+        finishSlide(true);
+      }
       player.grounded = false;
       player.velocityY = Math.min(0, player.velocityY);
       player.jumpTime = 0;
+      player.airbornePhase = "fall";
     }
     if (!player.grounded) {
       player.jumpTime += dt;
       player.velocityY -= 20.5 * dt;
+      player.airbornePhase = player.jumpTime < .1 && player.velocityY > 0 ? "jump" : player.velocityY > 2 ? "rise" : player.velocityY > -2 ? "apex" : "fall";
       const nextY = player.root.position.y + player.velocityY * dt;
       const surface = surfaceHeightAt(player.root.position.x, player.root.position.z, player.root.position.y + .9);
       if (player.velocityY <= 0 && nextY <= surface) {
+        const impact = Math.abs(player.velocityY);
         player.root.position.y = surface;
         player.velocityY = 0;
         player.grounded = true;
         player.jumpTime = 0;
+        player.airMomentum.multiplyScalar(.35);
+        player.airbornePhase = "land";
+        player.landingTime = impact > 13 ? .28 : .18;
+        player.landingImpact = impact;
+        if (impact > 13) {
+          cameraTrauma = Math.max(cameraTrauma, .2);
+          createShockwave(player.root.position.clone(), 2.2, .2, 0x9a8770);
+        }
       } else player.root.position.y = nextY;
-    } else player.root.position.y = landingHeight;
+    } else {
+      player.root.position.y = landingHeight;
+      player.landingTime = Math.max(0, player.landingTime - dt);
+      if (player.landingTime <= 0) player.airbornePhase = "grounded";
+    }
     recoverPlayerFromCollision();
-    if (player.grounded && player.root.position.y > biome.waterLevel + .35 && !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + 2.1)) player.lastSafePosition.copy(player.root.position);
+    if (player.grounded && player.root.position.y > biome.waterLevel + .35 && !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + (player.sliding ? 1.15 : 2.1))) player.lastSafePosition.copy(player.root.position);
     player.vertical = Math.max(0, player.root.position.y - terrainHeight(player.root.position.x, player.root.position.z));
-    camera.fov = lerp(camera.fov, player.superSprinting ? 76 : player.sprinting ? 69 : 62, 1 - Math.pow(.002, dt));
+    const slideFov = 69 + clamp((player.slideSpeed - 12) * .22, 0, 7);
+    camera.fov = lerp(camera.fov, player.sliding ? slideFov : player.superSprinting ? 76 : player.sprinting ? 69 : 62, 1 - Math.pow(.002, dt));
     camera.updateProjectionMatrix();
     player.streakTimer -= dt;
     if (player.superSprinting && player.grounded && !isCoarse && !reducedMotion && player.streakTimer <= 0) {
       player.streakTimer = 1 / 12;
       spawnSpeedStreaks();
     }
-    animatePlayer(dt, moving);
+    animatePlayer(dt, moving || player.sliding);
     const cellX = Math.floor((player.root.position.x + HALF_WORLD) / 45);
     const cellZ = Math.floor((player.root.position.z + HALF_WORLD) / 45);
     discoveredCells.add(cellX + ":" + cellZ);
@@ -5722,6 +6606,7 @@
 
   function movePlayer(dx, dz) {
     const radius = .72;
+    const collisionHeight = player.sliding ? 1.15 : 2.15;
     const startX = player.root.position.x;
     const startZ = player.root.position.z;
     const distance = Math.hypot(dx, dz);
@@ -5732,12 +6617,12 @@
       const footY = player.root.position.y;
       const candidateX = clamp(player.root.position.x + stepX, -HALF_WORLD, HALF_WORLD);
       const candidateZ = clamp(player.root.position.z + stepZ, -HALF_WORLD, HALF_WORLD);
-      if (canPlayerOccupy(candidateX, candidateZ, radius, footY)) {
+      if (canPlayerOccupy(candidateX, candidateZ, radius, footY, collisionHeight)) {
         player.root.position.x = candidateX;
         player.root.position.z = candidateZ;
       } else {
-        const xOpen = canPlayerOccupy(candidateX, player.root.position.z, radius, footY);
-        const zOpen = canPlayerOccupy(player.root.position.x, candidateZ, radius, footY);
+        const xOpen = canPlayerOccupy(candidateX, player.root.position.z, radius, footY, collisionHeight);
+        const zOpen = canPlayerOccupy(player.root.position.x, candidateZ, radius, footY, collisionHeight);
         if (xOpen && zOpen) {
           if (Math.abs(stepX) >= Math.abs(stepZ)) player.root.position.x = candidateX;
           else player.root.position.z = candidateZ;
@@ -5772,8 +6657,9 @@
     });
   }
 
-  function canPlayerOccupy(x, z, radius, footY) {
-    if (hitsCollider(x, z, radius, footY, footY + 2.15)) return false;
+  function canPlayerOccupy(x, z, radius, footY, height) {
+    const collisionHeight = Number.isFinite(height) ? height : player.sliding ? 1.15 : 2.15;
+    if (hitsCollider(x, z, radius, footY, footY + collisionHeight)) return false;
     if (!player.grounded) return true;
     const currentSurface = surfaceHeightAt(player.root.position.x, player.root.position.z, footY + .9);
     const nextSurface = surfaceHeightAt(x, z, footY + .9);
@@ -5791,7 +6677,8 @@
   }
 
   function recoverPlayerFromCollision() {
-    if (!player.root || !player.grounded || !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + 2.1)) return false;
+    const collisionHeight = player.sliding ? 1.15 : 2.1;
+    if (!player.root || !player.grounded || !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + collisionHeight)) return false;
     const originX = player.root.position.x;
     const originZ = player.root.position.z;
     for (let ring = 1; ring <= 5; ring += 1) {
@@ -5800,7 +6687,7 @@
         const angle = index / 16 * Math.PI * 2;
         const x = clamp(originX + Math.cos(angle) * radius, -HALF_WORLD, HALF_WORLD);
         const z = clamp(originZ + Math.sin(angle) * radius, -HALF_WORLD, HALF_WORLD);
-        if (!canPlayerOccupy(x, z, .68, player.root.position.y)) continue;
+        if (!canPlayerOccupy(x, z, .68, player.root.position.y, collisionHeight)) continue;
         player.root.position.x = x;
         player.root.position.z = z;
         player.root.position.y = surfaceHeightAt(x, z, player.root.position.y + 1.05);
@@ -5838,6 +6725,20 @@
     });
   }
 
+  function capturePlayerPoseBones() {
+    if (!player.sprintBones) return false;
+    if (player.sprintPoseApplied) return true;
+    if (!player.sprintPoseSnapshot) {
+      player.sprintPoseSnapshot = {};
+      Object.keys(player.sprintBones).forEach((key) => { player.sprintPoseSnapshot[key] = new THREE.Quaternion(); });
+    }
+    Object.keys(player.sprintBones).forEach((key) => {
+      if (player.sprintBones[key]) player.sprintPoseSnapshot[key].copy(player.sprintBones[key].quaternion);
+    });
+    player.sprintPoseApplied = true;
+    return true;
+  }
+
   function updateSprintPose(dt) {
     let target = player.superSprinting ? 1 : player.sprinting ? .65 : 0;
     if (player.dodgeTime > 0 || player.hitReaction > 0 || player.attackTime > 0 || !player.grounded || !player.moving || state !== "playing") target = 0;
@@ -5845,12 +6746,7 @@
     const weight = player.sprintPoseWeight;
     if (weight < .001 || !player.sprintBones) return;
     const bones = player.sprintBones;
-    if (!player.sprintPoseSnapshot) {
-      player.sprintPoseSnapshot = {};
-      Object.keys(bones).forEach((key) => { player.sprintPoseSnapshot[key] = new THREE.Quaternion(); });
-    }
-    Object.keys(bones).forEach((key) => { if (bones[key]) player.sprintPoseSnapshot[key].copy(bones[key].quaternion); });
-    player.sprintPoseApplied = true;
+    capturePlayerPoseBones();
     _sprintRight.set(1, 0, 0).applyQuaternion(player.root.quaternion);
     // Sign convention (verified via screenshot probe): positive angle about world-right
     // pitches up-pointing bones BACKWARD, so the forward lean uses negative angles.
@@ -5870,13 +6766,54 @@
     addBoneWorldAxisRotation(bones.lowerArmR, _sprintRight, -.2 * weight);
   }
 
+  function updateAirborneAndSlideModelPose(dt) {
+    if (!player.modelRoot) return;
+    const slideWeight = player.sliding ? 1 : 0;
+    const airborneWeight = !player.grounded ? 1 : 0;
+    const landingWeight = player.grounded && player.landingTime > 0 ? clamp(player.landingTime / .22, 0, 1) : 0;
+    const targetOffset = slideWeight ? -.56 : landingWeight ? -.12 * landingWeight : 0;
+    player.modelRoot.position.y = lerp(player.modelRoot.position.y, targetOffset, 1 - Math.pow(.0005, dt));
+    if (!player.sprintBones || (!slideWeight && !airborneWeight && !landingWeight)) return;
+    capturePlayerPoseBones();
+    const bones = player.sprintBones;
+    _sprintRight.set(1, 0, 0).applyQuaternion(player.root.quaternion);
+    if (slideWeight) {
+      addBoneWorldAxisRotation(bones.torso, _sprintRight, -.62);
+      addBoneWorldAxisRotation(bones.abdomen, _sprintRight, -.24);
+      addBoneWorldAxisRotation(bones.hips, _sprintRight, .32);
+      addBoneWorldAxisRotation(bones.upperLegL, _sprintRight, 1.08);
+      addBoneWorldAxisRotation(bones.upperLegR, _sprintRight, .72);
+      addBoneWorldAxisRotation(bones.lowerLegL, _sprintRight, -1.28);
+      addBoneWorldAxisRotation(bones.lowerLegR, _sprintRight, -.94);
+      addBoneWorldAxisRotation(bones.upperArmL, _sprintRight, -.64);
+      addBoneWorldAxisRotation(bones.upperArmR, _sprintRight, -.48);
+    } else if (airborneWeight) {
+      const rising = player.airbornePhase === "jump" || player.airbornePhase === "rise";
+      const falling = player.airbornePhase === "fall";
+      addBoneWorldAxisRotation(bones.torso, _sprintRight, rising ? -.16 : falling ? .12 : -.02);
+      addBoneWorldAxisRotation(bones.upperLegL, _sprintRight, rising ? -.58 : .42);
+      addBoneWorldAxisRotation(bones.upperLegR, _sprintRight, rising ? .76 : -.28);
+      addBoneWorldAxisRotation(bones.lowerLegL, _sprintRight, rising ? .72 : -.52);
+      addBoneWorldAxisRotation(bones.lowerLegR, _sprintRight, rising ? -.42 : .66);
+      addBoneWorldAxisRotation(bones.upperArmL, _sprintRight, -.38);
+      addBoneWorldAxisRotation(bones.upperArmR, _sprintRight, -.22);
+    } else if (landingWeight) {
+      addBoneWorldAxisRotation(bones.hips, _sprintRight, .16 * landingWeight);
+      addBoneWorldAxisRotation(bones.upperLegL, _sprintRight, .34 * landingWeight);
+      addBoneWorldAxisRotation(bones.upperLegR, _sprintRight, .34 * landingWeight);
+      addBoneWorldAxisRotation(bones.lowerLegL, _sprintRight, -.48 * landingWeight);
+      addBoneWorldAxisRotation(bones.lowerLegR, _sprintRight, -.48 * landingWeight);
+    }
+  }
+
   function animatePlayer(dt, moving) {
-    const stride = moving ? Math.sin(player.walkCycle) : 0;
+    const groundLocomotion = moving && player.grounded && !player.sliding;
+    const stride = groundLocomotion ? Math.sin(player.walkCycle) : 0;
     const sprint = player.sprinting ? 1 : 0;
     const superSprint = player.superSprinting ? 1 : 0;
     const strideSize = superSprint ? 1.24 : sprint ? 1.02 : .58;
     const settle = Math.min(1, dt * 13);
-    const verticalPulse = moving ? Math.abs(Math.sin(player.walkCycle * 2)) : 0;
+    const verticalPulse = groundLocomotion ? Math.abs(Math.sin(player.walkCycle * 2)) : 0;
     player.leftLeg.rotation.x = lerp(player.leftLeg.rotation.x, stride * strideSize, settle);
     player.rightLeg.rotation.x = lerp(player.rightLeg.rotation.x, -stride * strideSize, settle);
     player.leftLeg.rotation.z = lerp(player.leftLeg.rotation.z, sprint ? -.07 : 0, settle);
@@ -5885,7 +6822,12 @@
     player.body.rotation.x = lerp(player.body.rotation.x, superSprint ? -.25 : sprint ? -.16 : 0, settle);
     player.body.rotation.z = lerp(player.body.rotation.z, moving ? -stride * .035 : 0, settle);
     player.body.rotation.y = lerp(player.body.rotation.y, 0, settle);
-    if (!player.grounded) {
+    if (player.sliding) {
+      player.leftLeg.rotation.x = lerp(player.leftLeg.rotation.x, .96, settle);
+      player.rightLeg.rotation.x = lerp(player.rightLeg.rotation.x, .64, settle);
+      player.leftArm.rotation.z = lerp(player.leftArm.rotation.z, -.28, settle);
+      player.body.rotation.x = lerp(player.body.rotation.x, -.52, settle);
+    } else if (!player.grounded) {
       const rising = player.velocityY > 0;
       player.leftLeg.rotation.x = lerp(player.leftLeg.rotation.x, rising ? -.48 : .32, settle * 1.4);
       player.rightLeg.rotation.x = lerp(player.rightLeg.rotation.x, rising ? .68 : -.22, settle * 1.4);
@@ -5932,9 +6874,9 @@
       player.body.rotation.z += Math.sin(impact * Math.PI) * .18;
       player.leftArm.rotation.x -= .45 * impact;
     }
-    player.body.position.y = 1.62 + verticalPulse * (superSprint ? .13 : sprint ? .09 : .045) - (!player.grounded ? .05 : 0);
+    player.body.position.y = lerp(player.body.position.y, player.sliding ? 1.03 : 1.62 + verticalPulse * (superSprint ? .13 : sprint ? .09 : .045) - (!player.grounded ? .05 : 0), settle);
     const capePosition = player.cape.geometry.attributes.position;
-    const sway = Math.sin(elapsed * 3.2) * .035 + (moving ? (sprint ? .31 : .12) : 0);
+    const sway = Math.sin(elapsed * 3.2) * .035 + (player.sliding ? .36 : groundLocomotion ? (sprint ? .31 : .12) : 0);
     capePosition.setZ(2, .61 + sway);
     capePosition.setZ(3, .61 + sway);
     capePosition.needsUpdate = true;
@@ -5944,21 +6886,28 @@
       if (player.dodgeTime > 0) modelState = "roll";
       else if (player.hitReaction > 0) modelState = "hit";
       else if (player.attackTime > 0) modelState = player.attackVariant % 2 ? "attack1" : "attack2";
-      else if (!player.grounded) modelState = "run";
-      else if (moving) modelState = player.sprinting ? "run" : "walk";
+      else if (!player.grounded || player.sliding || player.landingTime > 0) modelState = "idle";
+      else if (groundLocomotion) modelState = player.sprinting ? "run" : "walk";
       setPlayerModelAction(modelState);
       if (modelState === "run" && player.modelActions.run) player.modelActions.run.setEffectiveTimeScale(player.superSprinting ? 1.25 : 1.15);
       restoreSprintPoseBones();
       player.modelMixer.update(dt);
       updateSprintPose(dt);
+      updateAirborneAndSlideModelPose(dt);
     }
   }
 
   function jump() {
     if (state !== "playing" || !player.grounded || player.stamina < 10) return;
+    if (player.sliding) {
+      player.airMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
+      finishSlide(true);
+    } else player.airMomentum.set(0, 0, 0);
     player.grounded = false;
     player.velocityY = 15.2 + skillRank("acrobat") * 1.3 + (realm.biome === "moon" ? 1.6 : 0);
     player.jumpTime = 0;
+    player.airbornePhase = "jump";
+    player.landingTime = 0;
     player.stamina -= 10;
     emitPlayerNoise(13, .32, "jump");
     audio.tone(120, 185, .12, "triangle", .014);
@@ -5966,6 +6915,7 @@
 
   function dodge() {
     if (state !== "playing" || !player.grounded || player.dodgeTime > 0 || player.dodgeCooldown > 0 || player.attackTime > .12 || player.stamina < 22) return false;
+    if (player.sliding && !finishSlide(false)) return false;
     let inputX = (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0) + mobileMove.x;
     let inputZ = (keys.has("w") ? 1 : 0) - (keys.has("s") ? 1 : 0) - mobileMove.y;
     if (Math.hypot(inputX, inputZ) < .08) inputZ = 1;
@@ -5995,6 +6945,7 @@
     const weapon = WEAPONS[weaponId];
     const staminaCost = attackStaminaCost(weaponId);
     if (state !== "playing" || player.dodgeTime > 0 || player.attackCooldown > 0 || player.stamina < staminaCost) return;
+    if (player.sliding && !finishSlide(false)) return;
     audio.init();
     const attackSpeed = attackSpeedMultiplier(weaponId);
     player.attackCooldown = weapon.cooldown * attackSpeed;
@@ -6590,6 +7541,23 @@
     }
   }
 
+  function spawnSlideDust() {
+    const direction = player.slideDirection;
+    const right = new THREE.Vector3(-direction.z, 0, direction.x);
+    for (let index = 0; index < 2; index += 1) {
+      const material = new THREE.MeshBasicMaterial({ color: realm.biome === "snowy" ? 0xd9e8eb : realm.biome === "desert" ? 0xd9a86c : 0x9a8b70, transparent: true, opacity: .34, depthWrite: false });
+      const mesh = new THREE.Mesh(new THREE.CircleGeometry(.13 + index * .04, 7), material);
+      const lateral = index ? .48 : -.48;
+      mesh.position.copy(player.root.position)
+        .addScaledVector(direction, .62)
+        .addScaledVector(right, lateral);
+      mesh.position.y += .08;
+      mesh.rotation.x = -Math.PI / 2;
+      scene.add(mesh);
+      effects.push({ mesh, life: .38, maxLife: .38, grow: 3.1, type: "burst", peakOpacity: .34 });
+    }
+  }
+
   function updateEffects(dt) {
     effects.forEach((effect) => {
       effect.life -= dt;
@@ -6611,11 +7579,14 @@
 
   function updateWorldDecor(dt) {
     if (sky) sky.rotation.y += dt * .0013;
+    forestVisibilityTimer -= dt;
+    if (forestVisibilityTimer <= 0) updateAncientForestVisibility(true);
     strongholds.forEach((stronghold, index) => {
       if (!stronghold.marker || !stronghold.markerMaterial) return;
       stronghold.marker.rotation.z += dt * (stronghold.cleared ? .08 : .22);
       stronghold.markerMaterial.opacity = stronghold.cleared ? .12 : .34 + Math.sin(elapsed * 2 + index) * .1;
     });
+    updateCaptureFlags(dt);
     updateExperienceRunes(dt);
     updateDragonSouls(dt);
     updateChests(dt);
@@ -6652,7 +7623,8 @@
 
   function updateCamera(dt, immediate) {
     if (!player.root) return;
-    const target = player.root.position.clone().add(new THREE.Vector3(0, 1.84, 0));
+    const targetHeight = player.sliding ? 1.08 : player.landingTime > 0 ? 1.68 : 1.84;
+    const target = player.root.position.clone().add(new THREE.Vector3(0, targetHeight, 0));
     if (lockedTarget && !lockedTarget.dead) {
       const lockOffset = lockedTarget.root.position.clone().sub(player.root.position);
       const lockYaw = Math.atan2(-lockOffset.x, -lockOffset.z);
@@ -6845,6 +7817,10 @@
     ui.shout.style.width = player.shout + "%";
     ui.shout.parentElement.setAttribute("aria-valuenow", String(Math.round(player.shout)));
     ui.shoutMeter.classList.toggle("ready", player.shout >= 100);
+    if (ui.mobileSlide) {
+      ui.mobileSlide.classList.toggle("active", player.sliding);
+      ui.mobileSlide.setAttribute("aria-pressed", String(player.sliding));
+    }
     const nearbyTame = nearestTameCandidate(11);
     const nearbyRune = nearbyTame ? null : nearestExperienceRune(11);
     const nearbySoul = (nearbyTame || nearbyRune) ? null : nearestDragonSoul(11);
@@ -6970,6 +7946,16 @@
       }
       mapContext.fillStyle = landmark.discovered ? MARKER_STYLES.outpostDiscovered.color : landmark.revealed ? MARKER_STYLES.poi.color : MARKER_STYLES.outpostHidden.color;
       mapContext.fillRect(point.x - 2.5, point.y - 2.5, 5, 5);
+      mapContext.restore();
+    });
+    strongholds.filter((stronghold) => stronghold.cleared && stronghold.captureFlag).forEach((stronghold) => {
+      const point = toMap(stronghold.captureFlag.root.position);
+      mapContext.save();
+      mapContext.strokeStyle = "#7edcf2";
+      mapContext.fillStyle = "rgba(71,143,218,.9)";
+      mapContext.lineWidth = 1.25;
+      mapContext.beginPath(); mapContext.moveTo(point.x - 2, point.y + 4); mapContext.lineTo(point.x - 2, point.y - 5); mapContext.stroke();
+      mapContext.beginPath(); mapContext.moveTo(point.x - 1.5, point.y - 5); mapContext.lineTo(point.x + 4, point.y - 3); mapContext.lineTo(point.x - 1.5, point.y - 1); mapContext.closePath(); mapContext.fill();
       mapContext.restore();
     });
     allEnemies().forEach((enemy) => {
@@ -7210,6 +8196,7 @@
       const key = event.key.toLowerCase();
       if ([" ","arrowup","arrowdown","arrowleft","arrowright","tab","alt"].includes(key)) event.preventDefault();
       keys.add(key);
+      if (state === "playing" && key === "control" && !event.repeat) player.slideInputPressed = true;
       if (event.code === "Space" && !event.repeat) jump();
       if (key === "q" && !event.repeat) useShout();
       if (key === "f" && !event.repeat) attack();
@@ -7259,6 +8246,7 @@
     ui.playAgain.addEventListener("click", () => startGame(false));
     ui.pauseButton.addEventListener("click", () => pauseGame(true));
     ui.skillsButton.addEventListener("click", openSkillTree);
+    ui.mobileSkills.addEventListener("click", openSkillTree);
     ui.closeSkills.addEventListener("click", closeSkillTree);
     ui.resetProgress.addEventListener("click", resetProgression);
     ui.soundButton.addEventListener("click", () => { audio.setMuted(!audio.muted); ui.soundButton.classList.toggle("muted", audio.muted); ui.soundButton.setAttribute("aria-pressed", String(audio.muted)); });
@@ -7272,6 +8260,16 @@
     ui.mobileWeapon.addEventListener("pointerdown", (event) => { event.preventDefault(); cycleWeapon(); });
     ui.mobileDodge.addEventListener("pointerdown", (event) => { event.preventDefault(); dodge(); });
     ui.mobileLock.addEventListener("pointerdown", (event) => { event.preventDefault(); toggleTargetLock(); });
+    ui.mobileSlide.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      player.mobileSlideHeld = true;
+      player.slideInputPressed = true;
+      if (ui.mobileSlide.setPointerCapture) ui.mobileSlide.setPointerCapture(event.pointerId);
+    });
+    const releaseMobileSlide = () => { player.mobileSlideHeld = false; };
+    ui.mobileSlide.addEventListener("pointerup", releaseMobileSlide);
+    ui.mobileSlide.addEventListener("pointercancel", releaseMobileSlide);
+    ui.mobileSlide.addEventListener("lostpointercapture", releaseMobileSlide);
     ui.weaponRack.querySelectorAll("[data-weapon]").forEach((button) => button.addEventListener("click", () => equipWeapon(button.dataset.weapon)));
     setupJoystick();
     setupTouchLook();
@@ -7338,12 +8336,119 @@
     return { x: projected.x, y: projected.y };
   }
 
+  function findSlideTestSurface(kind) {
+    if (slideTestSurfaceCache[kind]) return Object.assign({}, slideTestSurfaceCache[kind]);
+    let best = null;
+    search: for (let z = -480; z <= 480; z += 24) {
+      for (let x = -480; x <= 480; x += 24) {
+        const y = terrainHeight(x, z);
+        if (y <= biome.waterLevel + 1 || hitsCollider(x, z, .9, y, y + 2.15)) continue;
+        const gradientSample = 1.5;
+        const gradientX = (terrainHeight(x + gradientSample, z) - terrainHeight(x - gradientSample, z)) / (gradientSample * 2);
+        const gradientZ = (terrainHeight(x, z + gradientSample) - terrainHeight(x, z - gradientSample)) / (gradientSample * 2);
+        const steepness = Math.atan(Math.hypot(gradientX, gradientZ)) * 180 / Math.PI;
+        if (kind === "flat" && steepness > 1.6) continue;
+        if (kind !== "flat" && (steepness < 9 || steepness > 34)) continue;
+        const direction = kind === "flat"
+          ? new THREE.Vector3(0, 0, -1)
+          : new THREE.Vector3(-gradientX, 0, -gradientZ).normalize().multiplyScalar(kind === "uphill" ? -1 : 1);
+        const info = terrainDescentInfo(direction, new THREE.Vector3(x, y, z));
+        if (kind === "downhill" && info.angle < 8) continue;
+        if (kind === "uphill" && info.angle > -8) continue;
+        const forwardY = terrainHeight(x + direction.x * 3, z + direction.z * 3);
+        if (forwardY <= biome.waterLevel + .35 || hitsCollider(x + direction.x * 2, z + direction.z * 2, .9, forwardY, forwardY + 1.2)) continue;
+        const score = kind === "flat" ? steepness : Math.abs(steepness - 15);
+        if (!best || score < best.score) best = { kind, x, y, z, dx: direction.x, dz: direction.z, angle: info.angle, steepness, score };
+        if ((kind === "flat" && score < .35) || (kind !== "flat" && score < 1.1)) break search;
+      }
+    }
+    if (best) slideTestSurfaceCache[kind] = Object.assign({}, best);
+    return best ? Object.assign({}, best) : null;
+  }
+
+  function prepareSlideTestSurface(kind) {
+    const sample = findSlideTestSurface(kind);
+    if (!sample) return null;
+    resetTraversalMotion();
+    player.root.position.set(sample.x, sample.y, sample.z);
+    player.lastSafePosition.copy(player.root.position);
+    player.grounded = true;
+    player.velocityY = 0;
+    player.stamina = maxStamina();
+    player.sprintExhausted = false;
+    player.sprintLatch = false;
+    player.superSprintLatch = false;
+    player.sprinting = false;
+    player.superSprinting = false;
+    cameraYaw = Math.atan2(-sample.dx, -sample.dz);
+    player.root.rotation.y = cameraYaw;
+    updateCamera(1, true);
+    return Object.assign({}, sample);
+  }
+
+  function chestInteractionProbe() {
+    if (!player.root) return { available: false };
+    let sample = null;
+    chests.some((chest) => {
+      const stance = chestInteractionStance(chest);
+      const access = chestInteractionDetails(chest, stance.foot, stance.facing, true);
+      if (!access.allowed) return false;
+      sample = { chest, stance, access };
+      return true;
+    });
+    if (!sample) return {
+      available: false,
+      chests: chests.length,
+      reasons: chests.slice(0, 5).map((chest) => {
+        const stance = chestInteractionStance(chest);
+        return chestInteractionDetails(chest, stance.foot, stance.facing, true).reason;
+      })
+    };
+    const valid = chestInteractionDetails(sample.chest, sample.stance.foot, sample.stance.facing, true);
+    const farFoot = sample.stance.foot.clone().addScaledVector(sample.stance.front, 4.2);
+    const farFacing = valid.latch.clone().sub(farFoot).setY(0).normalize();
+    const far = chestInteractionDetails(sample.chest, farFoot, farFacing, true);
+    const belowFoot = sample.stance.foot.clone();
+    belowFoot.y -= 3;
+    const belowFacing = valid.latch.clone().sub(belowFoot).setY(0).normalize();
+    const below = chestInteractionDetails(sample.chest, belowFoot, belowFacing, true);
+    const behindFoot = sample.chest.root.position.clone().addScaledVector(sample.stance.front, -2.15);
+    behindFoot.y = surfaceHeightAt(behindFoot.x, behindFoot.z, sample.chest.root.position.y + .95);
+    const behindFacing = valid.latch.clone().sub(behindFoot).setY(0).normalize();
+    const behind = chestInteractionDetails(sample.chest, behindFoot, behindFacing, true);
+    const facingAway = chestInteractionDetails(sample.chest, sample.stance.foot, sample.stance.facing.clone().negate(), true);
+    const airborne = chestInteractionDetails(sample.chest, sample.stance.foot, sample.stance.facing, false);
+    const midpoint = valid.origin.clone().lerp(valid.latch, .5);
+    const blocker = addCollider(midpoint.x, midpoint.z, .38, .38, 0, midpoint.y - .9, midpoint.y + .9);
+    const throughWall = chestInteractionDetails(sample.chest, sample.stance.foot, sample.stance.facing, true);
+    const blockerIndex = colliders.indexOf(blocker);
+    if (blockerIndex >= 0) colliders.splice(blockerIndex, 1);
+    return {
+      available: true,
+      id: sample.chest.id,
+      valid: valid.allowed,
+      validDistance: valid.distance,
+      farRejected: !far.allowed && far.distance > CHEST_INTERACTION_RANGE,
+      belowRejected: !below.allowed && below.verticalDifference > CHEST_LEVEL_TOLERANCE,
+      behindRejected: !behind.allowed && behind.approachDot < CHEST_FRONT_DOT,
+      facingAwayRejected: !facingAway.allowed && facingAway.facingDot < CHEST_FACING_DOT,
+      airborneRejected: !airborne.allowed && airborne.reason === "not-grounded",
+      wallRejected: !throughWall.allowed && throughWall.colliderBlocked,
+      maximumRange: CHEST_INTERACTION_RANGE,
+      maximumVerticalDifference: CHEST_LEVEL_TOLERANCE,
+      minimumFrontDot: CHEST_FRONT_DOT,
+      minimumFacingDot: CHEST_FACING_DOT
+    };
+  }
+
   window.ashenholdGame = {
     snapshot: () => ({
       state,
       position: player.root ? { x: player.root.position.x, y: player.root.position.y, z: player.root.position.z } : null,
       health: player.health, stamina: player.stamina, shout: player.shout, kills: player.kills,
       moving: player.moving, sprinting: player.sprinting, superSprinting: player.superSprinting,
+      grounded: player.grounded, airbornePhase: player.airbornePhase, velocityY: player.velocityY,
+      sliding: player.sliding, slideSpeed: player.slideSpeed, slideSlopeDegrees: player.slideSlopeDegrees,
       maxHealth: maxHealth(), maxStamina: maxStamina(), level: player.level, xp: player.xp,
       skillPoints: player.skillPoints, prestige: player.prestige, realmDepth: player.realmDepth, activeWeapon: player.activeWeapon,
       runLevel: player.runLevel, runXp: player.runXp, runSkillPoints: player.runSkillPoints,
@@ -7359,7 +8464,7 @@
       strongholds: {
         cleared: strongholds.filter((stronghold) => stronghold.cleared).length,
         total: strongholds.length,
-        list: strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), cleared: stronghold.cleared }))
+        list: strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), cleared: stronghold.cleared, flagRaised: Boolean(stronghold.captureFlag && stronghold.captureFlag.root.visible) }))
       },
       runesCollected, totalRunes: experienceRunes.length,
       chestsOpened: chests.filter((chest) => chest.opened).length, totalChests: chests.length,
@@ -7371,6 +8476,32 @@
         importedModels: visualAssets.models ? Object.keys(visualAssets.models).length : 0,
         importedModelInstances,
         modelSlots: visualAssets.modelPaths ? Object.keys(visualAssets.modelPaths) : [],
+        canonicalScale: {
+          unitMeters: CANONICAL_WORLD_SCALE.unitMeters,
+          wardenHeight: CANONICAL_WORLD_SCALE.wardenHeight,
+          doorHeight: CANONICAL_WORLD_SCALE.doorHeight,
+          doorWidth: CANONICAL_WORLD_SCALE.doorWidth,
+          houseHeight: CANONICAL_WORLD_SCALE.houseHeight.slice(),
+          castleWallHeight: CANONICAL_WORLD_SCALE.castleWallHeight.slice(),
+          gateHeight: CANONICAL_WORLD_SCALE.gateHeight.slice(),
+          towerHeight: CANONICAL_WORLD_SCALE.towerHeight.slice(),
+          structures: Object.keys(MODEL_SCALE_TARGETS).reduce((result, id) => {
+            const metric = modelScaleRegistry[id];
+            if (metric) result[id] = {
+              role: metric.role, width: metric.worldWidth, height: metric.worldHeight, depth: metric.worldDepth,
+              scale: metric.canonicalScale, verticalScale: metric.canonicalScaleY
+            };
+            return result;
+          }, {})
+        },
+        forest: Object.assign({}, forestReport),
+        infrastructure: { total: infrastructureReport.total, byKind: Object.assign({}, infrastructureReport.byKind), colliders: infrastructureReport.colliders, importedModels: infrastructureReport.importedModels },
+        skyProfile: {
+          id: skyReport.id, signature: skyReport.signature, features: skyReport.features.slice(),
+          featureCount: skyReport.featureCount || 0, gradientStops: skyReport.gradientStops || 0,
+          horizonBlend: Boolean(skyReport.horizonBlend), environmentMap: Boolean(visualAssets.environment)
+        },
+        capturedFlags: { total: captureFlags.length, raised: captureFlags.filter((flag) => flag.root.visible && flag.target > 0).length },
         grassInstances: grassField ? grassField.count : 0,
         props: { kind: biomePropsReport.kind, total: biomePropsReport.total, byKind: Object.assign({}, biomePropsReport.byKind) },
         outpostsDiscovered,
@@ -7389,6 +8520,8 @@
       combat: {
         dodging: player.dodgeTime > 0, dodgeElapsed: player.dodgeElapsed, locked: lockedTarget ? lockedTarget.name : null,
         sprintPose: player.sprintPoseWeight || 0, sprintLatch: player.sprintLatch, superSprintLatch: player.superSprintLatch, sprintExhausted: player.sprintExhausted, secondWindReady: player.secondWindReady,
+        modelAnimation: player.modelState, airbornePhase: player.airbornePhase, landingTime: player.landingTime,
+        sliding: player.sliding, slideSpeed: player.slideSpeed, slideSlopeDegrees: player.slideSlopeDegrees, slideExitBlocked: player.slideExitBlocked, slideCollision: player.slideCollision,
         hitStopRemaining, threat: ambientDifficulty(), lightningArcs: effects.filter((effect) => effect.type === "lightning").length
       },
       quality: { scale: qualityScale, pixelRatio: renderer ? renderer.getPixelRatio() : 1 },
@@ -7490,13 +8623,57 @@
         setEnemyTameReady(enemy);
         return true;
       },
-      strongholdDebug: () => strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), total: stronghold.members.length, cleared: stronghold.cleared })),
+      strongholdDebug: () => strongholds.map((stronghold) => ({
+        id: stronghold.id, name: stronghold.name, kind: stronghold.kind,
+        alive: strongholdAliveCount(stronghold), total: stronghold.members.length, cleared: stronghold.cleared,
+        flagRaised: Boolean(stronghold.captureFlag && stronghold.captureFlag.root.visible && stronghold.captureFlag.target > 0)
+      })),
       clearStronghold: clearStrongholdById,
       setQuestComplete: () => { questStage = 3; bossSpawned = true; updateQuestUI(); },
       objectiveInfo: () => currentObjective(),
       collectNearestRune: () => collectExperienceRune(nearestExperienceRune(9999)),
       soulPositions: () => dragonSouls.filter((soul) => !soul.claimed).map((soul) => ({ x: soul.root.position.x, z: soul.root.position.z, xp: soul.xp, grounded: soul.grounded })),
-      chestPositions: () => chests.filter((chest) => !chest.opened).map((chest) => ({ x: chest.root.position.x, z: chest.root.position.z, xp: chest.xp, powerUp: Object.assign({}, chest.powerUp) })),
+      chestPositions: () => chests.filter((chest) => !chest.opened).map((chest) => {
+        const stance = chestInteractionStance(chest);
+        const latch = stance.latch;
+        const access = chestInteractionDetails(chest);
+        return {
+          id: chest.id,
+          x: chest.root.position.x,
+          y: chest.root.position.y,
+          z: chest.root.position.z,
+          interaction: { x: stance.foot.x, y: stance.foot.y, z: stance.foot.z },
+          latch: { x: latch.x, y: latch.y, z: latch.z },
+          front: { x: stance.front.x, z: stance.front.z },
+          canInteract: access.allowed,
+          reason: access.reason,
+          xp: chest.xp,
+          powerUp: Object.assign({}, chest.powerUp)
+        };
+      }),
+      chestInteractionProbe,
+      positionAtChest: (id) => {
+        const candidates = id ? chests.filter((chest) => chest.id === id) : chests;
+        for (let index = 0; index < candidates.length; index += 1) {
+          const chest = candidates[index];
+          const stance = chestInteractionStance(chest);
+          if (!chestInteractionDetails(chest, stance.foot, stance.facing, true).allowed) continue;
+          resetTraversalMotion();
+          player.root.position.copy(stance.foot);
+          player.lastSafePosition.copy(stance.foot);
+          player.grounded = true;
+          player.velocityY = 0;
+          cameraYaw = Math.atan2(-stance.facing.x, -stance.facing.z);
+          player.root.rotation.y = cameraYaw;
+          updateCamera(1, true);
+          return chest.id;
+        }
+        return null;
+      },
+      openChest: (id) => {
+        const chest = id ? chests.find((item) => item.id === id) : nearestChest();
+        return openChest(chest);
+      },
       aimPoint: () => {
         const aim = computeCrosshairAim(160);
         const direction = new THREE.Vector3(-Math.sin(cameraYaw) * Math.cos(cameraPitch), -Math.sin(cameraPitch), -Math.cos(cameraYaw) * Math.cos(cameraPitch)).normalize();
@@ -7558,6 +8735,29 @@
         for (let i = 0; i < iterations; i += 1) update(.01);
       },
       zoom: (delta) => { cameraDistance = clamp(cameraDistance + delta, 5.1, 13.5); updateCamera(1, true); },
+      slideSurfaceProbe: () => ({ downhill: findSlideTestSurface("downhill"), flat: findSlideTestSurface("flat"), uphill: findSlideTestSurface("uphill") }),
+      prepareSlideSurface: (kind) => prepareSlideTestSurface(kind || "downhill"),
+      startPreparedSlide: (kind) => {
+        const sample = prepareSlideTestSurface(kind || "downhill");
+        if (!sample) return false;
+        return beginSlide(new THREE.Vector3(sample.dx, 0, sample.dz), terrainDescentInfo(new THREE.Vector3(sample.dx, 0, sample.dz)));
+      },
+      slideCollisionProbe: () => {
+        const sample = prepareSlideTestSurface("downhill");
+        if (!sample) return { available: false };
+        const direction = new THREE.Vector3(sample.dx, 0, sample.dz);
+        beginSlide(direction, terrainDescentInfo(direction));
+        const start = player.root.position.clone();
+        const center = start.clone().addScaledVector(direction, 2.1);
+        const blocker = addCollider(center.x, center.z, 4, .3, Math.atan2(direction.x, direction.z), start.y - .5, start.y + 2.4);
+        for (let index = 0; index < 80 && player.sliding; index += 1) updateSlide(.01, direction, true);
+        const distance = start.distanceTo(player.root.position);
+        const collision = player.slideCollision;
+        const blockerIndex = colliders.indexOf(blocker);
+        if (blockerIndex >= 0) colliders.splice(blockerIndex, 1);
+        finishSlide(true);
+        return { available: true, collision, distance, blocked: distance < 1.6 };
+      },
       openSkills: openSkillTree,
       closeSkills: closeSkillTree,
       resetProgression: clearProgressionData,
@@ -7585,6 +8785,30 @@
       },
       forceCritical: () => { player.forceNextCritical = true; },
       modelCatalog: () => Object.assign({}, visualAssets.modelPaths || {}),
+      modelScaleRegistry: () => Object.keys(modelScaleRegistry).reduce((result, id) => {
+        const metric = modelScaleRegistry[id];
+        result[id] = {
+          role: metric.role,
+          source: { width: metric.sx, height: metric.sy, depth: metric.sz },
+          world: { width: metric.worldWidth, height: metric.worldHeight, depth: metric.worldDepth },
+          scale: metric.canonicalScale, verticalScale: metric.canonicalScaleY,
+          targetHeight: metric.targetHeight, targetSpan: metric.targetSpan
+        };
+        return result;
+      }, {}),
+      forestDebug: () => Object.assign({}, forestReport, {
+        lodChunks: forestChunks.map((chunk) => ({
+          x: chunk.centerX, z: chunk.centerZ, count: chunk.count,
+          lod: chunk.nearMeshes[0].visible ? "near" : chunk.farMesh.visible ? "far" : "culled"
+        }))
+      }),
+      infrastructureDebug: () => (worldLayout.infrastructure || []).map((site) => Object.assign({}, site)),
+      skyDebug: () => Object.assign({}, skyReport, { features: skyReport.features.slice(), environmentMap: Boolean(visualAssets.environment) }),
+      captureFlagDebug: () => captureFlags.map((flag) => ({
+        strongholdId: flag.strongholdId, visible: flag.root.visible, raised: flag.raise, target: flag.target,
+        minimapMarker: Boolean(flag.root.visible && flag.target > 0),
+        x: flag.root.position.x, y: flag.root.position.y, z: flag.root.position.z, baseY: flag.baseY, height: flag.height
+      })),
       skillSchema: () => skillTree.map((branch) => ({ id: branch.id, scope: branch.scope || "permanent", nodes: branch.nodes.map((node) => ({ id: node.id, scope: node.scope, maxRank: node.maxRank, cost: node.cost, requiredMastery: node.requiredMastery || null })) })),
       platformProbe: () => {
         const platform = platforms[0];

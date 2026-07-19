@@ -1,7 +1,7 @@
 {
   "name": "ashenhold-e2e",
   "private": true,
-  "version": "5.4.0",
+  "version": "5.5.0",
   "description": "Dev-only test harness for Ashenhold: Dragonfall. The GitHub Pages workflow excludes test-results from its runtime artifact; the game itself has no build step or runtime package manifest.",
   "scripts": {
     "smoke": "node e2e-smoke.cjs",
@@ -9,6 +9,7 @@
     "audit": "node production-audit.cjs",
     "a11y": "node accessibility-audit.cjs",
     "payload": "node payload-audit.cjs",
+    "motion": "node motion-regression.cjs",
     "live": "node live-deployment-audit.cjs"
   },
   "devDependencies": {
