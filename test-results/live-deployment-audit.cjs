@@ -2,7 +2,9 @@
 
 const fs = require("fs");
 
-const BASE = (process.env.ASHENHOLD_BASE || "https://dragon-browser-nine.vercel.app/").replace(/\/?$/, "/");
+const BASE = (process.env.ASHENHOLD_BASE || "https://brornski.github.io/ashenhold-dragonfall/").replace(/\/?$/, "/");
+const baseUrl = new URL(BASE);
+const isGitHubPages = baseUrl.hostname.endsWith("github.io");
 
 async function request(path) {
   const response = await fetch(new URL(path.replace(/^\//, ""), BASE), { redirect: "manual" });
@@ -35,21 +37,28 @@ async function request(path) {
   const csp = root.headers["content-security-policy"] || "";
   const checks = {
     root200: root.status === 200 && /ASHENHOLD/i.test(root.body),
-    releaseMarker: app.status === 200 && /WORLD_LAYOUT_VERSION\s*=\s*5/.test(app.body) && /skillNodes/.test(app.body),
+    releaseMarker: app.status === 200 && /WORLD_LAYOUT_VERSION\s*=\s*6/.test(app.body) && /strongholdDebug/.test(app.body) && /skillNodes/.test(app.body),
     monster200: monster.status === 200 && /"animations"\s*:/.test(monster.body),
     pbrNormal200: normal.status === 200 && Number(normal.headers["content-length"] || normal.body.length) > 100000,
     manifest200: manifest.status === 200 && /Ashenhold/.test(manifest.body),
-    contentSecurityPolicy: csp.includes("default-src 'self'") && csp.includes("connect-src 'self' blob:") && csp.includes("frame-ancestors 'none'") && csp.includes("object-src 'none'"),
-    nosniff: root.headers["x-content-type-options"] === "nosniff",
-    frameDenied: root.headers["x-frame-options"] === "DENY",
-    permissionsRestricted: /camera=\(\)/.test(root.headers["permissions-policy"] || ""),
-    rootRevalidates: /no-cache|max-age=0.*must-revalidate/.test(root.headers["cache-control"] || ""),
-    assetCaching: /max-age=86400/.test(monster.headers["cache-control"] || ""),
+    secureOrigin: baseUrl.protocol === "https:",
     forbiddenFiles404: forbidden.every((result) => result.status === 404)
   };
+  if (isGitHubPages) {
+    checks.githubPagesHost = baseUrl.hostname === "brornski.github.io";
+    checks.projectPath = baseUrl.pathname.startsWith("/ashenhold-dragonfall/");
+  } else {
+    checks.contentSecurityPolicy = csp.includes("default-src 'self'") && csp.includes("connect-src 'self' blob:") && csp.includes("frame-ancestors 'none'") && csp.includes("object-src 'none'");
+    checks.nosniff = root.headers["x-content-type-options"] === "nosniff";
+    checks.frameDenied = root.headers["x-frame-options"] === "DENY";
+    checks.permissionsRestricted = /camera=\(\)/.test(root.headers["permissions-policy"] || "");
+    checks.rootRevalidates = /no-cache|max-age=0.*must-revalidate/.test(root.headers["cache-control"] || "");
+    checks.assetCaching = /max-age=86400/.test(monster.headers["cache-control"] || "");
+  }
   const report = {
     generatedAt: new Date().toISOString(),
     base: BASE,
+    provider: isGitHubPages ? "github-pages" : "custom-or-vercel",
     checks,
     statuses: {
       root: root.status,
