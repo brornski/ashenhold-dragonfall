@@ -302,7 +302,8 @@ export class RealmServer {
     player.moving = Boolean(incoming.moving); player.sprinting = Boolean(incoming.sprinting);
     player.superSprinting = Boolean(incoming.superSprinting); player.sliding = Boolean(incoming.sliding);
     player.airborne = Boolean(incoming.airborne); player.attacking = Boolean(incoming.attacking);
-    player.companionCount = Math.floor(clamp(incoming.companionCount, 0, 2));
+    const bondedCount = [...room.enemies.values()].filter((enemy) => enemy.tamedBy === player.id && !enemy.dead).length;
+    player.companionCount = Math.floor(clamp(Math.max(incoming.companionCount || 0, bondedCount), 0, 2));
     player.noise = clamp(incoming.noise, 0, 1); player.lastStateAt = now; player.lastSeenAt = now;
     return true;
   }
@@ -485,7 +486,27 @@ export class RealmServer {
   updateEnemies(room, dt, now) {
     const players = [...room.players.values()].filter((player) => player.connected && player.health > 0);
     for (const enemy of room.enemies.values()) {
-      if (enemy.dead || enemy.tamedBy || enemy.kind === "dragon") continue;
+      if (enemy.dead) continue;
+      if (enemy.tamedBy) {
+        const owner = room.players.get(enemy.tamedBy);
+        if (!owner || !owner.connected || owner.health <= 0) continue;
+        enemy.state = "bonded"; enemy.targetId = null; enemy.alert = 0;
+        const side = [...room.enemies.values()].filter((candidate) => candidate.tamedBy === owner.id && !candidate.dead).findIndex((candidate) => candidate.id === enemy.id) % 2 ? 1 : -1;
+        const follow = {
+          x: owner.x + Math.cos(owner.rotation) * side * 2.2 + Math.sin(owner.rotation) * 3.2,
+          z: owner.z - Math.sin(owner.rotation) * side * 2.2 + Math.cos(owner.rotation) * 3.2
+        };
+        const followDistance = distance2D(enemy, follow);
+        if (followDistance > 2.3) {
+          const path = findPath(room.navigation, enemy, follow);
+          const waypoint = path[0] || follow;
+          const dx = waypoint.x - enemy.x; const dz = waypoint.z - enemy.z; const length = Math.hypot(dx, dz) || 1;
+          const step = Math.min(length, enemy.speed * 1.08 * dt);
+          enemy.x += dx / length * step; enemy.z += dz / length * step;
+          enemy.rotation = Math.atan2(-dx, -dz);
+        }
+        continue;
+      }
       let target = enemy.targetId ? room.players.get(enemy.targetId) : null;
       if (!target || !target.connected || target.health <= 0) { target = null; enemy.targetId = null; }
       const visible = players.map((player) => {
