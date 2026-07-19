@@ -220,6 +220,10 @@
   let runesCollected = 0;
   let strongholds = [];
   let worldSpawnFailures = 0;
+  let playerNoiseRadius = 0;
+  let playerNoiseTime = 0;
+  let playerNoiseReason = "quiet";
+  let garrisonAIStats = { repaths: 0, stuckRecoveries: 0, alertsShared: 0 };
   let outpostsDiscovered = 0;
   let runeHinted = false;
   const visualAssets = {};
@@ -2595,7 +2599,7 @@
         if (gy <= biome.waterLevel + .35) continue;
         if (Math.abs(terrainHeight(gx + 1.5, gz) - gy) + Math.abs(terrainHeight(gx, gz + 1.5) - gy) > .9) continue;
         if (hitsCollider(gx, gz, .9, gy, gy + 3.4)) continue;
-        stronghold.spots.push({ type, x: gx, z: gz, roll: seeded(salt + index * 7 + attempt * 37 + 3) });
+        stronghold.spots.push({ type, baseType: type, slotIndex: index, x: gx, z: gz, roll: seeded(salt + index * 7 + attempt * 37 + 3) });
         placed = true;
         break;
       }
@@ -3951,8 +3955,9 @@
       mixer = new THREE.AnimationMixer(model);
       const findClip = (pattern) => source.animations.find((clip) => pattern.test(clip.name));
       const idleClip = findClip(/^Idle$/i) || source.animations[0];
+      const runClip = findClip(/^Run$/i) || findClip(/^Walk$/i) || idleClip;
       const clips = {
-        idle: idleClip, run: findClip(/^Run$/i) || findClip(/^Walk$/i) || idleClip,
+        idle: idleClip, walk: findClip(/^Walk$/i) || runClip, run: runClip,
         attack: findClip(/Punch|Weapon/i) || idleClip, hit: findClip(/HitReact/i) || idleClip,
         death: findClip(/^Death$/i) || idleClip
       };
@@ -3981,8 +3986,12 @@
       root.add(model);
       modelRoot = model;
       mixer = new THREE.AnimationMixer(model);
-      const runClip = source.animations.find((clip) => /run/i.test(clip.name)) || source.animations[source.animations.length - 1];
-      if (runClip) mixer.clipAction(runClip).play();
+      const findClip = (pattern) => source.animations.find((clip) => pattern.test(clip.name));
+      const idleClip = findClip(/survey|idle/i) || source.animations[0];
+      const walkClip = findClip(/^walk$/i) || findClip(/walk/i) || findClip(/run/i) || idleClip;
+      const runClip = findClip(/^run$/i) || findClip(/run/i) || walkClip;
+      const clips = { idle: idleClip, walk: walkClip, run: runClip, attack: runClip, hit: idleClip, death: idleClip };
+      Object.keys(clips).forEach((id) => { if (clips[id]) actions[id] = mixer.clipAction(clips[id]); });
       stats = { name: "FROST WARG", rank: "FERAL HUNTER", health: 45, damage: 7, speed: 10.8, range: 2.35, cooldown: 1.15, hitRadius: 1.65, xp: 52, heal: 7 };
     } else if (type === "golem") {
       const torso = new THREE.Mesh(new THREE.DodecahedronGeometry(1.15, 0), darkStoneMaterial.clone());
@@ -4040,7 +4049,7 @@
       tier, threat, strongholdId: null, strongholdHandled: false,
       actions, animationState, lastDamageSource: null, lastWeaponId: null, hitStun: 0, phase: encounterRandom() * Math.PI * 2,
       impulse: new THREE.Vector3(), telegraph: null, bleedStacks: 0, bleedTime: 0, slowTime: 0,
-      tamed: false, tameReady: false, tameProgress: 0, tameMarker: null
+      tamed: false, tameReady: false, tameProgress: 0, tameMarker: null, ai: null
     };
     setEnemyAction(enemy, "idle", true);
     root.traverse((object) => { if (object.isMesh || object.isSkinnedMesh) object.userData.dragon = enemy; });
@@ -4299,14 +4308,16 @@
 
   function animateGroundEnemy(enemy, dt, moving) {
     if (enemy.mixer) {
-      const nextState = enemy.dead ? "death" : enemy.hitStun > 0 ? "hit" : enemy.attackTimer > 0 ? "attack" : moving ? "run" : "idle";
+      const walking = moving && !enemy.tamed && enemy.ai && enemy.ai.moveMode === "walk" && enemy.actions && enemy.actions.walk;
+      const nextState = enemy.dead ? "death" : enemy.hitStun > 0 ? "hit" : enemy.attackTimer > 0 ? "attack" : moving ? (walking ? "walk" : "run") : "idle";
       setEnemyAction(enemy, nextState);
-      enemy.mixer.timeScale = nextState === "run" ? 1.15 : 1;
+      enemy.mixer.timeScale = nextState === "run" ? 1.15 : nextState === "walk" ? .82 : 1;
       enemy.mixer.update(dt);
       return;
     }
     const parts = enemy.parts;
-    const stride = Math.sin(enemy.walkCycle) * (enemy.kind === "golem" ? .38 : .72);
+    const walkScale = enemy.ai && enemy.ai.moveMode === "walk" ? .62 : 1;
+    const stride = Math.sin(enemy.walkCycle) * (enemy.kind === "golem" ? .38 : .72) * walkScale;
     if (parts.leftLeg) parts.leftLeg.rotation.x = lerp(parts.leftLeg.rotation.x, moving ? stride : 0, Math.min(1, dt * 10));
     if (parts.rightLeg) parts.rightLeg.rotation.x = lerp(parts.rightLeg.rotation.x, moving ? -stride : 0, Math.min(1, dt * 10));
     if (parts.leftArm) parts.leftArm.rotation.x = lerp(parts.leftArm.rotation.x, moving ? -stride * .7 : 0, Math.min(1, dt * 10));
@@ -4338,32 +4349,678 @@
     enemy.telegraph = null;
   }
 
-  function steerAroundObstacles(enemy, direction) {
-    const y = enemy.root.position.y;
-    const probe = (angle) => {
-      const c = Math.cos(angle);
-      const s = Math.sin(angle);
-      const dx = direction.x * c - direction.z * s;
-      const dz = direction.x * s + direction.z * c;
-      return {
-        dx, dz,
-        blocked: hitsCollider(enemy.root.position.x + dx * 3.5, enemy.root.position.z + dz * 3.5, enemy.hitRadius * .45, y, y + 3.6)
-      };
+  const GARRISON_PATROL_ROLES = new Set(["patrol_guard", "beast_patrol"]);
+
+  function emitPlayerNoise(radius, duration, reason) {
+    const nextRadius = Math.max(0, Number(radius) || 0);
+    if (playerNoiseTime <= 0 || nextRadius >= playerNoiseRadius) playerNoiseReason = reason || "disturbance";
+    playerNoiseRadius = Math.max(playerNoiseRadius, nextRadius);
+    playerNoiseTime = Math.max(playerNoiseTime, Math.max(.05, Number(duration) || .3));
+  }
+
+  function currentPlayerNoise() {
+    const pulseRadius = playerNoiseTime > 0 ? playerNoiseRadius : 0;
+    const movementRadius = player.superSprinting ? 36 : player.sprinting ? 23 : player.moving ? 8 : 0;
+    if (pulseRadius >= movementRadius && pulseRadius > 0) return { radius: pulseRadius, reason: playerNoiseReason };
+    if (player.superSprinting) return { radius: movementRadius, reason: "super-sprint" };
+    if (player.sprinting) return { radius: movementRadius, reason: "sprint" };
+    if (player.moving) return { radius: movementRadius, reason: "footsteps" };
+    return { radius: 0, reason: "quiet" };
+  }
+
+  function segmentIntersectsCollider(from, to, box, padding) {
+    const cosine = Math.cos(box.rotation || 0);
+    const sine = Math.sin(box.rotation || 0);
+    const transform = (point) => {
+      const dx = point.x - box.x;
+      const dz = point.z - box.z;
+      return { x: dx * cosine - dz * sine, y: point.y, z: dx * sine + dz * cosine };
     };
-    if (!probe(0).blocked) return null;
-    const left = probe(.55);
-    const right = probe(-.55);
-    let chosen = null;
-    if (!left.blocked && !right.blocked) {
-      const leftDistance = Math.hypot(enemy.root.position.x + left.dx * 3.5 - player.root.position.x, enemy.root.position.z + left.dz * 3.5 - player.root.position.z);
-      const rightDistance = Math.hypot(enemy.root.position.x + right.dx * 3.5 - player.root.position.x, enemy.root.position.z + right.dz * 3.5 - player.root.position.z);
-      chosen = leftDistance <= rightDistance ? left : right;
-    } else chosen = !left.blocked ? left : !right.blocked ? right : null;
-    if (!chosen) return new THREE.Vector3(-direction.x, 0, -direction.z);
-    return new THREE.Vector3(chosen.dx, 0, chosen.dz);
+    const start = transform(from);
+    const end = transform(to);
+    const inset = padding == null ? .04 : padding;
+    let enter = 0;
+    let exit = 1;
+    const clipAxis = (origin, delta, minimum, maximum) => {
+      if (Math.abs(delta) < 1e-6) return origin >= minimum && origin <= maximum;
+      let first = (minimum - origin) / delta;
+      let second = (maximum - origin) / delta;
+      if (first > second) { const swap = first; first = second; second = swap; }
+      enter = Math.max(enter, first);
+      exit = Math.min(exit, second);
+      return enter <= exit;
+    };
+    if (!clipAxis(start.x, end.x - start.x, -box.hx - inset, box.hx + inset)) return false;
+    if (!clipAxis(start.z, end.z - start.z, -box.hz - inset, box.hz + inset)) return false;
+    if (!clipAxis(start.y, end.y - start.y, box.minY - inset, box.maxY + inset)) return false;
+    return exit >= .012 && enter <= .988;
+  }
+
+  function segmentOccluded(from, to) {
+    const minimumX = Math.min(from.x, to.x);
+    const maximumX = Math.max(from.x, to.x);
+    const minimumZ = Math.min(from.z, to.z);
+    const maximumZ = Math.max(from.z, to.z);
+    const minimumY = Math.min(from.y, to.y);
+    const maximumY = Math.max(from.y, to.y);
+    for (let index = 0; index < colliders.length; index += 1) {
+      const box = colliders[index];
+      if (maximumY < box.minY || minimumY > box.maxY) continue;
+      const cosine = Math.abs(Math.cos(box.rotation || 0));
+      const sine = Math.abs(Math.sin(box.rotation || 0));
+      const extentX = cosine * box.hx + sine * box.hz + .08;
+      const extentZ = sine * box.hx + cosine * box.hz + .08;
+      if (maximumX < box.x - extentX || minimumX > box.x + extentX || maximumZ < box.z - extentZ || minimumZ > box.z + extentZ) continue;
+      if (segmentIntersectsCollider(from, to, box, .035)) return true;
+    }
+    const horizontalDistance = Math.hypot(to.x - from.x, to.z - from.z);
+    const samples = Math.min(24, Math.max(2, Math.ceil(horizontalDistance / 3.2)));
+    for (let index = 1; index < samples; index += 1) {
+      const ratio = index / samples;
+      const x = lerp(from.x, to.x, ratio);
+      const z = lerp(from.z, to.z, ratio);
+      const sightY = lerp(from.y, to.y, ratio);
+      if (terrainHeight(x, z) + .48 > sightY) return true;
+    }
+    return false;
+  }
+
+  function enemyEyePosition(enemy) {
+    const height = enemy.kind === "golem" ? 3.15 : enemy.kind === "warg" ? 1.35 : enemy.elite ? 2.35 : 1.85;
+    return enemy.root.position.clone().add(new THREE.Vector3(0, height, 0));
+  }
+
+  function playerSightPosition() {
+    return player.root.position.clone().add(new THREE.Vector3(0, 1.38, 0));
+  }
+
+  function roleSightProfile(enemy) {
+    const role = enemy.ai ? enemy.ai.role : "patrol_guard";
+    if (role === "tower_lookout") return { range: 48, halfAngle: 72, buildup: 1.28 };
+    if (role === "gate_sentry") return { range: 41, halfAngle: 64, buildup: 1.12 };
+    if (role === "beast_patrol") return { range: 34, halfAngle: 76, buildup: 1.18 };
+    if (role === "reserve") return { range: 29, halfAngle: 56, buildup: .9 };
+    return { range: 36, halfAngle: 60, buildup: 1 };
+  }
+
+  function enemyVisionSample(enemy) {
+    if (!enemy.ai || !player.root) return { visible: false, occluded: false, distance: Infinity, facing: -1 };
+    const eye = enemyEyePosition(enemy);
+    const target = playerSightPosition();
+    const dx = target.x - eye.x;
+    const dz = target.z - eye.z;
+    const horizontalDistance = Math.hypot(dx, dz);
+    const verticalDistance = Math.abs(target.y - eye.y);
+    const profile = roleSightProfile(enemy);
+    const forwardX = -Math.sin(enemy.root.rotation.y);
+    const forwardZ = -Math.cos(enemy.root.rotation.y);
+    const facing = horizontalDistance > .001 ? (forwardX * dx + forwardZ * dz) / horizontalDistance : 1;
+    const awarenessState = enemy.ai.state === "combat" || enemy.ai.state === "alert" || enemy.ai.state === "search" || enemy.ai.state === "suspicious";
+    const coneThreshold = Math.cos((profile.halfAngle + (awarenessState ? 24 : 0)) * Math.PI / 180);
+    const inCone = facing >= coneThreshold || horizontalDistance <= 4.5;
+    const inRange = horizontalDistance <= profile.range && verticalDistance <= Math.max(9, profile.range * .55);
+    const forcedBlind = enemy.ai.testBlindTime > 0;
+    const occluded = inRange && inCone ? segmentOccluded(eye, target) : false;
+    return { visible: !forcedBlind && inRange && inCone && !occluded, occluded, distance: horizontalDistance, facing, profile };
+  }
+
+  function setGroundEnemyAIState(enemy, nextState, reason) {
+    const ai = enemy && enemy.ai;
+    if (!ai || ai.state === nextState) return false;
+    ai.previousState = ai.state;
+    ai.state = nextState;
+    ai.stateTime = 0;
+    ai.transitionReason = reason || "state";
+    ai.path = [];
+    ai.pathIndex = 0;
+    ai.repathTimer = 0;
+    ai.blockedTime = 0;
+    ai.progressTime = 0;
+    ai.progressExpected = 0;
+    ai.progressX = enemy.root.position.x;
+    ai.progressZ = enemy.root.position.z;
+    ai.moveMode = nextState === "combat" || nextState === "alert" ? "run" : "walk";
+    enemy.engaged = nextState === "alert" || nextState === "combat" || nextState === "search";
+    if (nextState !== "combat") {
+      enemy.attackTimer = 0;
+      enemy.attackDelivered = false;
+      clearEnemyTelegraph(enemy);
+    }
+    if (nextState === "search") ai.searchRemaining = 4.5 + seeded(ai.seed + 71) * 2.5;
+    if (nextState === "guard") {
+      ai.detection = 0;
+      ai.lostSight = 0;
+      ai.guardDwell = 2.4 + seeded(ai.seed + ai.patrolIndex * 19 + 5) * 3.2;
+    }
+    return true;
+  }
+
+  function shareGarrisonAlert(source, position, reason) {
+    if (!source || !source.ai) return;
+    groundEnemies.forEach((other) => {
+      if (other === source || other.dead || other.tamed || !other.ai || other.strongholdId !== source.strongholdId) return;
+      if (other.ai.state === "combat" || other.ai.state === "alert") return;
+      const distance = distance2D(source.root.position, other.root.position);
+      const radius = source.ai.role === "tower_lookout" ? 24 : 19;
+      if (distance > radius) return;
+      const sourcePoint = enemyEyePosition(source);
+      const listenerPoint = enemyEyePosition(other);
+      if (distance > 8 && segmentOccluded(sourcePoint, listenerPoint)) return;
+      other.ai.lastKnown.copy(position);
+      other.ai.detection = Math.max(other.ai.detection, .58);
+      setGroundEnemyAIState(other, "suspicious", "shared-" + (reason || "alert"));
+      garrisonAIStats.alertsShared += 1;
+    });
+  }
+
+  function raiseGroundEnemyAlert(enemy, position, reason) {
+    if (!enemy || !enemy.ai) return;
+    enemy.ai.lastKnown.copy(position || player.root.position);
+    enemy.ai.detection = 1;
+    enemy.ai.lostSight = 0;
+    const changed = setGroundEnemyAIState(enemy, "alert", reason || "confirmed");
+    if (changed) shareGarrisonAlert(enemy, enemy.ai.lastKnown, reason || "confirmed");
+  }
+
+  function alertGroundEnemyFromDamage(enemy) {
+    if (!enemy || !enemy.ai || enemy.dead || enemy.tamed) return;
+    raiseGroundEnemyAlert(enemy, player.root.position, "damaged");
+  }
+
+  function enemyNavPointWalkable(x, z, radius) {
+    if (x < -HALF_WORLD || x > HALF_WORLD || z < -HALF_WORLD || z > HALF_WORLD) return false;
+    const y = terrainHeight(x, z);
+    if (y <= biome.waterLevel + .38) return false;
+    const sample = 1.25;
+    const slope = Math.max(
+      Math.abs(terrainHeight(x + sample, z) - terrainHeight(x - sample, z)),
+      Math.abs(terrainHeight(x, z + sample) - terrainHeight(x, z - sample))
+    ) / (sample * 2);
+    if (slope > 1.05) return false;
+    return !hitsCollider(x, z, radius == null ? .58 : radius, y, y + 3.35);
+  }
+
+  function buildStrongholdNavGrid(stronghold) {
+    if (!stronghold || stronghold.navGrid) return stronghold ? stronghold.navGrid : null;
+    const cell = 3.6;
+    const radius = (stronghold.kind === "keep" ? 47 : 37);
+    const halfCells = Math.ceil(radius / cell);
+    const size = halfCells * 2 + 1;
+    const originX = stronghold.x - halfCells * cell;
+    const originZ = stronghold.z - halfCells * cell;
+    const walkable = new Uint8Array(size * size);
+    let walkableCount = 0;
+    for (let row = 0; row < size; row += 1) {
+      for (let column = 0; column < size; column += 1) {
+        const x = originX + column * cell;
+        const z = originZ + row * cell;
+        const inside = Math.hypot(x - stronghold.x, z - stronghold.z) <= radius + cell;
+        const open = inside && enemyNavPointWalkable(x, z, .54);
+        walkable[row * size + column] = open ? 1 : 0;
+        if (open) walkableCount += 1;
+      }
+    }
+    stronghold.navGrid = { cell, radius, halfCells, size, originX, originZ, walkable, walkableCount };
+    return stronghold.navGrid;
+  }
+
+  function navCellIndex(grid, column, row) {
+    return row >= 0 && row < grid.size && column >= 0 && column < grid.size ? row * grid.size + column : -1;
+  }
+
+  function nearestWalkableNavCell(grid, x, z) {
+    const baseColumn = clamp(Math.round((x - grid.originX) / grid.cell), 0, grid.size - 1);
+    const baseRow = clamp(Math.round((z - grid.originZ) / grid.cell), 0, grid.size - 1);
+    for (let ring = 0; ring <= 4; ring += 1) {
+      let best = -1;
+      let bestDistance = Infinity;
+      for (let row = baseRow - ring; row <= baseRow + ring; row += 1) {
+        for (let column = baseColumn - ring; column <= baseColumn + ring; column += 1) {
+          if (ring && Math.abs(column - baseColumn) !== ring && Math.abs(row - baseRow) !== ring) continue;
+          const index = navCellIndex(grid, column, row);
+          if (index < 0 || !grid.walkable[index]) continue;
+          const cx = grid.originX + column * grid.cell;
+          const cz = grid.originZ + row * grid.cell;
+          const distance = Math.hypot(cx - x, cz - z);
+          if (distance < bestDistance) { best = index; bestDistance = distance; }
+        }
+      }
+      if (best >= 0) return best;
+    }
+    return -1;
+  }
+
+  function findStrongholdNavPath(enemy, target) {
+    if (!enemy.ai || !enemy.strongholdId) return [];
+    const stronghold = strongholds.find((item) => item.id === enemy.strongholdId);
+    const grid = buildStrongholdNavGrid(stronghold);
+    if (!grid || grid.walkableCount < 2) return [];
+    const start = nearestWalkableNavCell(grid, enemy.root.position.x, enemy.root.position.z);
+    const goal = nearestWalkableNavCell(grid, target.x, target.z);
+    if (start < 0 || goal < 0 || start === goal) return [];
+    const count = grid.size * grid.size;
+    const scores = new Float64Array(count);
+    const estimates = new Float64Array(count);
+    const previous = new Int32Array(count);
+    const closed = new Uint8Array(count);
+    scores.fill(Infinity);
+    estimates.fill(Infinity);
+    previous.fill(-1);
+    scores[start] = 0;
+    const goalColumn = goal % grid.size;
+    const goalRow = Math.floor(goal / grid.size);
+    estimates[start] = Math.hypot(start % grid.size - goalColumn, Math.floor(start / grid.size) - goalRow);
+    const open = [start];
+    const directions = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    let iterations = 0;
+    while (open.length && iterations < count * 3) {
+      iterations += 1;
+      let bestOpen = 0;
+      for (let index = 1; index < open.length; index += 1) if (estimates[open[index]] < estimates[open[bestOpen]]) bestOpen = index;
+      const current = open.splice(bestOpen, 1)[0];
+      if (closed[current]) continue;
+      if (current === goal) break;
+      closed[current] = 1;
+      const currentColumn = current % grid.size;
+      const currentRow = Math.floor(current / grid.size);
+      directions.forEach((direction) => {
+        const column = currentColumn + direction[0];
+        const row = currentRow + direction[1];
+        const neighbor = navCellIndex(grid, column, row);
+        if (neighbor < 0 || !grid.walkable[neighbor] || closed[neighbor]) return;
+        if (direction[0] && direction[1]) {
+          const sideA = navCellIndex(grid, currentColumn + direction[0], currentRow);
+          const sideB = navCellIndex(grid, currentColumn, currentRow + direction[1]);
+          if (sideA < 0 || sideB < 0 || !grid.walkable[sideA] || !grid.walkable[sideB]) return;
+        }
+        const x = grid.originX + column * grid.cell;
+        const z = grid.originZ + row * grid.cell;
+        const currentX = grid.originX + currentColumn * grid.cell;
+        const currentZ = grid.originZ + currentRow * grid.cell;
+        const slopeCost = Math.abs(terrainHeight(x, z) - terrainHeight(currentX, currentZ)) * .22;
+        const tentative = scores[current] + (direction[0] && direction[1] ? 1.414 : 1) + slopeCost;
+        if (tentative >= scores[neighbor]) return;
+        previous[neighbor] = current;
+        scores[neighbor] = tentative;
+        estimates[neighbor] = tentative + Math.hypot(column - goalColumn, row - goalRow);
+        open.push(neighbor);
+      });
+    }
+    if (previous[goal] < 0) return [];
+    const cells = [];
+    let cursor = goal;
+    while (cursor !== start && cursor >= 0 && cells.length < count) {
+      cells.push(cursor);
+      cursor = previous[cursor];
+    }
+    cells.reverse();
+    const path = cells.map((index) => {
+      const column = index % grid.size;
+      const row = Math.floor(index / grid.size);
+      const x = grid.originX + column * grid.cell;
+      const z = grid.originZ + row * grid.cell;
+      return new THREE.Vector3(x, terrainHeight(x, z), z);
+    });
+    return path.filter((point, index) => index === path.length - 1 || index % 2 === 0);
+  }
+
+  function roleForGarrisonMember(stronghold, spot, index) {
+    const base = STRONGHOLD_GARRISONS[stronghold.kind] || STRONGHOLD_GARRISONS.hamlet;
+    const golemSlots = base.golem + (stronghold.kind === "fort" || stronghold.kind === "keep" ? 1 : 0);
+    const firstLightSlot = base.heavy + base.warg + golemSlots;
+    const slotIndex = Number.isInteger(spot.slotIndex) ? spot.slotIndex : index;
+    const baseType = spot.baseType || spot.type;
+    const lightIndex = Math.max(0, slotIndex - firstLightSlot);
+    if (baseType === "golem") return "heavy_defender";
+    if (baseType === "warg") return "beast_patrol";
+    if ((stronghold.kind === "watchpost" || stronghold.kind === "fort") && baseType === "biomeLight" && lightIndex === 0) return "tower_lookout";
+    if (baseType === "biomeHeavy") return slotIndex % 2 ? "heavy_defender" : "gate_sentry";
+    const rotation = ["gate_sentry", "courtyard_guard", "patrol_guard", "reserve"];
+    return rotation[lightIndex % rotation.length];
+  }
+
+  function assignGarrisonAI(enemy, stronghold, spot, index) {
+    const seed = worldLayout.salt + index * 97 + Math.round(Math.abs(spot.x * 17 + spot.z * 31));
+    const role = roleForGarrisonMember(stronghold, spot, index);
+    const outwardX = spot.x - stronghold.x;
+    const outwardZ = spot.z - stronghold.z;
+    const outwardLength = Math.hypot(outwardX, outwardZ) || 1;
+    let guardYaw = Math.atan2(-(outwardX / outwardLength), -(outwardZ / outwardLength));
+    if (role === "courtyard_guard" || role === "reserve") guardYaw += Math.PI;
+    const patrol = [new THREE.Vector3(spot.x, terrainHeight(spot.x, spot.z), spot.z)];
+    if (GARRISON_PATROL_ROLES.has(role)) {
+      const baseAngle = Math.atan2(spot.z - stronghold.z, spot.x - stronghold.x);
+      const baseRadius = clamp(Math.hypot(outwardX, outwardZ), 5, stronghold.kind === "keep" ? 30 : 23);
+      [-.42, .36, .74, -.82, 1.08, -1.18, 1.46, -1.52].forEach((offset, patrolIndex) => {
+        if (patrol.length >= 4) return;
+        const radius = clamp(baseRadius + (seeded(seed + 20 + patrolIndex) - .5) * 5, 5, stronghold.kind === "keep" ? 34 : 27);
+        const angle = baseAngle + offset;
+        const x = stronghold.x + Math.cos(angle) * radius;
+        const z = stronghold.z + Math.sin(angle) * radius;
+        if (enemyNavPointWalkable(x, z, enemy.hitRadius * .42)) patrol.push(new THREE.Vector3(x, terrainHeight(x, z), z));
+      });
+    }
+    enemy.ai = {
+      seed, role, state: "guard", previousState: null, stateTime: 0, transitionReason: "spawned-at-post",
+      home: new THREE.Vector3(spot.x, terrainHeight(spot.x, spot.z), spot.z), guardYaw,
+      patrol, patrolIndex: 0, guardDwell: 3.2 + seeded(seed + 5) * 3.8,
+      detection: 0, lostSight: 0, lastKnown: new THREE.Vector3(spot.x, terrainHeight(spot.x, spot.z), spot.z),
+      searchRemaining: 0, path: [], pathIndex: 0, repathTimer: 0, blockedTime: 0,
+      progressTime: 0, progressExpected: 0, progressX: spot.x, progressZ: spot.z, stuckCount: 0, recoveries: 0,
+      moveMode: "walk", sidestepSign: seeded(seed + 9) < .5 ? -1 : 1, lastSight: null, testBlindTime: 0,
+      senseTimer: seeded(seed + 12) * .16, senseElapsed: 0
+    };
+    enemy.engaged = false;
+    enemy.root.rotation.y = guardYaw;
+    setEnemyAction(enemy, "idle", true);
+  }
+
+  function updateEnemyPerception(enemy, dt, noiseRadius, noiseReason) {
+    const ai = enemy.ai;
+    if (!ai) return;
+    ai.testBlindTime = Math.max(0, ai.testBlindTime - dt);
+    const sight = enemyVisionSample(enemy);
+    ai.lastSight = { visible: sight.visible, occluded: sight.occluded, distance: sight.distance, facing: sight.facing };
+    if (sight.visible) {
+      ai.lastKnown.copy(player.root.position);
+      ai.lostSight = 0;
+      const proximity = clamp(1 - sight.distance / Math.max(1, sight.profile.range), .12, 1);
+      const awareMultiplier = ai.state === "suspicious" || ai.state === "search" ? 1.9 : 1;
+      ai.detection = clamp(ai.detection + dt * sight.profile.buildup * (.55 + proximity * 1.7) * awareMultiplier, 0, 1);
+      if (ai.state === "combat") ai.detection = 1;
+      if (ai.detection >= 1 && ai.state !== "combat" && ai.state !== "alert") raiseGroundEnemyAlert(enemy, player.root.position, "line-of-sight");
+      else if (ai.detection >= .2 && (ai.state === "guard" || ai.state === "patrol" || ai.state === "return")) setGroundEnemyAIState(enemy, "suspicious", "partial-sighting");
+    } else {
+      ai.lostSight += dt;
+      if (ai.state === "guard" || ai.state === "patrol" || ai.state === "return") ai.detection = Math.max(0, ai.detection - dt * .24);
+      else if (ai.state === "suspicious") ai.detection = Math.max(.15, ai.detection - dt * .08);
+      if (ai.state === "combat" && ai.lostSight > 1.35) setGroundEnemyAIState(enemy, "search", "lost-line-of-sight");
+    }
+    if (!sight.visible && noiseRadius > 0) {
+      const hearingDistance = distance2D(enemy.root.position, player.root.position);
+      if (hearingDistance <= noiseRadius) {
+        const blocked = segmentOccluded(enemyEyePosition(enemy), playerSightPosition());
+        const effectiveRadius = blocked ? noiseRadius * .42 : noiseRadius;
+        if (hearingDistance <= effectiveRadius) {
+          ai.lastKnown.copy(player.root.position);
+          ai.detection = Math.max(ai.detection, blocked ? .22 : .4);
+          if (ai.state === "guard" || ai.state === "patrol" || ai.state === "return") setGroundEnemyAIState(enemy, "suspicious", "heard-" + (noiseReason || "disturbance"));
+        }
+      }
+    }
+  }
+
+  function canEnemyOccupy(enemy, x, z) {
+    if (!enemyNavPointWalkable(x, z, enemy.hitRadius * .42)) return false;
+    const currentY = terrainHeight(enemy.root.position.x, enemy.root.position.z);
+    return Math.abs(terrainHeight(x, z) - currentY) <= 1.05;
+  }
+
+  function recoverGroundEnemy(enemy) {
+    const ai = enemy.ai;
+    const blocked = hitsCollider(enemy.root.position.x, enemy.root.position.z, enemy.hitRadius * .42, enemy.root.position.y, enemy.root.position.y + 3.35);
+    const originX = enemy.root.position.x;
+    const originZ = enemy.root.position.z;
+    for (let ring = 1; ring <= 6; ring += 1) {
+      const radius = ring * .55;
+      for (let index = 0; index < 16; index += 1) {
+        const angle = index / 16 * Math.PI * 2;
+        const x = originX + Math.cos(angle) * radius;
+        const z = originZ + Math.sin(angle) * radius;
+        if (!canEnemyOccupy(enemy, x, z)) continue;
+        enemy.root.position.set(x, terrainHeight(x, z), z);
+        if (ai) { ai.recoveries += 1; ai.repathTimer = 0; }
+        garrisonAIStats.stuckRecoveries += 1;
+        return true;
+      }
+    }
+    if (blocked && ai && enemyNavPointWalkable(ai.home.x, ai.home.z, enemy.hitRadius * .42)) {
+      enemy.root.position.copy(ai.home);
+      ai.recoveries += 1;
+      ai.repathTimer = 0;
+      garrisonAIStats.stuckRecoveries += 1;
+      return true;
+    }
+    return false;
+  }
+
+  function requestEnemyPath(enemy, target) {
+    if (!enemy.ai) return [];
+    enemy.ai.path = findStrongholdNavPath(enemy, target);
+    enemy.ai.pathIndex = 0;
+    enemy.ai.repathTimer = .8 + seeded(enemy.ai.seed + enemy.ai.stuckCount * 13 + 33) * .55;
+    garrisonAIStats.repaths += 1;
+    return enemy.ai.path;
+  }
+
+  function steerAroundObstacles(enemy, direction, target) {
+    const distance = 2.4 + enemy.hitRadius * .45;
+    if (canEnemyOccupy(enemy, enemy.root.position.x + direction.x * distance, enemy.root.position.z + direction.z * distance)) return direction;
+    const sign = enemy.ai ? enemy.ai.sidestepSign : 1;
+    const angles = [.48 * sign, -.48 * sign, .92 * sign, -.92 * sign, 1.34 * sign, -1.34 * sign];
+    let best = null;
+    let bestScore = -Infinity;
+    angles.forEach((angle) => {
+      const cosine = Math.cos(angle);
+      const sine = Math.sin(angle);
+      const x = direction.x * cosine - direction.z * sine;
+      const z = direction.x * sine + direction.z * cosine;
+      if (!canEnemyOccupy(enemy, enemy.root.position.x + x * distance, enemy.root.position.z + z * distance)) return;
+      const remaining = target ? Math.hypot(target.x - (enemy.root.position.x + x * distance), target.z - (enemy.root.position.z + z * distance)) : 0;
+      const score = direction.x * x + direction.z * z - remaining * .015;
+      if (score > bestScore) { bestScore = score; best = new THREE.Vector3(x, 0, z); }
+    });
+    return best;
+  }
+
+  function applyGroundEnemySeparation(enemy, direction) {
+    groundEnemies.forEach((other) => {
+      if (other === enemy || other.dead || other.tamed) return;
+      const separationX = enemy.root.position.x - other.root.position.x;
+      const separationZ = enemy.root.position.z - other.root.position.z;
+      const separationDistance = Math.hypot(separationX, separationZ);
+      const desired = Math.max(2.1, (enemy.hitRadius + other.hitRadius) * .72);
+      if (separationDistance <= .01 || separationDistance >= desired) return;
+      const awayX = separationX / separationDistance;
+      const awayZ = separationZ / separationDistance;
+      const approaching = Math.max(0, -(direction.x * awayX + direction.z * awayZ));
+      const strength = (desired - separationDistance) / desired * .9 + approaching * 1.05;
+      direction.x += awayX * strength;
+      direction.z += awayZ * strength;
+    });
+    return direction;
+  }
+
+  function enemyMovementDirection(enemy, target) {
+    const ai = enemy.ai;
+    let movementTarget = target;
+    const directX = target.x - enemy.root.position.x;
+    const directZ = target.z - enemy.root.position.z;
+    const directDistance = Math.hypot(directX, directZ);
+    const directDirection = directDistance > .001 ? new THREE.Vector3(directX / directDistance, 0, directZ / directDistance) : new THREE.Vector3();
+    const probeDistance = Math.min(4.2, Math.max(1.2, directDistance));
+    const directOpen = directDistance <= .001 || canEnemyOccupy(enemy, enemy.root.position.x + directDirection.x * probeDistance, enemy.root.position.z + directDirection.z * probeDistance);
+    if ((!directOpen || ai.blockedTime > .28) && (!ai.path.length || ai.repathTimer <= 0)) requestEnemyPath(enemy, target);
+    if (ai.path.length) {
+      while (ai.pathIndex < ai.path.length - 1 && distance2D(enemy.root.position, ai.path[ai.pathIndex]) < 1.45) ai.pathIndex += 1;
+      movementTarget = ai.path[ai.pathIndex] || target;
+      if (distance2D(enemy.root.position, movementTarget) < 1.2 && ai.pathIndex >= ai.path.length - 1) ai.path = [];
+    }
+    const dx = movementTarget.x - enemy.root.position.x;
+    const dz = movementTarget.z - enemy.root.position.z;
+    const length = Math.hypot(dx, dz);
+    if (length <= .001) return new THREE.Vector3();
+    const direction = new THREE.Vector3(dx / length, 0, dz / length);
+    const steered = steerAroundObstacles(enemy, direction, movementTarget);
+    if (steered) direction.copy(steered);
+    applyGroundEnemySeparation(enemy, direction);
+    return direction.normalize();
+  }
+
+  function moveGroundEnemyToward(enemy, target, speed, dt) {
+    const direction = enemyMovementDirection(enemy, target);
+    if (direction.lengthSq() < .01) return 0;
+    const startX = enemy.root.position.x;
+    const startZ = enemy.root.position.z;
+    const distance = Math.max(0, speed * dt);
+    const steps = Math.max(1, Math.ceil(distance / .24));
+    const stepDistance = distance / steps;
+    for (let index = 0; index < steps; index += 1) {
+      const nextX = enemy.root.position.x + direction.x * stepDistance;
+      const nextZ = enemy.root.position.z + direction.z * stepDistance;
+      if (canEnemyOccupy(enemy, nextX, nextZ)) {
+        enemy.root.position.x = nextX;
+        enemy.root.position.z = nextZ;
+      } else {
+        const xOpen = canEnemyOccupy(enemy, nextX, enemy.root.position.z);
+        const zOpen = canEnemyOccupy(enemy, enemy.root.position.x, nextZ);
+        if (xOpen && (!zOpen || Math.abs(direction.x) >= Math.abs(direction.z))) enemy.root.position.x = nextX;
+        else if (zOpen) enemy.root.position.z = nextZ;
+      }
+      enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
+    }
+    const moved = Math.hypot(enemy.root.position.x - startX, enemy.root.position.z - startZ);
+    enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-direction.x, -direction.z), dt * (enemy.ai.moveMode === "walk" ? 5.5 : 9));
+    enemy.walkCycle += moved * (enemy.kind === "golem" ? 1.15 : enemy.ai.moveMode === "walk" ? 1.45 : 2.1);
+    if (moved < distance * .18) enemy.ai.blockedTime += dt;
+    else enemy.ai.blockedTime = Math.max(0, enemy.ai.blockedTime - dt * 2.5);
+    enemy.ai.progressTime += dt;
+    enemy.ai.progressExpected += distance;
+    if (enemy.ai.progressTime >= .78) {
+      const progress = Math.hypot(enemy.root.position.x - enemy.ai.progressX, enemy.root.position.z - enemy.ai.progressZ);
+      if (progress < .3 && enemy.ai.progressExpected > .45) {
+        enemy.ai.stuckCount += 1;
+        enemy.ai.sidestepSign *= -1;
+        enemy.ai.repathTimer = 0;
+        requestEnemyPath(enemy, target);
+        recoverGroundEnemy(enemy);
+      }
+      enemy.ai.progressX = enemy.root.position.x;
+      enemy.ai.progressZ = enemy.root.position.z;
+      enemy.ai.progressTime = 0;
+      enemy.ai.progressExpected = 0;
+    }
+    return moved;
+  }
+
+  function finishEnemyAttack(enemy, dt) {
+    if (enemy.attackTimer <= 0) return;
+    const previous = enemy.attackTimer;
+    enemy.attackTimer = Math.max(0, enemy.attackTimer - dt);
+    if (enemy.telegraph) {
+      enemy.telegraph.position.set(enemy.root.position.x, terrainHeight(enemy.root.position.x, enemy.root.position.z) + .12, enemy.root.position.z);
+      enemy.telegraph.material.opacity = .16 + (1 - enemy.attackTimer / .72) * .48;
+      enemy.telegraph.scale.setScalar(.86 + (1 - enemy.attackTimer / .72) * .14);
+    }
+    if (!enemy.attackDelivered && previous > .38 && enemy.attackTimer <= .38) {
+      enemy.attackDelivered = true;
+      const freshOffset = player.root.position.clone().sub(enemy.root.position);
+      const freshDistance = freshOffset.length();
+      const facingDot = freshDistance > .001 ? freshOffset.clone().setY(0).normalize().dot(new THREE.Vector3(-Math.sin(enemy.root.rotation.y), 0, -Math.cos(enemy.root.rotation.y))) : 1;
+      const verticalDistance = Math.abs(player.root.position.y - enemy.root.position.y);
+      if (freshDistance < enemy.attackRange + .85 && verticalDistance < 3.1 && facingDot > .15 && !segmentOccluded(enemyEyePosition(enemy), playerSightPosition())) damagePlayer(enemy.damage, enemy.name);
+      createShockwave(enemy.root.position.clone(), enemy.attackRange, .22, enemy.elite ? 0xff6338 : 0xd18a52);
+      emitPlayerNoise(18, .3, "combat");
+    }
+    if (enemy.attackTimer <= 0) clearEnemyTelegraph(enemy);
+  }
+
+  function updateGroundEnemyAI(enemy, dt, noiseRadius, noiseReason) {
+    const ai = enemy.ai;
+    ai.stateTime += dt;
+    ai.repathTimer = Math.max(0, ai.repathTimer - dt);
+    ai.senseTimer -= dt;
+    ai.senseElapsed += dt;
+    if (ai.senseTimer <= 0) {
+      updateEnemyPerception(enemy, ai.senseElapsed, noiseRadius, noiseReason);
+      ai.senseElapsed = 0;
+      ai.senseTimer = ai.state === "combat" || ai.state === "alert" ? .08 : ai.state === "suspicious" || ai.state === "search" ? .12 : .2;
+    }
+    const homeDistance = distance2D(enemy.root.position, ai.home);
+    const playerCampDistance = enemy.camp ? Math.hypot(player.root.position.x - enemy.camp.x, player.root.position.z - enemy.camp.z) : 0;
+    if (enemy.camp && homeDistance > enemy.camp.radius + 7 && ai.state !== "return") setGroundEnemyAIState(enemy, "return", "home-leash");
+    if (enemy.camp && playerCampDistance > enemy.camp.radius + 14 && (ai.state === "combat" || ai.state === "alert") && ai.lostSight > .35) setGroundEnemyAIState(enemy, "search", "player-left-location");
+    let moving = false;
+    const stunned = enemy.hitStun > 0;
+    if (ai.state === "guard") {
+      ai.moveMode = "walk";
+      ai.guardDwell -= dt;
+      const scan = Math.sin(elapsed * .52 + enemy.phase) * (ai.role === "tower_lookout" ? .58 : .34);
+      enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, ai.guardYaw + scan, dt * 1.35);
+      if (GARRISON_PATROL_ROLES.has(ai.role) && ai.patrol.length > 1 && ai.guardDwell <= 0) {
+        ai.patrolIndex = (ai.patrolIndex + 1) % ai.patrol.length;
+        setGroundEnemyAIState(enemy, "patrol", "scheduled-patrol");
+      }
+    } else if (ai.state === "patrol") {
+      ai.moveMode = "walk";
+      const target = ai.patrol[ai.patrolIndex] || ai.home;
+      if (distance2D(enemy.root.position, target) <= 1.35) setGroundEnemyAIState(enemy, "guard", "patrol-pause");
+      else if (!stunned) moving = moveGroundEnemyToward(enemy, target, enemy.speed * .42 * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+    } else if (ai.state === "suspicious") {
+      ai.moveMode = "walk";
+      if (distance2D(enemy.root.position, ai.lastKnown) > 2.1 && ai.stateTime < 7.5 && !stunned) moving = moveGroundEnemyToward(enemy, ai.lastKnown, enemy.speed * .56 * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+      else setGroundEnemyAIState(enemy, "search", "investigate-last-known");
+    } else if (ai.state === "alert") {
+      ai.moveMode = "run";
+      const directionX = ai.lastKnown.x - enemy.root.position.x;
+      const directionZ = ai.lastKnown.z - enemy.root.position.z;
+      enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-directionX, -directionZ), dt * 11);
+      if (ai.stateTime >= .24) setGroundEnemyAIState(enemy, "combat", "alert-ready");
+    } else if (ai.state === "combat") {
+      ai.moveMode = "run";
+      const playerOffsetX = player.root.position.x - enemy.root.position.x;
+      const playerOffsetZ = player.root.position.z - enemy.root.position.z;
+      const playerDistance = Math.hypot(playerOffsetX, playerOffsetZ);
+      const verticalDistance = Math.abs(player.root.position.y - enemy.root.position.y);
+      const futureRanged = enemy.attackRange >= 6;
+      if (stunned) {
+        moving = false;
+      } else if (futureRanged && playerDistance < enemy.attackRange * .55) {
+        const retreat = enemy.root.position.clone().sub(player.root.position).setY(0).normalize().multiplyScalar(enemy.attackRange * .72).add(enemy.root.position);
+        moving = moveGroundEnemyToward(enemy, retreat, enemy.speed * .72, dt) > .001;
+      } else if (playerDistance > enemy.attackRange * (futureRanged ? .82 : .9) || verticalDistance > 2.8) {
+        let combatGoal = player.root.position;
+        if (ai.role === "heavy_defender" && enemy.camp) {
+          const fromHomeX = player.root.position.x - ai.home.x;
+          const fromHomeZ = player.root.position.z - ai.home.z;
+          const fromHomeDistance = Math.hypot(fromHomeX, fromHomeZ);
+          if (fromHomeDistance > 13) combatGoal = new THREE.Vector3(ai.home.x + fromHomeX / fromHomeDistance * 13, 0, ai.home.z + fromHomeZ / fromHomeDistance * 13);
+        } else if (ai.role === "beast_patrol" && playerDistance > enemy.attackRange + 2) {
+          const flankAngle = Math.atan2(playerOffsetZ, playerOffsetX) + ai.sidestepSign * .72;
+          combatGoal = new THREE.Vector3(player.root.position.x + Math.cos(flankAngle) * 2.8, 0, player.root.position.z + Math.sin(flankAngle) * 2.8);
+        }
+        moving = moveGroundEnemyToward(enemy, combatGoal, enemy.speed * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+      } else if (enemy.attackCooldown <= 0 && enemy.attackTimer <= 0) {
+        enemy.attackTimer = .72;
+        enemy.attackDelivered = false;
+        enemy.attackCooldown = enemy.attackInterval;
+        enemy.root.rotation.y = Math.atan2(-playerOffsetX, -playerOffsetZ);
+        beginEnemyTelegraph(enemy);
+      }
+    } else if (ai.state === "search") {
+      ai.moveMode = "walk";
+      ai.searchRemaining -= dt;
+      const lastDistance = distance2D(enemy.root.position, ai.lastKnown);
+      if (lastDistance > 2.2 && !stunned) moving = moveGroundEnemyToward(enemy, ai.lastKnown, enemy.speed * .55 * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+      else enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, ai.guardYaw + Math.sin(elapsed * 1.3 + enemy.phase) * 1.15, dt * 2.4);
+      if (ai.searchRemaining <= 0) setGroundEnemyAIState(enemy, "return", "search-expired");
+    } else if (ai.state === "return") {
+      ai.moveMode = "walk";
+      if (homeDistance <= 1.25) {
+        enemy.root.position.x = ai.home.x;
+        enemy.root.position.z = ai.home.z;
+        setGroundEnemyAIState(enemy, "guard", "post-restored");
+      } else if (!stunned) moving = moveGroundEnemyToward(enemy, ai.home, enemy.speed * .58 * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+    }
+    finishEnemyAttack(enemy, dt);
+    enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
+    animateGroundEnemy(enemy, dt, moving);
   }
 
   function updateGroundEnemies(dt, idle) {
+    playerNoiseTime = Math.max(0, playerNoiseTime - dt);
+    if (playerNoiseTime <= 0) { playerNoiseRadius = 0; playerNoiseReason = "quiet"; }
+    const noise = currentPlayerNoise();
     groundEnemies.forEach((enemy) => {
       const renderDistance = isCoarse ? 175 : 275;
       const playerDistance = player.root ? distance2D(enemy.root.position, player.root.position) : 0;
@@ -4371,6 +5028,7 @@
       if (!enemy.root.visible && !enemy.dead) {
         clearEnemyTelegraph(enemy);
         enemy.attackTimer = 0;
+        if (enemy.ai && enemy.ai.state !== "guard" && enemy.ai.state !== "patrol" && enemy.ai.state !== "return") setGroundEnemyAIState(enemy, "return", "far-cull");
         return;
       }
       if (enemy.dead) {
@@ -4399,94 +5057,309 @@
       if (enemy.impulse && enemy.impulse.lengthSq() > .01) {
         const impulseX = enemy.root.position.x + enemy.impulse.x * dt;
         const impulseZ = enemy.root.position.z + enemy.impulse.z * dt;
-        const footY = enemy.root.position.y;
-        if (!hitsCollider(impulseX, impulseZ, enemy.hitRadius * .45, footY, footY + 3.6)) {
+        if (enemy.ai ? canEnemyOccupy(enemy, impulseX, impulseZ) : !hitsCollider(impulseX, impulseZ, enemy.hitRadius * .45, enemy.root.position.y, enemy.root.position.y + 3.6)) {
           enemy.root.position.x = clamp(impulseX, -HALF_WORLD, HALF_WORLD);
           enemy.root.position.z = clamp(impulseZ, -HALF_WORLD, HALF_WORLD);
         }
         enemy.impulse.multiplyScalar(Math.pow(.035, dt));
       }
-      if (enemy.camp) {
-        const playerCampDistance = player.root ? Math.hypot(player.root.position.x - enemy.camp.x, player.root.position.z - enemy.camp.z) : 0;
-        if (playerCampDistance > enemy.camp.radius) {
-          clearEnemyTelegraph(enemy);
-          enemy.attackTimer = 0;
-          const homeX = enemy.camp.x - enemy.root.position.x;
-          const homeZ = enemy.camp.z - enemy.root.position.z;
-          const homeDistance = Math.hypot(homeX, homeZ);
-          let campMoving = false;
-          if (homeDistance > 2.5 && enemy.hitStun <= 0) {
-            const directionX = homeX / homeDistance;
-            const directionZ = homeZ / homeDistance;
-            const movementSpeed = enemy.speed * .72 * (enemy.slowTime > 0 ? .62 : 1);
-            const nextX = enemy.root.position.x + directionX * movementSpeed * dt;
-            const nextZ = enemy.root.position.z + directionZ * movementSpeed * dt;
-            const enemyY = enemy.root.position.y;
-            if (!hitsCollider(nextX, nextZ, enemy.hitRadius * .45, enemyY, enemyY + 3.6)) {
-              enemy.root.position.x = nextX;
-              enemy.root.position.z = nextZ;
-            }
-            enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-directionX, -directionZ), dt * 7);
-            enemy.walkCycle += dt * enemy.speed * 1.7;
-            campMoving = true;
+      if (enemy.ai) updateGroundEnemyAI(enemy, dt, noise.radius, noise.reason);
+      else {
+        const offset = player.root.position.clone().sub(enemy.root.position).setY(0);
+        const distance = offset.length();
+        const moving = distance > enemy.attackRange && enemy.hitStun <= 0;
+        if (moving) {
+          const direction = offset.normalize();
+          const speed = enemy.speed * (enemy.slowTime > 0 ? .62 : 1);
+          const nextX = enemy.root.position.x + direction.x * speed * dt;
+          const nextZ = enemy.root.position.z + direction.z * speed * dt;
+          if (!hitsCollider(nextX, nextZ, enemy.hitRadius * .45, enemy.root.position.y, enemy.root.position.y + 3.6)) {
+            enemy.root.position.x = nextX;
+            enemy.root.position.z = nextZ;
           }
-          enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
-          animateGroundEnemy(enemy, dt, campMoving);
-          return;
+          enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-direction.x, -direction.z), dt * 9);
+          enemy.walkCycle += dt * enemy.speed * 2.1;
+        } else if (enemy.attackCooldown <= 0 && enemy.attackTimer <= 0) {
+          enemy.attackTimer = .72;
+          enemy.attackDelivered = false;
+          enemy.attackCooldown = enemy.attackInterval;
+          beginEnemyTelegraph(enemy);
         }
+        finishEnemyAttack(enemy, dt);
+        enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
+        animateGroundEnemy(enemy, dt, moving);
       }
-      const offset = player.root.position.clone().sub(enemy.root.position);
-      const distance = offset.length();
-      const moving = distance > enemy.attackRange && enemy.hitStun <= 0;
-      if (moving) {
-        const direction = offset.setY(0).normalize();
-        groundEnemies.forEach((other) => {
-          if (other === enemy || other.dead) return;
-          const separation = enemy.root.position.clone().sub(other.root.position).setY(0);
-          const length = separation.length();
-          if (length > .01 && length < 2.2) direction.addScaledVector(separation.normalize(), (2.2 - length) * .32);
-        });
-        direction.normalize();
-        const steered = steerAroundObstacles(enemy, direction);
-        if (steered) direction.copy(steered);
-        const movementSpeed = enemy.speed * (enemy.slowTime > 0 ? .62 : 1);
-        const nextX = enemy.root.position.x + direction.x * movementSpeed * dt;
-        const nextZ = enemy.root.position.z + direction.z * movementSpeed * dt;
-        const enemyY = enemy.root.position.y;
-        if (!hitsCollider(nextX, nextZ, enemy.hitRadius * .45, enemyY, enemyY + 3.6)) {
-          enemy.root.position.x = nextX;
-          enemy.root.position.z = nextZ;
-        }
-        enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-direction.x, -direction.z), dt * 9);
-        enemy.walkCycle += dt * enemy.speed * (enemy.kind === "golem" ? 1.1 : 2.1);
-      } else if (distance <= enemy.attackRange && enemy.attackCooldown <= 0 && enemy.attackTimer <= 0) {
-        enemy.attackTimer = .72;
-        enemy.attackDelivered = false;
-        enemy.attackCooldown = enemy.attackInterval;
-        enemy.root.rotation.y = Math.atan2(-(player.root.position.x - enemy.root.position.x), -(player.root.position.z - enemy.root.position.z));
-        beginEnemyTelegraph(enemy);
-      }
-      if (enemy.attackTimer > 0) {
-        const previous = enemy.attackTimer;
-        enemy.attackTimer = Math.max(0, enemy.attackTimer - dt);
-        if (enemy.telegraph) {
-          enemy.telegraph.position.set(enemy.root.position.x, terrainHeight(enemy.root.position.x, enemy.root.position.z) + .12, enemy.root.position.z);
-          enemy.telegraph.material.opacity = .16 + (1 - enemy.attackTimer / .72) * .48;
-          enemy.telegraph.scale.setScalar(.86 + (1 - enemy.attackTimer / .72) * .14);
-        }
-        if (!enemy.attackDelivered && previous > .38 && enemy.attackTimer <= .38) {
-          enemy.attackDelivered = true;
-          const freshOffset = player.root.position.clone().sub(enemy.root.position);
-          const freshDistance = freshOffset.length();
-          const facingDot = freshDistance > .001 ? freshOffset.clone().setY(0).normalize().dot(new THREE.Vector3(-Math.sin(enemy.root.rotation.y), 0, -Math.cos(enemy.root.rotation.y))) : 1;
-          if (freshDistance < enemy.attackRange + .85 && facingDot > .15) damagePlayer(enemy.damage, enemy.name);
-          createShockwave(enemy.root.position.clone(), enemy.attackRange, .22, enemy.elite ? 0xff6338 : 0xd18a52);
-        }
-        if (enemy.attackTimer <= 0) clearEnemyTelegraph(enemy);
-      }
-      enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
-      animateGroundEnemy(enemy, dt, moving);
     });
+  }
+
+  function garrisonAISummary() {
+    const active = groundEnemies.filter((enemy) => !enemy.dead && !enemy.tamed && enemy.ai);
+    const states = {};
+    const roles = {};
+    active.forEach((enemy) => {
+      states[enemy.ai.state] = (states[enemy.ai.state] || 0) + 1;
+      roles[enemy.ai.role] = (roles[enemy.ai.role] || 0) + 1;
+    });
+    const noise = currentPlayerNoise();
+    return {
+      actors: active.length,
+      states,
+      roles,
+      stationed: (states.guard || 0) + (states.patrol || 0),
+      aware: (states.suspicious || 0) + (states.alert || 0) + (states.combat || 0) + (states.search || 0),
+      navGrids: strongholds.filter((stronghold) => stronghold.navGrid).length,
+      navWalkableCells: strongholds.reduce((sum, stronghold) => sum + (stronghold.navGrid ? stronghold.navGrid.walkableCount : 0), 0),
+      repaths: garrisonAIStats.repaths,
+      stuckRecoveries: garrisonAIStats.stuckRecoveries,
+      alertsShared: garrisonAIStats.alertsShared,
+      playerNoise: noise
+    };
+  }
+
+  function captureGarrisonActorState(enemy) {
+    const ai = enemy.ai;
+    const aiState = {};
+    [
+      "state", "previousState", "stateTime", "transitionReason", "patrolIndex", "guardDwell",
+      "detection", "lostSight", "searchRemaining", "pathIndex", "repathTimer", "blockedTime",
+      "progressTime", "progressExpected", "progressX", "progressZ", "stuckCount", "recoveries",
+      "moveMode", "sidestepSign", "testBlindTime", "senseTimer", "senseElapsed"
+    ].forEach((key) => { aiState[key] = ai[key]; });
+    aiState.lastKnown = ai.lastKnown.clone();
+    aiState.lastSight = ai.lastSight ? Object.assign({}, ai.lastSight) : null;
+    aiState.path = ai.path.slice();
+    return {
+      enemy,
+      position: enemy.root.position.clone(), rotationY: enemy.root.rotation.y,
+      engaged: enemy.engaged, attackTimer: enemy.attackTimer, attackDelivered: enemy.attackDelivered,
+      attackCooldown: enemy.attackCooldown, ai: aiState
+    };
+  }
+
+  function restoreGarrisonActorState(saved) {
+    const enemy = saved.enemy;
+    const ai = enemy.ai;
+    enemy.root.position.copy(saved.position);
+    enemy.root.rotation.y = saved.rotationY;
+    enemy.engaged = saved.engaged;
+    enemy.attackTimer = saved.attackTimer;
+    enemy.attackDelivered = saved.attackDelivered;
+    enemy.attackCooldown = saved.attackCooldown;
+    Object.keys(saved.ai).forEach((key) => {
+      if (key !== "lastKnown" && key !== "lastSight" && key !== "path") ai[key] = saved.ai[key];
+    });
+    ai.lastKnown.copy(saved.ai.lastKnown);
+    ai.lastSight = saved.ai.lastSight ? Object.assign({}, saved.ai.lastSight) : null;
+    ai.path = saved.ai.path.slice();
+  }
+
+  function primeGarrisonProbeState(enemy) {
+    const ai = enemy.ai;
+    ai.state = "guard";
+    ai.previousState = null;
+    ai.stateTime = 0;
+    ai.transitionReason = "probe-ready";
+    ai.detection = 0;
+    ai.lostSight = 0;
+    ai.searchRemaining = 0;
+    ai.path = [];
+    ai.pathIndex = 0;
+    ai.repathTimer = 0;
+    ai.blockedTime = 0;
+    ai.progressTime = 0;
+    ai.progressExpected = 0;
+    ai.progressX = enemy.root.position.x;
+    ai.progressZ = enemy.root.position.z;
+    ai.moveMode = "walk";
+    ai.testBlindTime = 0;
+    enemy.engaged = false;
+    enemy.attackTimer = 0;
+    enemy.attackDelivered = false;
+  }
+
+  function garrisonAIDebug() {
+    return groundEnemies.filter((enemy) => enemy.ai).map((enemy) => ({
+      name: enemy.name, spawnKey: enemy.spawnKey || null, strongholdId: enemy.strongholdId,
+      role: enemy.ai.role, state: enemy.ai.state, previousState: enemy.ai.previousState,
+      reason: enemy.ai.transitionReason, animation: enemy.animationState, detection: enemy.ai.detection,
+      lastSight: enemy.ai.lastSight ? Object.assign({}, enemy.ai.lastSight) : null,
+      post: { x: enemy.ai.home.x, y: enemy.ai.home.y, z: enemy.ai.home.z },
+      postDistance: distance2D(enemy.root.position, enemy.ai.home), patrolPoints: enemy.ai.patrol.length,
+      patrolIndex: enemy.ai.patrolIndex, pathLength: Math.max(0, enemy.ai.path.length - enemy.ai.pathIndex),
+      blockedSeconds: enemy.ai.blockedTime, repathSeconds: enemy.ai.repathTimer,
+      stuckCount: enemy.ai.stuckCount, recoveries: enemy.ai.recoveries,
+      lastKnown: { x: enemy.ai.lastKnown.x, y: enemy.ai.lastKnown.y, z: enemy.ai.lastKnown.z },
+      x: enemy.root.position.x, y: enemy.root.position.y, z: enemy.root.position.z
+    }));
+  }
+
+  function garrisonBehaviorProbe() {
+    const candidates = groundEnemies.filter((enemy) => !enemy.dead && !enemy.tamed && enemy.ai && !enemy.telegraph);
+    const source = candidates.find((enemy) => candidates.some((other) => other !== enemy && other.strongholdId === enemy.strongholdId));
+    const listener = source && candidates.find((enemy) => enemy !== source && enemy.strongholdId === source.strongholdId);
+    if (!source || !listener) return { available: false, actors: candidates.length };
+    const actorStates = candidates.map(captureGarrisonActorState);
+    const savedPlayerPosition = player.root.position.clone();
+    const savedStats = Object.assign({}, garrisonAIStats);
+    try {
+      primeGarrisonProbeState(source);
+      primeGarrisonProbeState(listener);
+      listener.root.position.set(source.root.position.x + .8, terrainHeight(source.root.position.x + .8, source.root.position.z), source.root.position.z);
+      listener.ai.progressX = listener.root.position.x;
+      listener.ai.progressZ = listener.root.position.z;
+      let clearPosition = null;
+      let clearSample = null;
+      const sightRange = roleSightProfile(source).range;
+      const radii = [Math.min(10, sightRange * .3), Math.min(15, sightRange * .45), 6];
+      for (let radiusIndex = 0; radiusIndex < radii.length && !clearPosition; radiusIndex += 1) {
+        for (let angleIndex = 0; angleIndex < 16 && !clearPosition; angleIndex += 1) {
+          const angle = angleIndex / 16 * Math.PI * 2;
+          const x = source.root.position.x + Math.cos(angle) * radii[radiusIndex];
+          const z = source.root.position.z + Math.sin(angle) * radii[radiusIndex];
+          if (!enemyNavPointWalkable(x, z, .5)) continue;
+          player.root.position.set(x, terrainHeight(x, z), z);
+          source.root.rotation.y = Math.atan2(-(x - source.root.position.x), -(z - source.root.position.z));
+          const sample = enemyVisionSample(source);
+          if (sample.visible) { clearPosition = player.root.position.clone(); clearSample = sample; }
+        }
+      }
+      if (!clearPosition || !clearSample) return { available: false, reason: "no-clear-sight-sample" };
+      player.root.position.copy(clearPosition);
+      const alertsBefore = garrisonAIStats.alertsShared;
+      updateEnemyPerception(source, 1, 0, "quiet");
+      const sight = {
+        visible: clearSample.visible, state: source.ai.state, reason: source.ai.transitionReason,
+        detection: source.ai.detection, shared: listener.ai.state === "suspicious",
+        alertsShared: garrisonAIStats.alertsShared - alertsBefore
+      };
+
+      primeGarrisonProbeState(source);
+      source.ai.testBlindTime = 1;
+      const hearingDistance = distance2D(source.root.position, player.root.position);
+      updateEnemyPerception(source, .05, hearingDistance + 1, "test-footstep");
+      const hearing = {
+        state: source.ai.state, reason: source.ai.transitionReason,
+        lastKnownUpdated: distance2D(source.ai.lastKnown, player.root.position) < .01,
+        distance: hearingDistance
+      };
+
+      listener.root.position.set(source.root.position.x + .8, source.root.position.y, source.root.position.z);
+      const separationDirection = new THREE.Vector3(1, 0, 0);
+      const away = new THREE.Vector3(-1, 0, 0);
+      const beforeAwayDot = separationDirection.dot(away);
+      applyGroundEnemySeparation(source, separationDirection);
+      if (separationDirection.lengthSq() > .001) separationDirection.normalize();
+      const separation = { beforeAwayDot, afterAwayDot: separationDirection.dot(away), steersApart: separationDirection.dot(away) > beforeAwayDot + .2 };
+      return { available: true, sight, hearing, separation };
+    } finally {
+      actorStates.forEach(restoreGarrisonActorState);
+      player.root.position.copy(savedPlayerPosition);
+      garrisonAIStats = savedStats;
+    }
+  }
+
+  function garrisonOcclusionProbe() {
+    const box = colliders.find((candidate) => Number.isFinite(candidate.minY) && Number.isFinite(candidate.maxY)
+      && candidate.maxY - candidate.minY >= 1.4 && candidate.hx >= .18 && candidate.hz >= .18);
+    if (!box) return { available: false, colliders: colliders.length };
+    const cosine = Math.cos(box.rotation || 0);
+    const sine = Math.sin(box.rotation || 0);
+    const toWorld = (localX, localZ, y) => new THREE.Vector3(box.x + localX * cosine + localZ * sine, y, box.z - localX * sine + localZ * cosine);
+    const y = clamp(terrainHeight(box.x, box.z) + 1.45, box.minY + .18, box.maxY - .18);
+    const margin = 2.2;
+    const from = toWorld(-box.hx - margin, 0, y);
+    const to = toWorld(box.hx + margin, 0, y);
+    const clearFrom = toWorld(-box.hx - margin, box.hz + margin, y);
+    const clearTo = toWorld(box.hx + margin, box.hz + margin, y);
+    return {
+      available: true,
+      colliderBlocks: segmentIntersectsCollider(from, to, box, .035),
+      worldOccluded: segmentOccluded(from, to),
+      parallelControlBlocked: segmentIntersectsCollider(clearFrom, clearTo, box, .035),
+      height: box.maxY - box.minY
+    };
+  }
+
+  function garrisonSearchProbe() {
+    const enemy = groundEnemies.find((item) => !item.dead && !item.tamed && item.ai && !item.telegraph);
+    if (!enemy) return { available: false };
+    const ai = enemy.ai;
+    const saved = captureGarrisonActorState(enemy);
+    try {
+      ai.state = "combat";
+      ai.detection = 1;
+      ai.lostSight = 1.34;
+      ai.lastKnown.copy(player.root.position).add(new THREE.Vector3(3, 0, -2));
+      ai.testBlindTime = 2;
+      updateEnemyPerception(enemy, .03, 0, "quiet");
+      return { available: true, state: ai.state, reason: ai.transitionReason, lastKnownPreserved: distance2D(ai.lastKnown, player.root.position) > 1, searchSeconds: ai.searchRemaining };
+    } finally {
+      restoreGarrisonActorState(saved);
+    }
+  }
+
+  function garrisonStuckRecoveryProbe() {
+    const enemy = groundEnemies.find((item) => !item.dead && !item.tamed && item.ai && !item.telegraph);
+    if (!enemy) return { available: false };
+    let sample = null;
+    for (let index = 0; index < colliders.length && !sample; index += 1) {
+      const box = colliders[index];
+      if (!Number.isFinite(box.minY) || !Number.isFinite(box.maxY) || box.maxY - box.minY < .8) continue;
+      const footY = clamp(terrainHeight(box.x, box.z), box.minY + .04, box.maxY - .2);
+      if (hitsCollider(box.x, box.z, enemy.hitRadius * .42, footY, footY + 3.35)) sample = { box, footY };
+    }
+    if (!sample) return { available: false, colliders: colliders.length };
+    const saved = captureGarrisonActorState(enemy);
+    const savedStats = Object.assign({}, garrisonAIStats);
+    try {
+      enemy.root.position.set(sample.box.x, sample.footY, sample.box.z);
+      primeGarrisonProbeState(enemy);
+      enemy.ai.moveMode = "run";
+      const blockedBefore = hitsCollider(enemy.root.position.x, enemy.root.position.z, enemy.hitRadius * .42, enemy.root.position.y, enemy.root.position.y + 3.35);
+      const target = distance2D(enemy.root.position, enemy.ai.home) > 5 ? enemy.ai.home : enemy.root.position.clone().add(new THREE.Vector3(12, 0, 0));
+      moveGroundEnemyToward(enemy, target, Math.max(1, enemy.speed), .82);
+      const blockedAfter = hitsCollider(enemy.root.position.x, enemy.root.position.z, enemy.hitRadius * .42, enemy.root.position.y, enemy.root.position.y + 3.35);
+      const displacement = Math.hypot(enemy.root.position.x - sample.box.x, enemy.root.position.z - sample.box.z);
+      return {
+        available: true, blockedBefore, recovered: enemy.ai.recoveries > saved.ai.recoveries,
+        automatic: enemy.ai.stuckCount > saved.ai.stuckCount, blockedAfter, displacement,
+        repaths: garrisonAIStats.repaths - savedStats.repaths
+      };
+    } finally {
+      restoreGarrisonActorState(saved);
+      garrisonAIStats = savedStats;
+    }
+  }
+
+  function garrisonPathProbe() {
+    const candidates = groundEnemies.filter((enemy) => !enemy.dead && !enemy.tamed && enemy.ai && enemy.strongholdId);
+    for (let enemyIndex = 0; enemyIndex < candidates.length; enemyIndex += 1) {
+      const enemy = candidates[enemyIndex];
+      const stronghold = strongholds.find((item) => item.id === enemy.strongholdId);
+      const grid = buildStrongholdNavGrid(stronghold);
+      if (!grid) continue;
+      const targets = [];
+      for (let index = 0; index < grid.walkable.length; index += 1) {
+        if (!grid.walkable[index]) continue;
+        const column = index % grid.size;
+        const row = Math.floor(index / grid.size);
+        const x = grid.originX + column * grid.cell;
+        const z = grid.originZ + row * grid.cell;
+        targets.push({ x, z, distance: Math.hypot(x - enemy.root.position.x, z - enemy.root.position.z) });
+      }
+      targets.sort((a, b) => b.distance - a.distance);
+      for (let targetIndex = 0; targetIndex < Math.min(12, targets.length); targetIndex += 1) {
+        const target = new THREE.Vector3(targets[targetIndex].x, 0, targets[targetIndex].z);
+        const path = findStrongholdNavPath(enemy, target);
+        if (!path.length) continue;
+        return {
+          available: true, strongholdId: stronghold.id, gridCells: grid.walkableCount,
+          waypoints: path.length, distance: targets[targetIndex].distance,
+          allWalkable: path.every((point) => enemyNavPointWalkable(point.x, point.z, .5))
+        };
+      }
+    }
+    return { available: false, navGrids: strongholds.filter((stronghold) => stronghold.navGrid).length };
   }
 
   function interact() {
@@ -4510,6 +5383,10 @@
     dragonSouls.forEach(removeDragonSoul);
     dragonSouls = [];
     bossSpawned = false;
+    garrisonAIStats = { repaths: 0, stuckRecoveries: 0, alertsShared: 0 };
+    playerNoiseRadius = 0;
+    playerNoiseTime = 0;
+    playerNoiseReason = "quiet";
     worldLayout.forts.forEach((fort, index) => {
       const angle = Math.atan2(fort[1], fort[0]) + .55;
       createDragon(worldProfile.dragonNames[index], clamp(fort[0] + Math.cos(angle) * 62, -560, 560), clamp(fort[1] + Math.sin(angle) * 62, -560, 560), false);
@@ -4522,6 +5399,7 @@
     const handledMemberKeys = new Set(savedRun && savedRun.world && Array.isArray(savedRun.world.handledStrongholdMembers) ? savedRun.world.handledStrongholdMembers : []);
     strongholds.forEach((stronghold) => {
       stronghold.members = [];
+      buildStrongholdNavGrid(stronghold);
       if (stronghold.cleared) return;
       const base = STRONGHOLD_GARRISONS[stronghold.kind] || STRONGHOLD_GARRISONS.hamlet;
       const countBonus = Math.min(4, Math.floor((player.level - 1) / 6));
@@ -4531,8 +5409,8 @@
       const plan = stronghold.spots.filter((spot) => spot.type === "biomeHeavy" || spot.type === "warg")
         .concat(stronghold.spots.filter((spot) => spot.type === "golem").slice(0, golemCount))
         .concat(stronghold.spots.filter((spot) => spot.type === "biomeLight").slice(0, base.light + countBonus)
-          .map((spot) => ({ x: spot.x, z: spot.z, type: spot.roll < promoteRoll ? "biomeHeavy" : "biomeLight" })));
-      plan.forEach((spot) => {
+          .map((spot) => Object.assign({}, spot, { type: spot.roll < promoteRoll ? "biomeHeavy" : "biomeLight" })));
+      plan.forEach((spot, memberIndex) => {
         const spawnKey = stronghold.id + ":" + Math.round(spot.x * 10) + ":" + Math.round(spot.z * 10);
         if (handledMemberKeys.has(spawnKey)) return;
         const enemy = createGroundEnemy(spot.type, spot.x, spot.z, threat);
@@ -4540,6 +5418,7 @@
         enemy.spawnKey = spawnKey;
         enemy.camp = { x: stronghold.x, z: stronghold.z, radius: stronghold.kind === "keep" ? 40 : 30 };
         enemy.name = stronghold.name + " " + enemy.name;
+        assignGarrisonAI(enemy, stronghold, spot, memberIndex);
         stronghold.members.push(enemy);
       });
     });
@@ -5081,6 +5960,7 @@
     player.velocityY = 15.2 + skillRank("acrobat") * 1.3 + (realm.biome === "moon" ? 1.6 : 0);
     player.jumpTime = 0;
     player.stamina -= 10;
+    emitPlayerNoise(13, .32, "jump");
     audio.tone(120, 185, .12, "triangle", .014);
   }
 
@@ -5099,6 +5979,7 @@
     player.attackTime = 0;
     player.pendingAttack = null;
     player.stamina -= 22;
+    emitPlayerNoise(17, .42, "dodge");
     setPlayerModelAction("roll", true);
     audio.tone(185, 95, .16, "triangle", .018);
     if (hasSkill("thunderstep") && player.shout >= 100) {
@@ -5122,6 +6003,7 @@
     player.attackVariant += 1;
     player.stamina -= staminaCost;
     player.root.rotation.y = rotateToward(player.root.rotation.y, cameraYaw, .7);
+    emitPlayerNoise(weaponId === "bow" ? 28 : weaponId === "staff" ? 32 : weaponId === "axe" ? 30 : 23, .55, weaponId + "-attack");
     audio.swing();
     player.pendingAttack = { weaponId, releaseAt: player.attackDuration * .55, executed: false };
   }
@@ -5272,6 +6154,7 @@
       player.stamina = Math.min(maxStamina(), player.stamina + 25);
     }
     player.resonanceTime = 1.5 + skillRank("resonance") * .75;
+    emitPlayerNoise(70, 1.15, "dragon-shout");
     audio.shoutSound();
     showMessage("FUS RO DAH", "#bceaf4");
     const forceMultiplier = 1 + skillRank("force") * .12;
@@ -5543,6 +6426,7 @@
     finalAmount = Math.max(1, Math.round(finalAmount));
     const appliedDamage = Math.min(dragon.health, finalAmount);
     dragon.engaged = true;
+    if (dragon.kind !== "dragon") alertGroundEnemyFromDamage(dragon);
     dragon.health -= finalAmount;
     if (dragon.health > 0 && isTameableEnemy(dragon) && damageSource === "weapon") {
       if (weaponId === "staff") dragon.tameProgress += 30;
@@ -6496,6 +7380,7 @@
         animatedWarden: Boolean(player.modelMixer), biomeGeometry: worldProfile.geometry,
         biomeEnemyModels: [worldProfile.lightEnemy[0], worldProfile.heavyEnemy[0]],
         biomeEnemyNames: [worldProfile.lightEnemy[1], worldProfile.heavyEnemy[1]],
+        garrisonAI: garrisonAISummary(),
         routeReports: verticalRouteReports.map((report) => Object.assign({}, report)),
         layoutForts: worldLayout.forts.map((fort) => ({ x: Math.round(fort[0] * 10) / 10, z: Math.round(fort[1] * 10) / 10, name: fort[4] })),
         pois: (worldLayout.pois || []).map((poi) => ({ kind: poi.kind, name: poi.name, x: Math.round(poi.x), z: Math.round(poi.z) })),
@@ -6639,12 +7524,26 @@
       endRun: (victory) => endGame(Boolean(victory)),
       shoutReady: () => { player.shout = 100; },
       damagePlayer,
-      enemyDebug: () => groundEnemies.map((enemy) => ({ name: enemy.name, kind: enemy.kind, health: enemy.health, telegraph: Boolean(enemy.telegraph), animation: enemy.animationState, threat: enemy.threat, camp: Boolean(enemy.camp), strongholdId: enemy.strongholdId, tamed: enemy.tamed, tameReady: enemy.tameReady, tameProgress: enemy.tameProgress, x: enemy.root.position.x, y: enemy.root.position.y, z: enemy.root.position.z, impulse: enemy.impulse ? enemy.impulse.length() : 0 })),
+      enemyDebug: () => groundEnemies.map((enemy) => ({ name: enemy.name, kind: enemy.kind, health: enemy.health, telegraph: Boolean(enemy.telegraph), animation: enemy.animationState, threat: enemy.threat, camp: Boolean(enemy.camp), strongholdId: enemy.strongholdId, tamed: enemy.tamed, tameReady: enemy.tameReady, tameProgress: enemy.tameProgress, aiRole: enemy.ai ? enemy.ai.role : null, aiState: enemy.ai ? enemy.ai.state : null, detection: enemy.ai ? enemy.ai.detection : null, x: enemy.root.position.x, y: enemy.root.position.y, z: enemy.root.position.z, impulse: enemy.impulse ? enemy.impulse.length() : 0 })),
+      garrisonAIDebug,
+      garrisonBehaviorProbe,
+      garrisonOcclusionProbe,
+      garrisonSearchProbe,
+      garrisonStuckRecoveryProbe,
+      garrisonPathProbe,
       poiDebug: () => poiDebugInfo.map((info) => ({ kind: info.kind, name: info.name, chests: info.chests, guards: info.guards, collidersAdded: info.collidersAdded })),
       forceEnemyAttack: () => {
         const enemy = groundEnemies.find((item) => !item.dead && !item.camp) || groundEnemies.find((item) => !item.dead);
         if (!enemy) return false;
         enemy.root.position.copy(player.root.position).add(new THREE.Vector3(0, 0, -Math.max(1.5, enemy.attackRange - .2)));
+        if (enemy.ai) {
+          enemy.ai.home.copy(enemy.root.position);
+          enemy.ai.lastKnown.copy(player.root.position);
+          enemy.ai.detection = 1;
+          enemy.ai.testBlindTime = 0;
+          if (enemy.camp) { enemy.camp.x = enemy.root.position.x; enemy.camp.z = enemy.root.position.z; }
+          setGroundEnemyAIState(enemy, "combat", "test-forced-attack");
+        }
         enemy.attackCooldown = 0;
         enemy.attackTimer = 0;
         updateGroundEnemies(.01, false);
