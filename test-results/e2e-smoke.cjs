@@ -17,7 +17,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   await page.goto(BASE + "?test&biome=jungle&seed=424242", { waitUntil: "networkidle", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 60000 });
   const titleSnapshot = await page.evaluate(() => window.ashenholdGame.snapshot());
-  await page.screenshot({ path: "test-results/title-latest.png", fullPage: true });
+  await page.screenshot({ path: "test-results/title-latest.png", fullPage: true, timeout: 90000 });
 
   await page.evaluate(() => window.__ASHENHOLD_TEST__.start());
   await page.waitForTimeout(450);
@@ -76,7 +76,17 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
       objective: test.objectiveInfo()
     };
   });
-  await page.screenshot({ path: "test-results/stronghold-latest.png", fullPage: true });
+  const captureFlagResult = await page.evaluate(() => {
+    const test = window.__ASHENHOLD_TEST__;
+    const shrine = test.strongholdDebug().find((stronghold) => stronghold.kind === "shrine" || stronghold.kind === "graveyard");
+    if (!shrine) return { found: false };
+    const before = test.captureFlagDebug().find((flag) => flag.strongholdId === shrine.id);
+    const cleared = test.clearStronghold(shrine.id);
+    test.step(2);
+    const after = test.captureFlagDebug().find((flag) => flag.strongholdId === shrine.id);
+    return { found: true, shrine, before, cleared, after };
+  });
+  await page.screenshot({ path: "test-results/stronghold-latest.png", fullPage: true, timeout: 90000 });
 
   const beforeDragon = await page.evaluate(() => window.ashenholdGame.snapshot());
   await page.evaluate(() => {
@@ -133,6 +143,12 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   const collisionRecovery = await page.evaluate(() => window.__ASHENHOLD_TEST__.collisionRecoveryProbe());
   const biomeProps = await page.evaluate(() => window.ashenholdGame.snapshot().world.props);
   const modelCatalog = await page.evaluate(() => window.ashenholdGame.modelCatalog());
+  const worldDebug = await page.evaluate(() => ({
+    scales: window.__ASHENHOLD_TEST__.modelScaleRegistry(),
+    forest: window.__ASHENHOLD_TEST__.forestDebug(),
+    infrastructure: window.__ASHENHOLD_TEST__.infrastructureDebug(),
+    sky: window.__ASHENHOLD_TEST__.skyDebug()
+  }));
   const poiInfo = await page.evaluate(() => ({ pois: window.ashenholdGame.snapshot().world.pois, debug: window.__ASHENHOLD_TEST__.poiDebug() }));
   const legendCount = await page.evaluate(() => document.querySelectorAll("#mapLegend > *").length);
   const tamingResult = await page.evaluate(() => {
@@ -210,6 +226,31 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     pbrBiomeMaterial: titleSnapshot.world.pbrBiomeMaterial,
     animatedWarden: titleSnapshot.world.animatedWarden,
     importedModels: titleSnapshot.world.importedModels >= 15,
+    canonicalWorldScale: titleSnapshot.world.canonicalScale.unitMeters === 1 && titleSnapshot.world.canonicalScale.wardenHeight === 1.9 && titleSnapshot.world.canonicalScale.doorWidth >= 2.4,
+    playerScaledBuildings: ["tavern", "homeA", "homeB", "ruinedHouse"].every((id) => {
+      const structure = titleSnapshot.world.canonicalScale.structures[id];
+      return structure && structure.height >= 8 && structure.height <= 12;
+    }),
+    playerScaledCastles: titleSnapshot.world.canonicalScale.structures.wall.height >= 9 && titleSnapshot.world.canonicalScale.structures.wall.height <= 15
+      && titleSnapshot.world.canonicalScale.structures.gate.height >= 7 && titleSnapshot.world.canonicalScale.structures.gate.height <= 10
+      && titleSnapshot.world.canonicalScale.structures.tower.height >= 18 && titleSnapshot.world.canonicalScale.structures.tower.height <= 32,
+    canonicalRegistryMeasured: Object.keys(worldDebug.scales).length === Object.keys(modelCatalog).length
+      && worldDebug.scales.wall.targetHeight === 12.5 && worldDebug.scales.wall.verticalScale < worldDebug.scales.wall.scale,
+    ancientInstancedForest: titleSnapshot.world.forest.total >= 3000
+      && titleSnapshot.world.forest.instancedMeshes === titleSnapshot.world.forest.chunks * 3
+      && titleSnapshot.world.forest.heroes > 0 && titleSnapshot.world.forest.maxTrunkDiameter >= 8,
+    forestLodAndCulling: titleSnapshot.world.forest.nearChunks > 0 && titleSnapshot.world.forest.farChunks > 0
+      && titleSnapshot.world.forest.culledChunks > 0 && titleSnapshot.world.forest.visible < titleSnapshot.world.forest.total
+      && worldDebug.forest.lodChunks.some((chunk) => chunk.lod === "near")
+      && worldDebug.forest.lodChunks.some((chunk) => chunk.lod === "far")
+      && worldDebug.forest.lodChunks.some((chunk) => chunk.lod === "culled"),
+    infrastructureMicroLandmarks: titleSnapshot.world.infrastructure.total >= 24
+      && Object.keys(titleSnapshot.world.infrastructure.byKind).length >= 4
+      && worldDebug.infrastructure.length === titleSnapshot.world.infrastructure.total,
+    biomeSkyAndTransition: titleSnapshot.world.skyProfile.id === "verdant-canopy"
+      && titleSnapshot.world.skyProfile.features.length >= 3 && titleSnapshot.world.skyProfile.featureCount > 0
+      && titleSnapshot.world.skyProfile.gradientStops >= 5 && titleSnapshot.world.skyProfile.horizonBlend
+      && titleSnapshot.world.skyProfile.environmentMap && worldDebug.sky.signature === titleSnapshot.world.skyProfile.signature,
     biomeGrass: titleSnapshot.world.grassInstances >= 1200,
     platforms: titleSnapshot.world.platforms >= 10,
     expandedSkillTrees: titleSnapshot.skillBranches >= 12 && titleSnapshot.skillNodes >= 66,
@@ -222,6 +263,9 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     strongholdsPresent: strongholdResult.total >= 8,
     garrisonsSpawned: titleSnapshot.strongholds.list.some((stronghold) => stronghold.alive >= 3),
     clearGrantsBonus: strongholdResult.clearedAfter === strongholdResult.clearedBefore + 1 && strongholdResult.xpChanged,
+    shrineCaptureFlag: Boolean(captureFlagResult.found && captureFlagResult.before && !captureFlagResult.before.visible
+      && captureFlagResult.cleared && captureFlagResult.after && captureFlagResult.after.visible
+      && captureFlagResult.after.raised === 1 && captureFlagResult.after.minimapMarker),
     higherJump: jumpPeak - jumpStart > 4.5,
     superSprint: superSprint.superSprinting && sprintDistance > 7,
     sprintHysteresis: !lowStaminaSprint.superSprinting && lowStaminaSprint.sprinting && !exhaustedSprint.superSprinting && !exhaustedSprint.sprinting,
@@ -252,7 +296,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     noPageErrors: pageErrors.length === 0,
     noFailedRequests: failedRequests.length === 0
   };
-  const report = { checks, jump: { start: jumpStart, peak: jumpPeak, height: jumpPeak - jumpStart }, sprintDistance, intenseSprintDistance, titleSnapshot, initial, afterBlade, afterBow, aimOnEnemy, aimClear, beforeRune, afterRune, strongholdResult, afterDragon, soulAbsorb, combatTextCount, chestResult, routeWalkability, collisionRecovery, modelCatalog, biomeProps, poiInfo, tamingResult, legendCount, superSprint, lowStaminaSprint, exhaustedSprint, intenseSprint, finalPlaying, ended, consoleErrors, consoleWarnings, pageErrors, failedRequests };
+  const report = { checks, jump: { start: jumpStart, peak: jumpPeak, height: jumpPeak - jumpStart }, sprintDistance, intenseSprintDistance, titleSnapshot, initial, afterBlade, afterBow, aimOnEnemy, aimClear, beforeRune, afterRune, strongholdResult, captureFlagResult, afterDragon, soulAbsorb, combatTextCount, chestResult, routeWalkability, collisionRecovery, modelCatalog, worldDebug, biomeProps, poiInfo, tamingResult, legendCount, superSprint, lowStaminaSprint, exhaustedSprint, intenseSprint, finalPlaying, ended, consoleErrors, consoleWarnings, pageErrors, failedRequests };
   console.log(JSON.stringify(report, null, 2));
   await browser.close();
   if (Object.values(checks).some((value) => !value)) process.exit(1);

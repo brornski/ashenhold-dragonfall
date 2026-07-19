@@ -1,0 +1,19 @@
+{
+  "name": "ashenhold-multiplayer-server",
+  "private": true,
+  "version": "5.5.0",
+  "type": "module",
+  "description": "Authoritative WebSocket room service for Ashenhold: Dragonfall co-op.",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/server.test.mjs",
+    "test:remote": "node test/remote-smoke.mjs"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "ws": "^8.21.1"
+  }
+}

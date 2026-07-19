@@ -1,4 +1,4 @@
-# Ashenhold: Dragonfall - release 5.4 developer handoff
+# Ashenhold: Dragonfall - release 5.5 world developer handoff
 
 Updated July 19, 2026. This is the source-of-truth engineering handoff for the static browser release at https://brornski.github.io/ashenhold-dragonfall/.
 
@@ -47,7 +47,7 @@ Runtime states are `loading`, `title`, `playing`, `paused`, `skills`, `resolving
 5. Load the active biome's local textures and model catalog.
 6. Generate terrain, road, forts, wilderness, imported world props, ascent structures, runes, settlements, chests, signature biome props, and atmosphere.
 7. Create the Warden, register strongholds, spawn garrisons/dragons, and build landmarks.
-8. Enter the responsive title state and offer Continue only when an active run matches layout version 6.
+8. Enter the responsive title state and offer Continue only when an active run matches layout version 7.
 
 The title deck reads live realm data: biome, seed, Warden level, and stronghold count. It has independent Continue/New Realm actions and collapses into a compact landscape presentation without covering the canvas.
 
@@ -56,7 +56,7 @@ The title deck reads live realm data: biome, seed, Warden level, and stronghold 
 Core constants:
 
 - `WORLD_SIZE = 1800`
-- `WORLD_LAYOUT_VERSION = 6`
+- `WORLD_LAYOUT_VERSION = 7`
 - query overrides: `biome=<id>` and `seed=<nonzero number>`
 - realm ladder: jungle -> shore -> desert -> snowy -> mountains -> moon -> loop
 
@@ -69,6 +69,12 @@ Each realm contains:
 - 8-11 settlement POIs: hamlets, watchposts, shrines/graveyards, raider camps, and ruin clusters
 - one relic chest at each fort, ascent summit, and settlement POI
 - deterministic runes, dragons, roads, landmarks, and signature biome props
+
+Release 5.5 establishes one world unit as one metre and measures every loaded model into a canonical registry. Houses target 8-13 metres, imported fort walls 12.5 metres, gates 9.5 metres, and towers 18-32 metres; wall assets can use independent horizontal and vertical scales without distorting the rest of their pack. Door and gate colliders retain at least 2.4 metres of traversal clearance.
+
+Every biome now builds a distinct ancient-forest profile with 2,000-3,600 desktop trees (adaptive coarse counts), including rare 30-82 metre hero trees. Trees are stored in 180-metre instanced chunks with near geometry, far silhouettes, timed distance culling, and a small collider budget for the largest trunks. Seeded infrastructure adds 24-32 biome-specific micro-landmarks such as collapsed walls, abandoned farms, hunter platforms, drowned piers, carts, and waystones outside protected routes and strongholds.
+
+The six realms use separate generated 2:1 sky environments and horizon blends: humid canopy light, tempest coast shelves, ember dust, aurora, high-altitude peaks, and the celestial void. Cleared shrines and graveyards raise animated Warden flags; their state derives from the persisted cleared-stronghold IDs and is represented by a blue flag on the minimap.
 
 POI placement rejects water, excessive slope, existing forts/routes, and overlapping reservations. Detailed model decoration is presentation-only; encounter and chest positions are deterministic.
 
@@ -286,7 +292,7 @@ Normal pages expose only read-only methods:
 - `window.ashenholdGame.snapshot()`
 - `window.ashenholdGame.modelCatalog()`
 
-The snapshot includes realm, player/progression, relic bonuses, companions/Bonded Pace, stronghold summary/list, quest, route reports, POIs, asset density, model slots, spawn failures, collision-relevant position, sprint latches, renderer counts, and quality.
+The snapshot includes realm, player/progression, relic bonuses, companions/Bonded Pace, stronghold summary/list, quest, route reports, POIs, asset density, canonical model dimensions, forest LOD/culling counts, infrastructure density, sky signature, capture-flag totals, model slots, spawn failures, collision-relevant position, sprint latches, renderer counts, and quality.
 
 Only `?test` exposes mutating `window.__ASHENHOLD_TEST__` helpers. Important 5.4 additions are:
 
@@ -296,6 +302,7 @@ Only `?test` exposes mutating `window.__ASHENHOLD_TEST__` helpers. Important 5.4
 - `moveBy()`, `collisionState()`, and `collisionRecoveryProbe()`
 - `chestPositions()` with deterministic `powerUp`
 - `modelCatalog()` and `skillSchema()`
+- `modelScaleRegistry()`, `forestDebug()`, `infrastructureDebug()`, `skyDebug()`, and `captureFlagDebug()`
 - active-run write/read and progression migration helpers
 
 Never expose those mutations on a normal production URL.
@@ -338,7 +345,7 @@ node test-results\live-deployment-audit.cjs
 node test-results\e2e-smoke.cjs
 ```
 
-Verify root/title, layout marker 6, active GLTF, biome normal map, manifest, excluded docs/tests/tools, same-origin browser requests, and a full stronghold victory. GitHub Pages does not expose Vercel's configurable response headers; the live audit applies provider-appropriate checks.
+Verify root/title, layout marker 7, active GLTF, biome normal map, manifest, excluded docs/tests/tools, same-origin browser requests, and a full stronghold victory. GitHub Pages does not expose Vercel's configurable response headers; the live audit applies provider-appropriate checks.
 
 ## Safe extension patterns
 

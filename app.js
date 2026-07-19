@@ -56,7 +56,38 @@
   const persistenceDisabled = testMode && !launchParams.has("test-save");
   const REALM_KEY = "ashenhold-realm-v1";
   const RUN_SAVE_KEY = "ashenhold-active-run-v1";
-  const WORLD_LAYOUT_VERSION = 6;
+  const WORLD_LAYOUT_VERSION = 7;
+  const CANONICAL_WORLD_SCALE = Object.freeze({
+    unitMeters: 1, wardenHeight: 1.9, doorHeight: 2.8, doorWidth: 2.4,
+    houseHeight: [8, 12], castleWallHeight: [9, 15], gateHeight: [7, 10], towerHeight: [18, 32]
+  });
+  // Imported packs use unrelated source units. These targets are measured in the game's
+  // canonical one-unit-per-meter space and converted from each loaded model's bounding box.
+  const MODEL_SCALE_TARGETS = Object.freeze({
+    tower: { role: "castle tower", targetHeight: 21 }, towerTop: { role: "tower crown", targetSpan: 15.5 },
+    wall: { role: "castle wall", targetSpan: 16, targetHeight: 12.5 }, wallCorner: { role: "castle corner", targetSpan: 16, targetHeight: 12.5 },
+    gate: { role: "castle gate", targetSpan: 14, targetHeight: 9.5 }, doorway: { role: "castle doorway", targetSpan: 14, targetHeight: 12.5 },
+    stairs: { role: "castle stairs", targetSpan: 10 }, bridge: { role: "bridge", targetSpan: 18, targetHeight: 7.5 },
+    bridgePillar: { role: "bridge pier", targetHeight: 14 }, siegeTower: { role: "siege tower", targetHeight: 17 },
+    tavern: { role: "two-storey tavern", targetHeight: 10.5 }, market: { role: "market hall", targetHeight: 8.5 },
+    blacksmith: { role: "blacksmith", targetHeight: 8.5 }, homeA: { role: "dwelling", targetHeight: 8.5 },
+    homeB: { role: "dwelling", targetHeight: 9 }, windmill: { role: "windmill", targetHeight: 17 },
+    towerA: { role: "watchtower", targetHeight: 19 }, towerB: { role: "watchtower", targetHeight: 22 },
+    church: { role: "church", targetHeight: 13 }, ruinedHouse: { role: "ruined dwelling", targetHeight: 9 },
+    crypt: { role: "crypt", targetHeight: 9.5 }, cryptA: { role: "crypt", targetHeight: 9 },
+    cryptSmall: { role: "small crypt", targetHeight: 7.5 }, tree: { role: "old-growth tree", targetHeight: 32 },
+    treePalm: { role: "coastal tree", targetHeight: 22 }, treePalmBend: { role: "jungle tree", targetHeight: 27 },
+    treePineA: { role: "conifer", targetHeight: 27 }, treePineB: { role: "conifer", targetHeight: 30 },
+    pineCrooked: { role: "crooked pine", targetHeight: 24 }
+  });
+  const SKY_PROFILES = Object.freeze({
+    jungle: { id: "verdant-canopy", features: ["humid-cloud-decks", "sun-shafts", "green-gold-haze"], halo: [520, 230, -420], haloScale: 150 },
+    shore: { id: "tempest-coast", features: ["storm-shelves", "rain-shafts", "sea-horizon"], halo: [650, 145, -330], haloScale: 120 },
+    desert: { id: "ember-dust", features: ["dust-bands", "white-hot-sun", "heat-horizon"], halo: [720, 195, -210], haloScale: 190 },
+    snowy: { id: "frozen-aurora", features: ["aurora-ribbons", "snow-clouds", "ice-horizon"], halo: [610, 205, -370], haloScale: 135 },
+    mountains: { id: "high-altitude", features: ["massive-clouds", "distant-peaks", "altitude-blue"], halo: [690, 235, -270], haloScale: 145 },
+    moon: { id: "celestial-void", features: ["starfield", "eclipse-moon", "violet-nebula"], halo: [690, 260, -160], haloScale: 105 }
+  });
   const BIOMES = {
     snowy: { name: "FROSTBOUND WILDS", textureId: "snow", relief: 1.05, base: 2.6, fog: 0x869ca6, fogDensity: .00195, ground: 0x718087, cliff: 0x7d898d, grass: 0x50625c, grassStrength: .42, frost: 0xc9d4d5, frostStart: 16, water: 0x315663, waterLevel: -3.2, waterOpacity: .62, sky: 0xb2c5ce, sun: 0xffead2, sunIntensity: 1.22, hemi: 0xa9bdc4, exposure: 1.1, skyZenith: 0x6b87a0, skyHorizon: 0xdfe9ec, skyGlow: 0xdceef4, stoneTint: 0xcfdde2, particleSize: 1.4, particleOpacity: .5, particleFall: .55, particleCount: 1 },
     jungle: { name: "VERDANT RUINS", textureId: "jungle", relief: .72, base: 3.2, fog: 0x1b352c, fogDensity: .00305, ground: 0x344a32, cliff: 0x465448, grass: 0x284b2d, grassStrength: 1.0, frost: 0x7a8a76, frostStart: 125, water: 0x1e514c, waterLevel: -2.4, waterOpacity: .72, sky: 0x71968d, sun: 0xffd5a7, sunIntensity: 1.12, hemi: 0x759a82, exposure: 1.02, skyZenith: 0x1d3a33, skyHorizon: 0x7fae8f, skyGlow: 0xe8c87a, stoneTint: 0x718a64, particleSize: 1.05, particleOpacity: .38, particleFall: .7, particleCount: .9 },
@@ -213,6 +244,17 @@
   let verticalRouteReports = [];
   let biomePropsReport = { kind: "none", total: 0, byKind: {} };
   let importedModelInstances = 0;
+  let modelScaleRegistry = {};
+  let skyReport = { id: "unbuilt", signature: "", features: [], featureCount: 0, gradientStops: 0, horizonBlend: false };
+  let forestChunks = [];
+  let forestVisibilityTimer = 0;
+  let forestReport = {
+    profile: "none", total: 0, heroes: 0, chunks: 0, visible: 0,
+    nearChunks: 0, farChunks: 0, culledChunks: 0, nearTrees: 0, farTrees: 0,
+    instancedMeshes: 0, heroColliders: 0, maxTrunkDiameter: 0
+  };
+  let infrastructureReport = { total: 0, byKind: {}, colliders: 0, importedModels: 0 };
+  let captureFlags = [];
   let groundEnemies = [];
   let experienceRunes = [];
   let chests = [];
@@ -220,6 +262,10 @@
   let runesCollected = 0;
   let strongholds = [];
   let worldSpawnFailures = 0;
+  let playerNoiseRadius = 0;
+  let playerNoiseTime = 0;
+  let playerNoiseReason = "quiet";
+  let garrisonAIStats = { repaths: 0, stuckRecoveries: 0, alertsShared: 0 };
   let outpostsDiscovered = 0;
   let runeHinted = false;
   const visualAssets = {};
@@ -456,14 +502,55 @@
   }
   const terrainFeatures = buildTerrainFeatures();
   worldLayout.pois = generatePoiLayout();
+  function generateInfrastructureLayout() {
+    const salt = worldLayout.salt + 10400;
+    const palettes = {
+      jungle: ["collapsed-wall", "road-shrine", "abandoned-farm", "hunter-platform", "broken-cart", "root-vigil"],
+      shore: ["collapsed-wall", "road-shrine", "fisher-camp", "broken-cart", "watch-platform", "drowned-pier"],
+      desert: ["buried-wall", "road-shrine", "abandoned-farm", "broken-cart", "waystone", "petrified-vigil"],
+      snowy: ["collapsed-wall", "road-shrine", "hunter-platform", "broken-cart", "waystone", "frozen-camp"],
+      mountains: ["collapsed-wall", "road-shrine", "watch-platform", "broken-cart", "waystone", "fallen-bridge"],
+      moon: ["collapsed-wall", "void-shrine", "ruined-habitation", "broken-cart", "waystone", "crystal-vigil"]
+    };
+    const kinds = palettes[realm.biome] || palettes.jungle;
+    const target = 24 + Math.floor(seeded(salt + 1) * 9);
+    const sites = [];
+    const anchors = [[START.x, START.z, 52], [TITLE_VANTAGE.x, TITLE_VANTAGE.z, 42], [RUINS.x, RUINS.z - 24, 86], [RUNE_HOLLOW.x, RUNE_HOLLOW.z, 38]];
+    for (let slot = 0; slot < target; slot += 1) {
+      for (let attempt = 0; attempt < 96; attempt += 1) {
+        const roll = salt + slot * 419 + attempt * 17;
+        const x = (seeded(roll + 1) - .5) * 1480;
+        const z = (seeded(roll + 2) - .5) * 1480;
+        if (Math.abs(x) > 740 || Math.abs(z) > 740) continue;
+        const y = rawTerrainHeight(x, z);
+        if (y <= biome.waterLevel + .8) continue;
+        const slope = Math.abs(rawTerrainHeight(x + 2, z) - y) + Math.abs(rawTerrainHeight(x, z + 2) - y);
+        if (slope > 1.25) continue;
+        if (z > -195 && z < 245 && Math.abs(x - roadCenterAt(z)) < 25) continue;
+        let clear = anchors.every((anchor) => Math.hypot(x - anchor[0], z - anchor[1]) >= anchor[2]);
+        for (let index = 0; index < worldLayout.forts.length && clear; index += 1) clear = Math.hypot(x - worldLayout.forts[index][0], z - worldLayout.forts[index][1]) >= 78;
+        for (let index = 0; index < worldLayout.routes.length && clear; index += 1) clear = Math.hypot(x - worldLayout.routes[index][0], z - worldLayout.routes[index][1]) >= 58;
+        for (let index = 0; index < worldLayout.pois.length && clear; index += 1) clear = Math.hypot(x - worldLayout.pois[index].x, z - worldLayout.pois[index].z) >= 54;
+        for (let index = 0; index < sites.length && clear; index += 1) clear = Math.hypot(x - sites[index].x, z - sites[index].z) >= 35;
+        if (!clear) continue;
+        sites.push({
+          id: "micro-" + slot, kind: kinds[Math.floor(seeded(roll + 3) * kinds.length)],
+          x, z, rotation: seeded(roll + 4) * Math.PI * 2, variant: Math.floor(seeded(roll + 5) * 4)
+        });
+        break;
+      }
+    }
+    return sites;
+  }
+  worldLayout.infrastructure = generateInfrastructureLayout();
   const foundationZones = [
     { id: "title-vantage", x: TITLE_VANTAGE.x, z: TITLE_VANTAGE.z, inner: 14, outer: 28, lift: 0 },
     { id: "start", x: START.x, z: START.z, inner: 18, outer: 42, lift: .2 },
-    { id: "keep", x: RUINS.x, z: RUINS.z - 24, inner: 42, outer: 70, lift: 0 },
+    { id: "keep", x: RUINS.x, z: RUINS.z - 27, inner: 47, outer: 84, lift: 0 },
     { id: "rune-hollow", x: RUNE_HOLLOW.x, z: RUNE_HOLLOW.z, inner: 10, outer: 24, lift: 0 }
-  ].concat(worldLayout.forts.map((fort, index) => ({ id: "fort-" + index, x: fort[0], z: fort[1], inner: 30, outer: 58, lift: .15 })))
+  ].concat(worldLayout.forts.map((fort, index) => ({ id: "fort-" + index, x: fort[0], z: fort[1], inner: 38, outer: 68, lift: .15 })))
     .concat(worldLayout.routes.map((route, index) => ({ id: "route-" + index, x: route[0], z: route[1], inner: 16, outer: 34, lift: .25 })))
-    .concat(worldLayout.pois.map((poi, index) => ({ id: "poi-" + index, x: poi.x, z: poi.z, inner: 14, outer: 30, lift: .18 })));
+    .concat(worldLayout.pois.map((poi, index) => ({ id: "poi-" + index, x: poi.x, z: poi.z, inner: poi.kind === "hamlet" ? 23 : 17, outer: poi.kind === "hamlet" ? 44 : 35, lift: .18 })));
   const foundationTargets = new Map();
   function roadCenterAt(z) {
     const t = clamp((215 - z) / 368, 0, 1);
@@ -1284,6 +1371,55 @@
     });
   }
 
+  function measureLoadedModelRegistry() {
+    modelScaleRegistry = {};
+    const assets = visualAssets.models || {};
+    Object.keys(assets).forEach((id) => {
+      const sceneRoot = assets[id] && assets[id].scene;
+      if (!sceneRoot) return;
+      sceneRoot.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(sceneRoot);
+      const sx = Math.max(.01, box.max.x - box.min.x);
+      const sy = Math.max(.01, box.max.y - box.min.y);
+      const sz = Math.max(.01, box.max.z - box.min.z);
+      const target = MODEL_SCALE_TARGETS[id] || null;
+      const canonicalScale = target
+        ? target.targetSpan ? target.targetSpan / Math.max(sx, sz) : target.targetHeight / sy
+        : 1;
+      const canonicalScaleY = target && target.targetHeight ? target.targetHeight / sy : canonicalScale;
+      modelScaleRegistry[id] = {
+        id, role: target ? target.role : "prop", sx, sy, sz,
+        minX: box.min.x, minY: box.min.y, minZ: box.min.z,
+        maxX: box.max.x, maxY: box.max.y, maxZ: box.max.z,
+        canonicalScale, canonicalScaleY,
+        targetHeight: target && target.targetHeight || null,
+        targetSpan: target && target.targetSpan || null,
+        worldWidth: sx * canonicalScale, worldHeight: sy * canonicalScaleY, worldDepth: sz * canonicalScale
+      };
+    });
+  }
+
+  function canonicalModelScale(id, multiplier) {
+    const metric = modelScaleRegistry[id];
+    return (metric ? metric.canonicalScale : 1) * (multiplier == null ? 1 : multiplier);
+  }
+
+  function modelVerticalScale(id, horizontalScale) {
+    const metric = modelScaleRegistry[id];
+    if (!metric || !metric.canonicalScale) return horizontalScale;
+    return horizontalScale * metric.canonicalScaleY / metric.canonicalScale;
+  }
+
+  function scaledModelCollider(id, scale, heightLimit) {
+    const metric = modelScaleRegistry[id];
+    if (!metric) return null;
+    const verticalScale = modelVerticalScale(id, scale);
+    return {
+      hx: metric.sx * scale * .46, hz: metric.sz * scale * .46,
+      minY: 0, maxY: Math.min(metric.sy * verticalScale, heightLimit == null ? Infinity : heightLimit)
+    };
+  }
+
   async function loadModelAssets() {
     visualAssets.models = {};
     if (!THREE.GLTFLoader) {
@@ -1387,6 +1523,7 @@
       if (result.status === "fulfilled") visualAssets.models[id] = result.value;
       else console.warn("3D model failed to load:", entries[index][1], result.reason);
     });
+    measureLoadedModelRegistry();
   }
 
   async function boot() {
@@ -1410,6 +1547,7 @@
       createRuins();
       createWilderness();
       createImportedWorld();
+      createInfrastructure();
       createVerticalRoutes();
       createExperienceRunes();
       createSettlements();
@@ -1491,6 +1629,97 @@
     glowGradient.addColorStop(1, "rgba(" + glowRgb + ",0)");
     context.fillStyle = glowGradient;
     context.fillRect(0, 0, 1024, 512);
+    const profile = SKY_PROFILES[realm.biome] || SKY_PROFILES.jungle;
+    const skySalt = 13100 + BIOME_IDS.indexOf(realm.biome) * 1000;
+    let featureCount = 0;
+    const ellipse = (x, y, rx, ry, color, alpha) => {
+      context.save();
+      context.globalAlpha = alpha;
+      context.fillStyle = color;
+      context.beginPath();
+      context.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+      featureCount += 1;
+    };
+    if (realm.biome === "jungle") {
+      for (let index = 0; index < 28; index += 1) {
+        ellipse(seeded(skySalt + index * 5) * 1100 - 38, 165 + seeded(skySalt + index * 5 + 1) * 135,
+          42 + seeded(skySalt + index * 5 + 2) * 95, 9 + seeded(skySalt + index * 5 + 3) * 24, "#17392e", .12 + seeded(skySalt + index * 5 + 4) * .14);
+      }
+      context.save();
+      context.globalCompositeOperation = "screen";
+      for (let index = 0; index < 7; index += 1) {
+        const x = 410 + index * 45 + seeded(skySalt + 300 + index) * 70;
+        const shaft = context.createLinearGradient(x, 112, x + 80, 390);
+        shaft.addColorStop(0, "rgba(238,215,135,.2)");
+        shaft.addColorStop(1, "rgba(238,215,135,0)");
+        context.fillStyle = shaft;
+        context.beginPath();
+        context.moveTo(x, 100); context.lineTo(x + 25, 100); context.lineTo(x + 145, 420); context.lineTo(x + 65, 420); context.closePath(); context.fill();
+        featureCount += 1;
+      }
+      context.restore();
+    } else if (realm.biome === "shore") {
+      for (let index = 0; index < 24; index += 1) {
+        ellipse(seeded(skySalt + index * 7) * 1120 - 48, 100 + seeded(skySalt + index * 7 + 1) * 170,
+          55 + seeded(skySalt + index * 7 + 2) * 120, 13 + seeded(skySalt + index * 7 + 3) * 32, index % 3 ? "#233c46" : "#72898e", .18 + seeded(skySalt + index * 7 + 4) * .22);
+      }
+      context.save();
+      context.strokeStyle = "rgba(168,204,210,.15)";
+      context.lineWidth = 3;
+      for (let index = 0; index < 15; index += 1) {
+        const x = 40 + seeded(skySalt + 500 + index * 3) * 950;
+        context.beginPath(); context.moveTo(x, 205); context.lineTo(x - 75, 420); context.stroke();
+        featureCount += 1;
+      }
+      context.restore();
+    } else if (realm.biome === "desert") {
+      for (let index = 0; index < 15; index += 1) {
+        ellipse(seeded(skySalt + index * 7) * 1080 - 28, 250 + seeded(skySalt + index * 7 + 1) * 95,
+          80 + seeded(skySalt + index * 7 + 2) * 150, 12 + seeded(skySalt + index * 7 + 3) * 25, index % 2 ? "#9d6c43" : "#d7a066", .09 + seeded(skySalt + index * 7 + 4) * .16);
+      }
+      const heat = context.createLinearGradient(0, 230, 0, 340);
+      heat.addColorStop(0, "rgba(255,205,121,0)"); heat.addColorStop(.55, "rgba(255,190,101,.21)"); heat.addColorStop(1, "rgba(111,64,39,0)");
+      context.fillStyle = heat; context.fillRect(0, 220, 1024, 140); featureCount += 1;
+    } else if (realm.biome === "snowy") {
+      context.save();
+      context.globalCompositeOperation = "screen";
+      context.lineCap = "round";
+      for (let band = 0; band < 5; band += 1) {
+        context.strokeStyle = band % 2 ? "rgba(102,226,195,.2)" : "rgba(126,155,255,.18)";
+        context.lineWidth = 16 + band * 5;
+        context.beginPath();
+        context.moveTo(-40, 95 + band * 18);
+        context.bezierCurveTo(230, 28 + band * 11, 470, 205 - band * 9, 760, 82 + band * 13);
+        context.bezierCurveTo(870, 45 + band * 12, 960, 100 + band * 16, 1070, 64 + band * 10);
+        context.stroke(); featureCount += 1;
+      }
+      context.restore();
+      for (let index = 0; index < 16; index += 1) ellipse(seeded(skySalt + index * 5) * 1100 - 38, 190 + seeded(skySalt + index * 5 + 1) * 105, 46 + seeded(skySalt + index * 5 + 2) * 90, 10 + seeded(skySalt + index * 5 + 3) * 20, "#d5e0e3", .08 + seeded(skySalt + index * 5 + 4) * .12);
+    } else if (realm.biome === "mountains") {
+      for (let index = 0; index < 22; index += 1) ellipse(seeded(skySalt + index * 6) * 1120 - 48, 85 + seeded(skySalt + index * 6 + 1) * 170, 48 + seeded(skySalt + index * 6 + 2) * 115, 12 + seeded(skySalt + index * 6 + 3) * 30, index % 2 ? "#394b5a" : "#c5d0d4", .1 + seeded(skySalt + index * 6 + 4) * .18);
+      context.save(); context.fillStyle = "rgba(32,42,51,.35)"; context.beginPath(); context.moveTo(0, 330);
+      for (let x = 0; x <= 1024; x += 42) context.lineTo(x, 330 - seeded(skySalt + 700 + x) * 88);
+      context.lineTo(1024, 390); context.lineTo(0, 390); context.closePath(); context.fill(); context.restore(); featureCount += 1;
+    } else {
+      context.save(); context.fillStyle = "rgba(221,231,255,.88)";
+      for (let index = 0; index < 190; index += 1) {
+        const radius = .45 + seeded(skySalt + index * 5 + 2) * 1.45;
+        context.globalAlpha = .25 + seeded(skySalt + index * 5 + 3) * .7;
+        context.beginPath(); context.arc(seeded(skySalt + index * 5) * 1024, seeded(skySalt + index * 5 + 1) * 330, radius, 0, Math.PI * 2); context.fill();
+      }
+      context.restore(); featureCount += 190;
+      const nebula = context.createRadialGradient(220, 115, 8, 220, 115, 280);
+      nebula.addColorStop(0, "rgba(142,102,210,.24)"); nebula.addColorStop(.5, "rgba(85,64,151,.11)"); nebula.addColorStop(1, "rgba(35,29,77,0)");
+      context.fillStyle = nebula; context.fillRect(0, 0, 560, 390); featureCount += 1;
+      ellipse(790, 112, 54, 54, "#bac7ff", .62); ellipse(807, 100, 51, 51, "#171a31", .94);
+    }
+    skyReport = {
+      id: profile.id, features: profile.features.slice(), featureCount,
+      signature: profile.id + ":" + biome.skyZenith.toString(16) + ":" + featureCount,
+      gradientStops: 5, horizonBlend: true
+    };
     const texture = new THREE.CanvasTexture(surface);
     texture.encoding = THREE.sRGBEncoding;
     texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -1550,8 +1779,9 @@
       map: haloTexture, color: biome.skyGlow || biome.sun, transparent: true, opacity: realm.biome === "moon" ? .72 : .52,
       blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false
     }));
-    halo.position.set(760, 180, -150);
-    halo.scale.setScalar(realm.biome === "moon" ? 105 : 170);
+    const skyProfile = SKY_PROFILES[realm.biome] || SKY_PROFILES.jungle;
+    halo.position.set(skyProfile.halo[0], skyProfile.halo[1], skyProfile.halo[2]);
+    halo.scale.setScalar(skyProfile.haloScale);
     halo.renderOrder = -90;
     sky.add(halo);
 
@@ -1872,44 +2102,46 @@
     ruins.name = "Ashenhold Keep";
     scene.add(ruins);
     const z = RUINS.z;
-    addStoneBox(ruins, -24, z - 25, 5, 11, 52, 0, true);
-    addStoneBox(ruins, 24, z - 25, 5, 11, 52, 0, true);
-    addStoneBox(ruins, -16, z - 51, 19, 9, 5, 0, true);
-    addStoneBox(ruins, 16, z - 51, 19, 13, 5, 0, true);
-    addStoneBox(ruins, -17, z + 2, 15, 8, 4, 0, true);
-    addStoneBox(ruins, 17, z + 2, 15, 6, 4, 0, true);
+    // Canonical keep: a roughly 80 x 82 metre defensible enclosure, with a nine-metre gate.
+    addStoneBox(ruins, -38, z - 27, 6, 15, 82, 0, true);
+    addStoneBox(ruins, 38, z - 27, 6, 15, 82, 0, true);
+    addStoneBox(ruins, -20, z - 68, 34, 14, 6, 0, true);
+    addStoneBox(ruins, 20, z - 68, 34, 17, 6, 0, true);
+    addStoneBox(ruins, -21, z + 14, 31, 13, 6, 0, true);
+    addStoneBox(ruins, 21, z + 14, 31, 11, 6, 0, true);
 
-    const towerGeometry = new THREE.CylinderGeometry(7.2, 8, 17, 9);
-    [[-25, z - 51], [25, z - 51], [-25, z + 2], [25, z + 2]].forEach((point, index) => {
+    const towerGeometry = new THREE.CylinderGeometry(9.2, 10.2, 26, 10);
+    [[-38, z - 68], [38, z - 68], [-38, z + 14], [38, z + 14]].forEach((point, index) => {
       const tower = new THREE.Mesh(towerGeometry, index % 2 ? darkStoneMaterial : stoneMaterial);
-      tower.position.set(point[0], terrainHeight(point[0], point[1]) + 8.5, point[1]);
+      const towerBase = terrainHeight(point[0], point[1]);
+      tower.position.set(point[0], towerBase + 13, point[1]);
       tower.rotation.y = index * .38;
       tower.castShadow = !isCoarse;
       tower.receiveShadow = true;
       ruins.add(tower);
-      colliders.push({ x: point[0], z: point[1], hx: 6.2, hz: 6.2 });
-      for (let b = 0; b < 6; b += 1) {
+      addCollider(point[0], point[1], 8.8, 8.8, 0, towerBase, towerBase + 27);
+      for (let b = 0; b < 8; b += 1) {
         if ((b + index) % 3 === 0) continue;
-        const angle = b / 6 * Math.PI * 2;
-        const battlement = new THREE.Mesh(new THREE.BoxGeometry(2.7, 2.5, 2.7), stoneMaterial);
-        battlement.position.set(point[0] + Math.cos(angle) * 6.2, tower.position.y + 9, point[1] + Math.sin(angle) * 6.2);
+        const angle = b / 8 * Math.PI * 2;
+        const battlement = new THREE.Mesh(new THREE.BoxGeometry(3.1, 3, 3.1), stoneMaterial);
+        battlement.position.set(point[0] + Math.cos(angle) * 8.2, tower.position.y + 14, point[1] + Math.sin(angle) * 8.2);
         battlement.castShadow = !isCoarse;
         ruins.add(battlement);
       }
     });
 
-    [-4.8, 4.8].forEach((x) => addStoneBox(ruins, x, z + 7, 3.2, 11, 3.5, 0, true));
-    addStoneBox(ruins, 0, z + 7, 13, 2.8, 3.5, 0, false).position.y += 8.2;
+    [-5.6, 5.6].forEach((x) => addStoneBox(ruins, x, z + 14, 3.4, 14, 5.8, 0, true));
+    addStoneBox(ruins, 0, z + 14, 14.6, 3.2, 5.8, 0, false).position.y += 10.3;
 
-    const obelisk = new THREE.Mesh(new THREE.ConeGeometry(2.3, 12, 4), darkStoneMaterial);
-    obelisk.position.set(0, terrainHeight(0, z - 26) + 6, z - 26);
+    const obelisk = new THREE.Mesh(new THREE.ConeGeometry(3.2, 17, 4), darkStoneMaterial);
+    obelisk.position.set(0, terrainHeight(0, z - 27) + 8.5, z - 27);
     obelisk.rotation.y = Math.PI / 4;
     obelisk.castShadow = !isCoarse;
     ruins.add(obelisk);
 
-    createFire(-10, z - 15, true);
-    createFire(12, z - 34, false);
-    createFire(0, z + 15, false);
+    createFire(-16, z - 12, true);
+    createFire(18, z - 43, false);
+    createFire(0, z + 24, false);
   }
 
   function createFire(x, z, withLight) {
@@ -1959,6 +2191,169 @@
     scene.add(group);
   }
 
+  const FOREST_PROFILES = Object.freeze({
+    jungle: { id: "primeval-broadleaf", desktop: 3600, coarse: 2200, minHeight: 18, maxHeight: 38, heroMin: 50, heroMax: 82, heroChance: .016, trunk: 1.28, crown: "broad", leaf: 0x214d2d, bark: 0x2b2119 },
+    snowy: { id: "ancient-conifer", desktop: 3000, coarse: 1800, minHeight: 16, maxHeight: 34, heroMin: 43, heroMax: 68, heroChance: .013, trunk: 1.05, crown: "conifer", leaf: 0x526a68, bark: 0x332c29 },
+    shore: { id: "storm-coast-grove", desktop: 2500, coarse: 1500, minHeight: 15, maxHeight: 31, heroMin: 40, heroMax: 62, heroChance: .012, trunk: .92, crown: "broad", leaf: 0x3b6650, bark: 0x3c2c21 },
+    mountains: { id: "wind-carved-pine", desktop: 2200, coarse: 1400, minHeight: 13, maxHeight: 29, heroMin: 38, heroMax: 58, heroChance: .011, trunk: .9, crown: "conifer", leaf: 0x40574c, bark: 0x332b29 },
+    desert: { id: "petrified-forest", desktop: 2000, coarse: 900, minHeight: 10, maxHeight: 24, heroMin: 32, heroMax: 52, heroChance: .01, trunk: 1.1, crown: "dead", leaf: 0x73543e, bark: 0x503727 },
+    moon: { id: "umbra-deadwood", desktop: 2200, coarse: 1200, minHeight: 11, maxHeight: 27, heroMin: 35, heroMax: 57, heroChance: .012, trunk: 1.06, crown: "crystal", leaf: 0x686a94, bark: 0x282638 }
+  });
+
+  function forestPlacementClear(x, z, padding) {
+    const clearance = padding || 0;
+    if (z > -205 && z < 255 && Math.abs(x - roadCenterAt(z)) < 18 + clearance) return false;
+    if (Math.hypot(x - START.x, z - START.z) < 48 + clearance) return false;
+    if (Math.hypot(x - TITLE_VANTAGE.x, z - TITLE_VANTAGE.z) < 34 + clearance) return false;
+    if (Math.hypot(x - RUINS.x, z - (RUINS.z - 27)) < 88 + clearance) return false;
+    if (Math.hypot(x - RUNE_HOLLOW.x, z - RUNE_HOLLOW.z) < 28 + clearance) return false;
+    for (let index = 0; index < worldLayout.forts.length; index += 1) if (Math.hypot(x - worldLayout.forts[index][0], z - worldLayout.forts[index][1]) < 66 + clearance) return false;
+    for (let index = 0; index < worldLayout.routes.length; index += 1) if (Math.hypot(x - worldLayout.routes[index][0], z - worldLayout.routes[index][1]) < 44 + clearance) return false;
+    for (let index = 0; index < worldLayout.pois.length; index += 1) if (Math.hypot(x - worldLayout.pois[index].x, z - worldLayout.pois[index].z) < 38 + clearance) return false;
+    for (let index = 0; index < worldLayout.infrastructure.length; index += 1) if (Math.hypot(x - worldLayout.infrastructure[index].x, z - worldLayout.infrastructure[index].z) < 12 + clearance) return false;
+    return true;
+  }
+
+  function createAncientForest() {
+    const profile = FOREST_PROFILES[realm.biome] || FOREST_PROFILES.jungle;
+    const target = isCoarse ? profile.coarse : profile.desktop;
+    const placements = [];
+    const salt = worldLayout.salt + 15200;
+    for (let attempt = 0; placements.length < target && attempt < target * 16; attempt += 1) {
+      const roll = salt + attempt * 19;
+      const x = (seeded(roll + 1) - .5) * 1660;
+      const z = (seeded(roll + 2) - .5) * 1660;
+      if (!forestPlacementClear(x, z, 1.5)) continue;
+      const y = terrainHeight(x, z);
+      if (y <= biome.waterLevel + .45) continue;
+      const slope = Math.abs(terrainHeight(x + 1.5, z) - y) + Math.abs(terrainHeight(x, z + 1.5) - y);
+      if (slope > 1.35) continue;
+      const hero = seeded(roll + 3) < profile.heroChance;
+      const height = hero
+        ? lerp(profile.heroMin, profile.heroMax, seeded(roll + 4))
+        : lerp(profile.minHeight, profile.maxHeight, seeded(roll + 4));
+      const trunkRadius = hero
+        ? lerp(2.3, realm.biome === "jungle" ? 6.7 : 5.2, seeded(roll + 5))
+        : (.38 + seeded(roll + 5) * .78) * profile.trunk;
+      const crownRadius = hero ? height * (.18 + seeded(roll + 6) * .08) : height * (.14 + seeded(roll + 6) * .065);
+      placements.push({ x, y, z, height, trunkRadius, crownRadius, hero, rotation: seeded(roll + 7) * Math.PI * 2 });
+    }
+    const chunkSize = 180;
+    const buckets = new Map();
+    placements.forEach((tree) => {
+      const gx = Math.floor((tree.x + HALF_WORLD) / chunkSize);
+      const gz = Math.floor((tree.z + HALF_WORLD) / chunkSize);
+      const key = gx + ":" + gz;
+      if (!buckets.has(key)) buckets.set(key, { gx, gz, trees: [] });
+      buckets.get(key).trees.push(tree);
+    });
+    const trunkGeometry = new THREE.CylinderGeometry(.45, .65, 1, isCoarse ? 5 : 7);
+    const crownGeometry = profile.crown === "conifer" ? new THREE.ConeGeometry(1, 1, isCoarse ? 5 : 7)
+      : profile.crown === "crystal" ? new THREE.OctahedronGeometry(1, 0)
+      : profile.crown === "dead" ? new THREE.ConeGeometry(.45, 1, 5)
+      : new THREE.SphereGeometry(1, isCoarse ? 5 : 7, isCoarse ? 4 : 6);
+    const farGeometry = new THREE.ConeGeometry(.72, 1, 5);
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: profile.bark, roughness: 1, metalness: 0 });
+    const crownMaterial = new THREE.MeshStandardMaterial({
+      color: profile.leaf, roughness: .96, metalness: profile.crown === "crystal" ? .2 : 0,
+      emissive: profile.crown === "crystal" ? 0x26264d : 0x000000,
+      emissiveIntensity: profile.crown === "crystal" ? .35 : 0
+    });
+    const farMaterial = new THREE.MeshLambertMaterial({ color: new THREE.Color(profile.leaf).multiplyScalar(.72) });
+    const matrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    forestChunks = [];
+    let heroColliderBudget = isCoarse ? 12 : 28;
+    const colliderCountBefore = colliders.length;
+    buckets.forEach((bucket) => {
+      const centerX = -HALF_WORLD + (bucket.gx + .5) * chunkSize;
+      const centerZ = -HALF_WORLD + (bucket.gz + .5) * chunkSize;
+      const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, bucket.trees.length);
+      const crownMesh = new THREE.InstancedMesh(crownGeometry, crownMaterial, bucket.trees.length);
+      const farMesh = new THREE.InstancedMesh(farGeometry, farMaterial, bucket.trees.length);
+      bucket.trees.forEach((tree, index) => {
+        quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), tree.rotation);
+        matrix.compose(
+          new THREE.Vector3(tree.x - centerX, tree.y + tree.height * .5, tree.z - centerZ), quaternion,
+          new THREE.Vector3(tree.trunkRadius / .65, tree.height, tree.trunkRadius / .65)
+        );
+        trunkMesh.setMatrixAt(index, matrix);
+        const crownHeight = profile.crown === "dead" ? tree.height * .42 : tree.height * (tree.hero ? .52 : .46);
+        const crownY = tree.y + tree.height * (profile.crown === "conifer" ? .7 : .78);
+        matrix.compose(
+          new THREE.Vector3(tree.x - centerX, crownY, tree.z - centerZ), quaternion,
+          new THREE.Vector3(tree.crownRadius, crownHeight, tree.crownRadius)
+        );
+        crownMesh.setMatrixAt(index, matrix);
+        matrix.compose(
+          new THREE.Vector3(tree.x - centerX, tree.y + tree.height * .5, tree.z - centerZ), quaternion,
+          new THREE.Vector3(Math.max(tree.trunkRadius * 1.5, tree.crownRadius * .72), tree.height, Math.max(tree.trunkRadius * 1.5, tree.crownRadius * .72))
+        );
+        farMesh.setMatrixAt(index, matrix);
+        if (tree.hero && heroColliderBudget > 0) {
+          addCollider(tree.x, tree.z, tree.trunkRadius * .72, tree.trunkRadius * .72, 0, tree.y, tree.y + tree.height);
+          heroColliderBudget -= 1;
+        }
+      });
+      [trunkMesh, crownMesh, farMesh].forEach((mesh) => {
+        mesh.position.set(centerX, 0, centerZ);
+        mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        mesh.instanceMatrix.needsUpdate = true;
+        mesh.frustumCulled = false;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+      });
+      trunkMesh.castShadow = !isCoarse;
+      crownMesh.castShadow = false;
+      farMesh.castShadow = false;
+      forestChunks.push({ centerX, centerZ, count: bucket.trees.length, nearMeshes: [trunkMesh, crownMesh], farMesh });
+    });
+    forestReport = {
+      profile: profile.id, total: placements.length,
+      heroes: placements.filter((tree) => tree.hero).length,
+      chunks: forestChunks.length, visible: 0,
+      nearChunks: 0, farChunks: 0, culledChunks: forestChunks.length,
+      nearTrees: 0, farTrees: 0,
+      instancedMeshes: forestChunks.length * 3,
+      heroColliders: colliders.length - colliderCountBefore,
+      maxTrunkDiameter: placements.reduce((maximum, tree) => Math.max(maximum, tree.trunkRadius * 2), 0),
+      potentialDrawCalls: forestChunks.length * 3
+    };
+    updateAncientForestVisibility(true);
+  }
+
+  function updateAncientForestVisibility(force) {
+    if (!force) {
+      forestVisibilityTimer -= .016;
+      if (forestVisibilityTimer > 0) return;
+    }
+    forestVisibilityTimer = .35;
+    const focus = player.root ? player.root.position : TITLE_VANTAGE;
+    const nearDistance = isCoarse ? 150 : 255;
+    const farDistance = (isCoarse ? 390 : 650) * Math.max(.72, qualityScale);
+    let visible = 0;
+    let nearChunks = 0;
+    let farChunks = 0;
+    let nearTrees = 0;
+    let farTrees = 0;
+    forestChunks.forEach((chunk) => {
+      const distance = Math.hypot(chunk.centerX - focus.x, chunk.centerZ - focus.z);
+      const near = distance < nearDistance;
+      const far = !near && distance < farDistance;
+      chunk.nearMeshes.forEach((mesh) => { mesh.visible = near; });
+      chunk.farMesh.visible = far;
+      if (near) { nearChunks += 1; nearTrees += chunk.count; }
+      else if (far) { farChunks += 1; farTrees += chunk.count; }
+      if (near || far) visible += chunk.count;
+    });
+    forestReport.visible = visible;
+    forestReport.nearChunks = nearChunks;
+    forestReport.farChunks = farChunks;
+    forestReport.culledChunks = Math.max(0, forestChunks.length - nearChunks - farChunks);
+    forestReport.nearTrees = nearTrees;
+    forestReport.farTrees = farTrees;
+  }
+
   function createWilderness() {
     const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
     const rockMaterial = new THREE.MeshStandardMaterial({ color: biome.cliff, roughness: .98 });
@@ -1978,14 +2373,7 @@
     rocks.receiveShadow = true;
     scene.add(rocks);
 
-    const treeDensity = realm.biome === "moon" ? 0 : realm.biome === "desert" ? .22 : realm.biome === "jungle" ? 1.7 : realm.biome === "shore" ? .72 : 1;
-    const treeCount = Math.round((isCoarse ? 20 : 38) * treeDensity);
-    for (let i = 0; i < treeCount; i += 1) {
-      let x = (seeded(i * 17 + 8) - .5) * 900;
-      let z = (seeded(i * 23 + 2) - .5) * 900;
-      if (Math.abs(x) < 23 && z > -180 && z < 230) x += x < 0 ? -35 : 35;
-      createDeadTree(x, z, .75 + seeded(i * 31) * .8, seeded(i * 19) * Math.PI * 2);
-    }
+    createAncientForest();
 
     if (!visualAssets.models || !visualAssets.models.tower) {
       createWatchtower(154, 74);
@@ -2027,10 +2415,13 @@
     if (!asset) return null;
     const root = asset.scene.clone(true);
     root.name = "Imported " + id;
-    root.scale.setScalar(scale || 1);
+    const horizontalScale = scale || 1;
+    const verticalScale = modelVerticalScale(id, horizontalScale);
+    root.scale.set(horizontalScale, verticalScale, horizontalScale);
     root.rotation.y = rotation || 0;
     const groundY = Number.isFinite(baseY) ? baseY : terrainHeight(x, z);
-    root.position.set(x, groundY + (yOffset || 0), z);
+    const metric = modelScaleRegistry[id];
+    root.position.set(x, groundY + (yOffset || 0) - (metric ? metric.minY * verticalScale : 0), z);
     const wooden = id === "catapult" || id === "siegeTower";
     const ironwork = id === "gate";
     const palette = id === "tree" ? worldFoliageMaterial : wooden ? worldWoodMaterial : ironwork ? worldIronMaterial : darkStoneMaterial;
@@ -2057,21 +2448,13 @@
   }
 
   // --- POI pack placement (keeps original atlas materials; importedModel would override them) ---
-  const packModelMetrics = {};
   function packModelSize(key) {
-    if (!packModelMetrics[key]) {
-      const asset = visualAssets.models && visualAssets.models[key];
-      if (!asset) return null;
-      const box = new THREE.Box3().setFromObject(asset.scene);
-      packModelMetrics[key] = {
-        sx: Math.max(.05, box.max.x - box.min.x),
-        sy: Math.max(.05, box.max.y - box.min.y),
-        sz: Math.max(.05, box.max.z - box.min.z),
-        cx: (box.min.x + box.max.x) / 2,
-        cz: (box.min.z + box.max.z) / 2
-      };
-    }
-    return packModelMetrics[key];
+    const metric = modelScaleRegistry[key];
+    if (!metric) return null;
+    return Object.assign({
+      cx: (metric.minX + metric.maxX) / 2,
+      cz: (metric.minZ + metric.maxZ) / 2
+    }, metric);
   }
 
   function placePackModel(key, x, z, scale, rotation, opts) {
@@ -2080,10 +2463,13 @@
     const options = opts || {};
     const root = asset.scene.clone(true);
     root.name = "Pack " + key;
-    root.scale.setScalar(scale || 1);
+    const horizontalScale = scale || 1;
+    const verticalScale = modelVerticalScale(key, horizontalScale);
+    root.scale.set(horizontalScale, verticalScale, horizontalScale);
     root.rotation.y = rotation || 0;
     const baseY = Number.isFinite(options.baseY) ? options.baseY : terrainHeight(x, z);
-    root.position.set(x, baseY + (options.yOffset || 0), z);
+    const metric = modelScaleRegistry[key];
+    root.position.set(x, baseY + (options.yOffset || 0) - (metric ? metric.minY * verticalScale : 0), z);
     root.traverse((object) => {
       if (!object.isMesh) return;
       object.castShadow = !isCoarse;
@@ -2124,6 +2510,16 @@
     });
   }
 
+  function addGatewayColliders(x, z, rotation, width, depth, baseY, height, doorGap) {
+    const gap = clamp(Math.max(CANONICAL_WORLD_SCALE.doorWidth, doorGap || 4.8), 2.4, width - 1.2);
+    const postWidth = Math.max(.5, (width - gap) / 2);
+    [-1, 1].forEach((side) => {
+      const localX = side * (gap / 2 + postWidth / 2);
+      const point = poiLocalToWorld(x, z, rotation, localX, 0);
+      addCollider(point.x, point.z, postWidth / 2, depth / 2, rotation, baseY, baseY + height);
+    });
+  }
+
   // Align a model's long horizontal axis (measured from its bbox) tangent to a placement angle.
   function poiTangentRotation(angle, size) {
     return -angle - (size.sx >= size.sz ? Math.PI / 2 : 0);
@@ -2133,8 +2529,13 @@
     const fort = new THREE.Group();
     fort.name = name;
     scene.add(fort);
-    const spacing = 17 * scale / 4;
-    const towerScale = scale;
+    const fortMultiplier = clamp(scale / 4.45, .9, 1.12);
+    const spacing = 29 * fortMultiplier;
+    const towerScale = canonicalModelScale("tower", fortMultiplier);
+    const towerTopScale = canonicalModelScale("towerTop", fortMultiplier);
+    const wallScale = canonicalModelScale("wall", fortMultiplier);
+    const gateScale = canonicalModelScale("gate", fortMultiplier);
+    const doorwayScale = canonicalModelScale("doorway", fortMultiplier);
     const fortBaseY = terrainHeight(x, z);
     const cosine = Math.cos(rotation);
     const sine = Math.sin(rotation);
@@ -2149,22 +2550,32 @@
       return model;
     };
     [[-spacing,-spacing],[spacing,-spacing],[-spacing,spacing],[spacing,spacing]].forEach((offset, index) => {
-      place("tower", offset[0], offset[1], towerScale, index * Math.PI / 2, 0, { hx: 3.8 * scale / 4, hz: 3.8 * scale / 4 });
-      place("towerTop", offset[0], offset[1], towerScale, index * Math.PI / 2, 7.75 * scale / 4);
+      place("tower", offset[0], offset[1], towerScale, index * Math.PI / 2, 0, scaledModelCollider("tower", towerScale, 24 * fortMultiplier));
+      const towerHeight = modelScaleRegistry.tower ? modelScaleRegistry.tower.sy * towerScale : 21 * fortMultiplier;
+      place("towerTop", offset[0], offset[1], towerTopScale, index * Math.PI / 2, towerHeight - .35 * fortMultiplier);
     });
     [-.5,.5].forEach((side) => {
-      place("wall", side * spacing, -spacing, scale, 0, 0, { hx: 4.2 * scale / 4, hz: 1.3 * scale / 4 });
-      place("wall", side * spacing, spacing, scale, 0, 0, { hx: 4.2 * scale / 4, hz: 1.3 * scale / 4 });
-      place("wall", -spacing, side * spacing, scale, Math.PI / 2, 0, { hx: 1.3 * scale / 4, hz: 4.2 * scale / 4 });
-      place("wall", spacing, side * spacing, scale, Math.PI / 2, 0, { hx: 1.3 * scale / 4, hz: 4.2 * scale / 4 });
+      const wallCollider = scaledModelCollider("wall", wallScale, 13 * fortMultiplier);
+      place("wall", side * spacing, -spacing, wallScale, 0, 0, wallCollider);
+      place("wall", side * spacing, spacing, wallScale, 0, 0, wallCollider);
+      place("wall", -spacing, side * spacing, wallScale, Math.PI / 2, 0, wallCollider);
+      place("wall", spacing, side * spacing, wallScale, Math.PI / 2, 0, wallCollider);
     });
-    place("gate", 0, spacing, scale, 0, 0, null);
-    place("doorway", 0, -spacing, scale, 0, 0, null);
-    place("stairs", 0, -spacing * .55, scale * .9, Math.PI, 0, null);
-    place("catapult", spacing * .25, -spacing * .18, scale * .78, .55, 0, null);
-    place("rock", -spacing * .3, spacing * .15, scale * .72, 0, 0, null);
-    const fireA = worldPoint(-5, 2);
-    const fireB = worldPoint(6, -5);
+    // Kenney's gate and doorway run along their source Z axis. Turn that long axis
+    // onto the fort wall plane so the visible opening matches the traversal gap.
+    place("gate", 0, spacing, gateScale, Math.PI / 2, 0, null);
+    place("doorway", 0, -spacing, doorwayScale, Math.PI / 2, 0, null);
+    const gateMetric = modelScaleRegistry.gate;
+    const doorwayMetric = modelScaleRegistry.doorway;
+    addGatewayColliders(x - Math.sin(rotation) * spacing, z + Math.cos(rotation) * spacing, rotation,
+      gateMetric ? Math.max(gateMetric.sx, gateMetric.sz) * gateScale : 14, gateMetric ? Math.min(gateMetric.sx, gateMetric.sz) * gateScale : 2.2, fortBaseY, 9.5 * fortMultiplier, 5.4 * fortMultiplier);
+    addGatewayColliders(x + Math.sin(rotation) * spacing, z - Math.cos(rotation) * spacing, rotation,
+      doorwayMetric ? Math.max(doorwayMetric.sx, doorwayMetric.sz) * doorwayScale : 14, doorwayMetric ? Math.min(doorwayMetric.sx, doorwayMetric.sz) * doorwayScale : 2.2, fortBaseY, 12.5 * fortMultiplier, 4.8 * fortMultiplier);
+    place("stairs", 0, -spacing * .52, canonicalModelScale("stairs", fortMultiplier), Math.PI, 0, null);
+    place("catapult", spacing * .25, -spacing * .18, 3.4 * fortMultiplier, .55, 0, null);
+    place("rock", -spacing * .3, spacing * .15, 3.2 * fortMultiplier, 0, 0, null);
+    const fireA = worldPoint(-10, 5);
+    const fireB = worldPoint(12, -9);
     createFire(fireA.x, fireA.z, !isCoarse);
     createFire(fireB.x, fireB.z, false);
   }
@@ -2175,10 +2586,12 @@
       createImportedFort(fort[0], fort[1], fort[2], fort[3], fort[4]);
       registerStronghold("fort-" + index, fort[4], "fort", fort[0], fort[1]);
     });
-    importedModel("siegeTower", 34, -178, 4.1, -.45, 0, { hx: 4.5, hz: 4.5 });
-    importedModel("bridgePillar", -356, 55, 5.2, Math.PI / 2, 0, { hx: 5, hz: 8 });
-    importedModel("tree", -330, 242, 5.5, .2, 0, null);
-    importedModel("tree", 295, -310, 5.2, -1.1, 0, null);
+    const siegeScale = canonicalModelScale("siegeTower");
+    const pierScale = canonicalModelScale("bridgePillar");
+    importedModel("siegeTower", 34, -178, siegeScale, -.45, 0, scaledModelCollider("siegeTower", siegeScale, 17));
+    importedModel("bridgePillar", -356, 55, pierScale, Math.PI / 2, 0, scaledModelCollider("bridgePillar", pierScale, 14));
+    importedModel("tree", -330, 242, canonicalModelScale("tree", 1.35), .2, 0, null);
+    importedModel("tree", 295, -310, canonicalModelScale("tree", 1.2), -1.1, 0, null);
     importedModel("rock", 410, -165, 6.4, .7, 0, null);
     for (let i = 0; i < 4; i += 1) {
       const angle = seeded(7200 + i * 5) * Math.PI * 2;
@@ -2186,10 +2599,13 @@
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius;
       const rotation = seeded(7202 + i * 5) * Math.PI * 2;
-      const scale = 3.45 + seeded(7203 + i * 5) * .75;
-      importedModel("tower", x, z, scale, rotation, 0, { hx: 3.6, hz: 3.6 });
-      importedModel("towerTop", x, z, scale, rotation, 7.75 * scale / 4, null);
-      importedModel("wall", x + Math.cos(rotation) * 7.5, z + Math.sin(rotation) * 7.5, scale, rotation + Math.PI / 2, 0, null);
+      const multiplier = .86 + seeded(7203 + i * 5) * .18;
+      const towerScale = canonicalModelScale("tower", multiplier);
+      const topScale = canonicalModelScale("towerTop", multiplier);
+      const wallScale = canonicalModelScale("wall", multiplier);
+      importedModel("tower", x, z, towerScale, rotation, 0, scaledModelCollider("tower", towerScale, 22));
+      importedModel("towerTop", x, z, topScale, rotation, (modelScaleRegistry.tower ? modelScaleRegistry.tower.sy * towerScale : 21) - .3, null);
+      importedModel("wall", x + Math.cos(rotation) * 10, z + Math.sin(rotation) * 10, wallScale, rotation + Math.PI / 2, 0, scaledModelCollider("wall", wallScale, 11));
     }
     const dressingCount = realm.biome === "jungle" ? 15 : realm.biome === "moon" ? 10 : realm.biome === "desert" ? 7 : 9;
     for (let i = 0; i < dressingCount; i += 1) {
@@ -2197,8 +2613,92 @@
       const z = (seeded(7601 + i * 9) - .5) * 930;
       if (Math.abs(x) < 28 && z > -185 && z < 235) continue;
       const id = realm.biome === "jungle" ? "tree" : "rock";
-      importedModel(id, x, z, 3.2 + seeded(7602 + i * 9) * 3.4, seeded(7603 + i * 9) * Math.PI * 2, 0, null);
+      importedModel(id, x, z, id === "tree" ? canonicalModelScale("tree", .8 + seeded(7602 + i * 9) * .7) : 3.2 + seeded(7602 + i * 9) * 3.4, seeded(7603 + i * 9) * Math.PI * 2, 0, null);
     }
+  }
+
+  function createInfrastructure() {
+    const beforeColliders = colliders.length;
+    const beforeImported = importedModelInstances;
+    const byKind = {};
+    const addWoodBox = (group, x, z, width, height, depth, rotation, collider) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), worldWoodMaterial);
+      const baseY = terrainHeight(x, z);
+      mesh.position.set(x, baseY + height / 2, z);
+      mesh.rotation.y = rotation || 0;
+      mesh.castShadow = !isCoarse;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+      if (collider) addCollider(x, z, width / 2, depth / 2, rotation || 0, baseY, baseY + height);
+      return mesh;
+    };
+    (worldLayout.infrastructure || []).forEach((site, index) => {
+      byKind[site.kind] = (byKind[site.kind] || 0) + 1;
+      const group = new THREE.Group();
+      group.name = "Micro landmark " + site.id + " " + site.kind;
+      scene.add(group);
+      const point = (localX, localZ) => poiLocalToWorld(site.x, site.z, site.rotation, localX, localZ);
+      const baseY = terrainHeight(site.x, site.z);
+      if (/wall|bridge/.test(site.kind)) {
+        const lengths = [5.8, 4.6, 3.5];
+        lengths.forEach((length, segment) => {
+          const local = point((segment - 1) * 4.1, (segment % 2) * 1.2);
+          addStoneBox(group, local.x, local.z, length, 2.8 + segment * .8, 1.25, site.rotation + (segment - 1) * .16, segment === 1);
+        });
+        if (site.kind === "fallen-bridge" || site.kind === "drowned-pier") {
+          [-1, 1].forEach((side) => {
+            const local = point(side * 4.8, -3.2);
+            addWoodBox(group, local.x, local.z, 4.8, .42, 1.8, site.rotation + .28 * side, false);
+          });
+        }
+      } else if (/farm|habitation/.test(site.kind)) {
+        if (visualAssets.models && visualAssets.models.ruinedHouse) {
+          const scale = canonicalModelScale("ruinedHouse", .9 + site.variant * .035);
+          placePackModel("ruinedHouse", site.x, site.z, scale, site.rotation, { baseY });
+          const size = packModelSize("ruinedHouse");
+          addBuildingColliders(site.x, site.z, site.rotation, size.sx * scale / 2, size.sz * scale / 2, baseY, size.sy * scale, 3, size.cx * scale, size.cz * scale);
+        } else addStoneBox(group, site.x, site.z, 8, 5.5, 6.5, site.rotation, true);
+        const field = point(8, 1);
+        for (let row = -1; row <= 1; row += 1) addWoodBox(group, field.x + Math.cos(site.rotation) * row * 1.8, field.z - Math.sin(site.rotation) * row * 1.8, 5.5, .18, .22, site.rotation, false);
+      } else if (/platform/.test(site.kind)) {
+        const deckY = baseY + 4.5;
+        [[-2.4,-2.4],[2.4,-2.4],[-2.4,2.4],[2.4,2.4]].forEach((offset) => {
+          const local = point(offset[0], offset[1]);
+          const mesh = new THREE.Mesh(new THREE.CylinderGeometry(.22, .3, 4.5, 6), worldWoodMaterial);
+          mesh.position.set(local.x, baseY + 2.25, local.z);
+          mesh.castShadow = !isCoarse;
+          group.add(mesh);
+        });
+        const deck = new THREE.Mesh(new THREE.BoxGeometry(6, .35, 6), worldWoodMaterial);
+        deck.position.set(site.x, deckY, site.z); deck.rotation.y = site.rotation; deck.castShadow = !isCoarse; deck.receiveShadow = true; group.add(deck);
+      } else if (/camp/.test(site.kind)) {
+        const tentKey = visualAssets.models && visualAssets.models.tentDetailed ? "tentDetailed" : visualAssets.models && visualAssets.models.tent ? "tent" : null;
+        if (tentKey) placePackModel(tentKey, site.x, site.z, tentKey === "tent" ? 3.4 : 3.6, site.rotation, { baseY });
+        createFire(site.x + Math.cos(site.rotation) * 3.5, site.z + Math.sin(site.rotation) * 3.5, false);
+      } else if (site.kind === "broken-cart") {
+        if (visualAssets.models && visualAssets.models.cart) placePackModel("cart", site.x, site.z, 3.5, site.rotation, { baseY });
+        const crate = point(2.8, 1.2);
+        if (visualAssets.models && visualAssets.models.crateBig) placePackModel("crateBig", crate.x, crate.z, 3.1, site.rotation + .4, { baseY });
+      } else {
+        const height = /crystal|void/.test(site.kind) ? 9.5 : /root|petrified/.test(site.kind) ? 8 : 6.5;
+        const material = /crystal|void/.test(site.kind) ? new THREE.MeshStandardMaterial({ color: 0x7776bd, emissive: 0x2f2b69, emissiveIntensity: .7, roughness: .36, metalness: .22 }) : darkStoneMaterial;
+        const marker = new THREE.Mesh(new THREE.ConeGeometry(1.05, height, /crystal/.test(site.kind) ? 5 : 4), material);
+        marker.position.set(site.x, baseY + height / 2, site.z); marker.rotation.y = site.rotation; marker.castShadow = !isCoarse; group.add(marker);
+        addCollider(site.x, site.z, .72, .72, site.rotation, baseY, baseY + height);
+        for (let stone = 0; stone < 3; stone += 1) {
+          const angle = site.rotation + stone / 3 * Math.PI * 2;
+          const local = { x: site.x + Math.cos(angle) * 2.2, z: site.z + Math.sin(angle) * 2.2 };
+          addStoneBox(group, local.x, local.z, 1.1, .65 + stone * .14, .8, angle, false);
+        }
+      }
+      group.userData.infrastructure = { id: site.id, kind: site.kind, index };
+    });
+    infrastructureReport = {
+      total: (worldLayout.infrastructure || []).length,
+      byKind,
+      colliders: colliders.length - beforeColliders,
+      importedModels: importedModelInstances - beforeImported
+    };
   }
 
   function addPlatform(x, z, width, depth, topY, rotation, metadata) {
@@ -2579,6 +3079,86 @@
     stronghold.markerMaterial = material;
   }
 
+  function createCaptureFlag(stronghold) {
+    if (!stronghold || (stronghold.kind !== "shrine" && stronghold.kind !== "graveyard")) return null;
+    const salt = worldLayout.salt + 17400 + strongholds.length * 61;
+    const angle = seeded(salt + 1) * Math.PI * 2;
+    const radius = stronghold.kind === "graveyard" ? 8.2 : 6.8;
+    const x = stronghold.x + Math.cos(angle) * radius;
+    const z = stronghold.z + Math.sin(angle) * radius;
+    const baseY = surfaceHeightAt(x, z, 999);
+    const height = stronghold.kind === "graveyard" ? 17 : 15;
+    const root = new THREE.Group();
+    root.name = "Warden capture flag " + stronghold.id;
+    root.position.set(x, baseY, z);
+    root.rotation.y = seeded(salt + 2) * Math.PI * 2;
+    const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x283b45, roughness: .42, metalness: .62 });
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(.09, .13, height, 8), poleMaterial);
+    pole.position.y = height / 2;
+    pole.castShadow = !isCoarse;
+    const foot = new THREE.Mesh(new THREE.CylinderGeometry(.72, .9, .34, 10), darkStoneMaterial);
+    foot.position.y = .17;
+    foot.receiveShadow = true;
+    const finial = new THREE.Mesh(new THREE.ConeGeometry(.25, .72, 5), poleMaterial);
+    finial.position.y = height + .34;
+    const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, 4.9, 6), poleMaterial);
+    crossbar.rotation.z = Math.PI / 2;
+    crossbar.position.set(2.25, height - 1.05, 0);
+    const clothGeometry = new THREE.PlaneGeometry(4.7, 2.8, 8, 4);
+    const clothMaterial = new THREE.MeshStandardMaterial({
+      color: 0x367fd3, emissive: 0x12365f, emissiveIntensity: .42,
+      roughness: .74, metalness: .03, side: THREE.DoubleSide
+    });
+    const cloth = new THREE.Mesh(clothGeometry, clothMaterial);
+    cloth.position.set(2.42, height - 2.52, 0);
+    cloth.castShadow = !isCoarse;
+    const sigilMaterial = new THREE.MeshBasicMaterial({ color: 0xc7efff, transparent: true, opacity: .88, side: THREE.DoubleSide, depthWrite: false });
+    const sigil = new THREE.Mesh(new THREE.RingGeometry(.36, .49, 4), sigilMaterial);
+    sigil.position.set(2.12, height - 2.48, .025);
+    sigil.rotation.z = Math.PI / 4;
+    root.add(foot, pole, finial, crossbar, cloth, sigil);
+    scene.add(root);
+    const flag = {
+      strongholdId: stronghold.id, root, cloth, baseY, height, raise: 0, target: 0,
+      phase: seeded(salt + 3) * Math.PI * 2,
+      basePositions: new Float32Array(clothGeometry.attributes.position.array)
+    };
+    root.visible = false;
+    stronghold.captureFlag = flag;
+    captureFlags.push(flag);
+    return flag;
+  }
+
+  function setCaptureFlag(stronghold, captured, animate) {
+    const flag = stronghold && stronghold.captureFlag;
+    if (!flag) return;
+    flag.target = captured ? 1 : 0;
+    if (!captured) {
+      flag.raise = 0;
+      flag.root.visible = false;
+      return;
+    }
+    flag.root.visible = true;
+    flag.raise = animate ? 0 : 1;
+    flag.root.position.y = flag.baseY - flag.height * (1 - flag.raise);
+  }
+
+  function updateCaptureFlags(dt) {
+    captureFlags.forEach((flag) => {
+      if (!flag.root.visible) return;
+      if (flag.raise < flag.target) flag.raise = Math.min(flag.target, flag.raise + dt / 1.65);
+      const eased = 1 - Math.pow(1 - flag.raise, 3);
+      flag.root.position.y = flag.baseY - flag.height * (1 - eased);
+      const positions = flag.cloth.geometry.attributes.position;
+      for (let index = 0; index < positions.count; index += 1) {
+        const baseX = flag.basePositions[index * 3];
+        const tether = clamp((baseX + 2.35) / 4.7, 0, 1);
+        positions.setZ(index, Math.sin(elapsed * 3.2 + flag.phase + baseX * 1.35) * .18 * tether + Math.sin(elapsed * 5.1 + index) * .035 * tether);
+      }
+      positions.needsUpdate = true;
+    });
+  }
+
   function decorateStrongholdSite(stronghold, salt) {
     const models = visualAssets.models || {};
     const choices = stronghold.kind === "camp" ? ["crateBig", "weaponrack", "tent"]
@@ -2620,7 +3200,7 @@
         if (gy <= biome.waterLevel + .35) continue;
         if (Math.abs(terrainHeight(gx + 1.5, gz) - gy) + Math.abs(terrainHeight(gx, gz + 1.5) - gy) > .9) continue;
         if (hitsCollider(gx, gz, .9, gy, gy + 3.4)) continue;
-        stronghold.spots.push({ type, x: gx, z: gz, roll: seeded(salt + index * 7 + attempt * 37 + 3) });
+        stronghold.spots.push({ type, baseType: type, slotIndex: index, x: gx, z: gz, roll: seeded(salt + index * 7 + attempt * 37 + 3) });
         placed = true;
         break;
       }
@@ -2628,6 +3208,7 @@
     });
     strongholds.push(stronghold);
     createStrongholdMarker(stronghold);
+    createCaptureFlag(stronghold);
     decorateStrongholdSite(stronghold, salt);
     return stronghold;
   }
@@ -2668,13 +3249,14 @@
     const buildings = picks.filter((key) => models[key]);
     buildings.forEach((key, index) => {
       const angle = poi.rotation + index / buildings.length * Math.PI * 2 + (seeded(salt + 10 + index * 3) - .5) * .45;
-      const radius = 9 + seeded(salt + 11 + index * 3) * 5;
+      const radius = 16 + seeded(salt + 11 + index * 3) * 7;
       const bx = poi.x + Math.cos(angle) * radius;
       const bz = poi.z + Math.sin(angle) * radius;
       const facing = Math.atan2(poi.x - bx, poi.z - bz);
-      if (!placePackModel(key, bx, bz, POI_SCALES.medieval, facing, { baseY })) return;
+      const buildingScale = canonicalModelScale(key);
+      if (!placePackModel(key, bx, bz, buildingScale, facing, { baseY })) return;
       const size = packModelSize(key);
-      addBuildingColliders(bx, bz, facing, size.sx * POI_SCALES.medieval / 2, size.sz * POI_SCALES.medieval / 2, baseY, size.sy * POI_SCALES.medieval, 1.8, size.cx * POI_SCALES.medieval, size.cz * POI_SCALES.medieval);
+      addBuildingColliders(bx, bz, facing, size.sx * buildingScale / 2, size.sz * buildingScale / 2, baseY, size.sy * buildingScale, 3.1, size.cx * buildingScale, size.cz * buildingScale);
     });
     const dressingKeys = ["barrel", "crateBig", "crateOpen", "sack", "tent", "weaponrack", "flagRed", "bannerRed", "bannerGreen", "cart", "stallBench"];
     const dressingColliders = { barrel: true, crateBig: true, crateOpen: true, tent: true, weaponrack: true, cart: true, stallBench: true };
@@ -2713,7 +3295,7 @@
     const treeKey = { snowy: "treePineA", jungle: "treePalmBend", desert: "cactusTall", shore: "treePalm", mountains: "treePineB" }[realm.biome];
     if (treeKey && models[treeKey]) {
       const angle = seeded(salt + 26) * Math.PI * 2;
-      placePackModel(treeKey, poi.x + Math.cos(angle) * 13.5, poi.z + Math.sin(angle) * 13.5, POI_SCALES.natureTree, seeded(salt + 27) * Math.PI * 2, {});
+      placePackModel(treeKey, poi.x + Math.cos(angle) * 24, poi.z + Math.sin(angle) * 24, canonicalModelScale(treeKey, .9), seeded(salt + 27) * Math.PI * 2, {});
     }
     if (models.campfireStones) placePackModel("campfireStones", fx, fz, POI_SCALES.nature, fireAngle, { baseY });
     createFire(fx, fz, !isCoarse);
@@ -2731,20 +3313,20 @@
     if (!towerKey) { buildPoiFallback(poi, baseY); return; }
     const facing = poi.rotation;
     const size = packModelSize(towerKey);
-    let towerScale = POI_SCALES.medieval * 1.4;
+    let towerScale = canonicalModelScale(towerKey);
     const footprint = Math.min(size.sx, size.sz) * towerScale;
-    if (footprint < 4.6) towerScale *= 4.6 / Math.max(.5, footprint);
+    if (footprint < 8.5) towerScale *= 8.5 / Math.max(.5, footprint);
     placePackModel(towerKey, poi.x, poi.z, towerScale, facing, { baseY });
     const halfX = size.sx * towerScale / 2;
     const halfZ = size.sz * towerScale / 2;
     // Gameplay-critical door: 2.4 gap so the r.8 capsule clears the front quarters with margin.
-    addBuildingColliders(poi.x, poi.z, facing, halfX, halfZ, baseY, size.sy * towerScale, 2.4, size.cx * towerScale, size.cz * towerScale);
+    addBuildingColliders(poi.x, poi.z, facing, halfX, halfZ, baseY, size.sy * towerScale, 3.1, size.cx * towerScale, size.cz * towerScale);
     // Interior wood steps to an upper floor; plain platforms so surfaceHeightAt just works.
     // Full-width strips (threshold +.75, mid +1.5, deck +2.25) so an r.8 capsule can climb
     // without clipping the next tier's collider band; decks align with the rotated shell.
     const innerX = halfX - .7;
     const innerZ = halfZ - .7;
-    const floorTop = baseY + 2.25;
+    const floorTop = baseY + 3;
     const strip = Math.min(1.2, innerZ - .6);
     const stepAt = (localX, localZ, width, depth, topY) => {
       const point = poiLocalToWorld(poi.x, poi.z, facing, localX, localZ);
@@ -2752,7 +3334,8 @@
     };
     stepAt(0, innerZ - strip / 2, innerX * 2, strip, baseY + .75);
     stepAt(0, innerZ - strip * 1.5, innerX * 2, strip, baseY + 1.5);
-    stepAt(0, -strip, innerX * 2, innerZ * 2 - strip * 2, floorTop);
+    stepAt(0, innerZ - strip * 2.5, innerX * 2, strip, baseY + 2.25);
+    stepAt(0, -strip * 1.5, innerX * 2, Math.max(1.4, innerZ * 2 - strip * 3), floorTop);
     const chestPoint = poiLocalToWorld(poi.x, poi.z, facing, 0, -strip);
     addPoiChestSpot(poi, chestPoint.x, chestPoint.z, 100 + Math.floor(seeded(salt + 8) * 41), facing);
     debug.chests += 1;
@@ -2831,14 +3414,15 @@
     const cryptKeys = ["crypt", "cryptA", "cryptSmall"].filter((key) => models[key]);
     const cryptKey = cryptKeys[Math.floor(seeded(salt + 1) * cryptKeys.length)];
     const cryptSize = packModelSize(cryptKey);
-    const cryptHalf = cryptSize.sz * POI_SCALES.crypt / 2;
+    const cryptScale = canonicalModelScale(cryptKey);
+    const cryptHalf = cryptSize.sz * cryptScale / 2;
     const cryptZ = -6.4;
     const altarZ = cryptZ + cryptHalf + 1.2;
     const chestZ = altarZ + 1.7;
     const rowStart = Math.max(-.6, chestZ + 1.3);
     const cryptPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, cryptZ);
-    placePackModel(cryptKey, cryptPoint.x, cryptPoint.z, POI_SCALES.crypt, poi.rotation, { baseY });
-    addCollider(cryptPoint.x, cryptPoint.z, cryptSize.sx * POI_SCALES.crypt * .5, cryptSize.sz * POI_SCALES.crypt * .5, poi.rotation, baseY - 1, baseY + Math.min(cryptSize.sy * POI_SCALES.crypt, 6));
+    placePackModel(cryptKey, cryptPoint.x, cryptPoint.z, cryptScale, poi.rotation, { baseY });
+    addBuildingColliders(cryptPoint.x, cryptPoint.z, poi.rotation, cryptSize.sx * cryptScale * .5, cryptSize.sz * cryptScale * .5, baseY, cryptSize.sy * cryptScale, 3, cryptSize.cx * cryptScale, cryptSize.cz * cryptScale);
     if (models.altarStone) {
       const altarPoint = poiLocalToWorld(poi.x, poi.z, poi.rotation, 0, altarZ);
       placePackModel("altarStone", altarPoint.x, altarPoint.z, POI_SCALES.graveyard, poi.rotation, { baseY });
@@ -3061,7 +3645,7 @@
     });
   }
 
-  function segmentIntersectsCollider(start, end, box) {
+  function segmentIntersectsChestCollider(start, end, box) {
     const cosine = Math.cos(box.rotation || 0);
     const sine = Math.sin(box.rotation || 0);
     const startDx = start.x - box.x;
@@ -3131,7 +3715,7 @@
     const facingDot = toLatch.lengthSq() < .001 ? -1 : facing.dot(toLatch.normalize());
     const ownSurface = surfaceHeightAt(foot.x, foot.z, foot.y + .95);
     const onOwnSurface = Math.abs(ownSurface - foot.y) <= .55;
-    const colliderBlocked = colliders.some((box) => segmentIntersectsCollider(origin, latch, box));
+    const colliderBlocked = colliders.some((box) => segmentIntersectsChestCollider(origin, latch, box));
     let terrainBlocked = false;
     for (let sample = 1; sample < 12 && !terrainBlocked; sample += 1) {
       const amount = sample / 12;
@@ -4079,8 +4663,9 @@
       mixer = new THREE.AnimationMixer(model);
       const findClip = (pattern) => source.animations.find((clip) => pattern.test(clip.name));
       const idleClip = findClip(/^Idle$/i) || source.animations[0];
+      const runClip = findClip(/^Run$/i) || findClip(/^Walk$/i) || idleClip;
       const clips = {
-        idle: idleClip, run: findClip(/^Run$/i) || findClip(/^Walk$/i) || idleClip,
+        idle: idleClip, walk: findClip(/^Walk$/i) || runClip, run: runClip,
         attack: findClip(/Punch|Weapon/i) || idleClip, hit: findClip(/HitReact/i) || idleClip,
         death: findClip(/^Death$/i) || idleClip
       };
@@ -4109,8 +4694,12 @@
       root.add(model);
       modelRoot = model;
       mixer = new THREE.AnimationMixer(model);
-      const runClip = source.animations.find((clip) => /run/i.test(clip.name)) || source.animations[source.animations.length - 1];
-      if (runClip) mixer.clipAction(runClip).play();
+      const findClip = (pattern) => source.animations.find((clip) => pattern.test(clip.name));
+      const idleClip = findClip(/survey|idle/i) || source.animations[0];
+      const walkClip = findClip(/^walk$/i) || findClip(/walk/i) || findClip(/run/i) || idleClip;
+      const runClip = findClip(/^run$/i) || findClip(/run/i) || walkClip;
+      const clips = { idle: idleClip, walk: walkClip, run: runClip, attack: runClip, hit: idleClip, death: idleClip };
+      Object.keys(clips).forEach((id) => { if (clips[id]) actions[id] = mixer.clipAction(clips[id]); });
       stats = { name: "FROST WARG", rank: "FERAL HUNTER", health: 45, damage: 7, speed: 10.8, range: 2.35, cooldown: 1.15, hitRadius: 1.65, xp: 52, heal: 7 };
     } else if (type === "golem") {
       const torso = new THREE.Mesh(new THREE.DodecahedronGeometry(1.15, 0), darkStoneMaterial.clone());
@@ -4168,7 +4757,7 @@
       tier, threat, strongholdId: null, strongholdHandled: false,
       actions, animationState, lastDamageSource: null, lastWeaponId: null, hitStun: 0, phase: encounterRandom() * Math.PI * 2,
       impulse: new THREE.Vector3(), telegraph: null, bleedStacks: 0, bleedTime: 0, slowTime: 0,
-      tamed: false, tameReady: false, tameProgress: 0, tameMarker: null
+      tamed: false, tameReady: false, tameProgress: 0, tameMarker: null, ai: null
     };
     setEnemyAction(enemy, "idle", true);
     root.traverse((object) => { if (object.isMesh || object.isSkinnedMesh) object.userData.dragon = enemy; });
@@ -4218,12 +4807,14 @@
     stronghold.markerMaterial.color.setHex(stronghold.cleared ? 0x67d6b1 : 0xe26b3f);
     stronghold.markerMaterial.opacity = stronghold.cleared ? .16 : .42;
     if (stronghold.marker) stronghold.marker.scale.setScalar(stronghold.cleared ? .82 : 1);
+    setCaptureFlag(stronghold, stronghold.cleared, false);
   }
 
   function clearStronghold(stronghold, grantRewards) {
     if (!stronghold || stronghold.cleared) return false;
     stronghold.cleared = true;
     updateStrongholdMarker(stronghold);
+    setCaptureFlag(stronghold, true, grantRewards !== false);
     const reward = STRONGHOLD_BONUSES[stronghold.kind] || STRONGHOLD_BONUSES.hamlet;
     if (grantRewards !== false) {
       grantXp(reward.xp);
@@ -4427,14 +5018,16 @@
 
   function animateGroundEnemy(enemy, dt, moving) {
     if (enemy.mixer) {
-      const nextState = enemy.dead ? "death" : enemy.hitStun > 0 ? "hit" : enemy.attackTimer > 0 ? "attack" : moving ? "run" : "idle";
+      const walking = moving && !enemy.tamed && enemy.ai && enemy.ai.moveMode === "walk" && enemy.actions && enemy.actions.walk;
+      const nextState = enemy.dead ? "death" : enemy.hitStun > 0 ? "hit" : enemy.attackTimer > 0 ? "attack" : moving ? (walking ? "walk" : "run") : "idle";
       setEnemyAction(enemy, nextState);
-      enemy.mixer.timeScale = nextState === "run" ? 1.15 : 1;
+      enemy.mixer.timeScale = nextState === "run" ? 1.15 : nextState === "walk" ? .82 : 1;
       enemy.mixer.update(dt);
       return;
     }
     const parts = enemy.parts;
-    const stride = Math.sin(enemy.walkCycle) * (enemy.kind === "golem" ? .38 : .72);
+    const walkScale = enemy.ai && enemy.ai.moveMode === "walk" ? .62 : 1;
+    const stride = Math.sin(enemy.walkCycle) * (enemy.kind === "golem" ? .38 : .72) * walkScale;
     if (parts.leftLeg) parts.leftLeg.rotation.x = lerp(parts.leftLeg.rotation.x, moving ? stride : 0, Math.min(1, dt * 10));
     if (parts.rightLeg) parts.rightLeg.rotation.x = lerp(parts.rightLeg.rotation.x, moving ? -stride : 0, Math.min(1, dt * 10));
     if (parts.leftArm) parts.leftArm.rotation.x = lerp(parts.leftArm.rotation.x, moving ? -stride * .7 : 0, Math.min(1, dt * 10));
@@ -4466,32 +5059,678 @@
     enemy.telegraph = null;
   }
 
-  function steerAroundObstacles(enemy, direction) {
-    const y = enemy.root.position.y;
-    const probe = (angle) => {
-      const c = Math.cos(angle);
-      const s = Math.sin(angle);
-      const dx = direction.x * c - direction.z * s;
-      const dz = direction.x * s + direction.z * c;
-      return {
-        dx, dz,
-        blocked: hitsCollider(enemy.root.position.x + dx * 3.5, enemy.root.position.z + dz * 3.5, enemy.hitRadius * .45, y, y + 3.6)
-      };
+  const GARRISON_PATROL_ROLES = new Set(["patrol_guard", "beast_patrol"]);
+
+  function emitPlayerNoise(radius, duration, reason) {
+    const nextRadius = Math.max(0, Number(radius) || 0);
+    if (playerNoiseTime <= 0 || nextRadius >= playerNoiseRadius) playerNoiseReason = reason || "disturbance";
+    playerNoiseRadius = Math.max(playerNoiseRadius, nextRadius);
+    playerNoiseTime = Math.max(playerNoiseTime, Math.max(.05, Number(duration) || .3));
+  }
+
+  function currentPlayerNoise() {
+    const pulseRadius = playerNoiseTime > 0 ? playerNoiseRadius : 0;
+    const movementRadius = player.superSprinting ? 36 : player.sprinting ? 23 : player.moving ? 8 : 0;
+    if (pulseRadius >= movementRadius && pulseRadius > 0) return { radius: pulseRadius, reason: playerNoiseReason };
+    if (player.superSprinting) return { radius: movementRadius, reason: "super-sprint" };
+    if (player.sprinting) return { radius: movementRadius, reason: "sprint" };
+    if (player.moving) return { radius: movementRadius, reason: "footsteps" };
+    return { radius: 0, reason: "quiet" };
+  }
+
+  function segmentIntersectsCollider(from, to, box, padding) {
+    const cosine = Math.cos(box.rotation || 0);
+    const sine = Math.sin(box.rotation || 0);
+    const transform = (point) => {
+      const dx = point.x - box.x;
+      const dz = point.z - box.z;
+      return { x: dx * cosine - dz * sine, y: point.y, z: dx * sine + dz * cosine };
     };
-    if (!probe(0).blocked) return null;
-    const left = probe(.55);
-    const right = probe(-.55);
-    let chosen = null;
-    if (!left.blocked && !right.blocked) {
-      const leftDistance = Math.hypot(enemy.root.position.x + left.dx * 3.5 - player.root.position.x, enemy.root.position.z + left.dz * 3.5 - player.root.position.z);
-      const rightDistance = Math.hypot(enemy.root.position.x + right.dx * 3.5 - player.root.position.x, enemy.root.position.z + right.dz * 3.5 - player.root.position.z);
-      chosen = leftDistance <= rightDistance ? left : right;
-    } else chosen = !left.blocked ? left : !right.blocked ? right : null;
-    if (!chosen) return new THREE.Vector3(-direction.x, 0, -direction.z);
-    return new THREE.Vector3(chosen.dx, 0, chosen.dz);
+    const start = transform(from);
+    const end = transform(to);
+    const inset = padding == null ? .04 : padding;
+    let enter = 0;
+    let exit = 1;
+    const clipAxis = (origin, delta, minimum, maximum) => {
+      if (Math.abs(delta) < 1e-6) return origin >= minimum && origin <= maximum;
+      let first = (minimum - origin) / delta;
+      let second = (maximum - origin) / delta;
+      if (first > second) { const swap = first; first = second; second = swap; }
+      enter = Math.max(enter, first);
+      exit = Math.min(exit, second);
+      return enter <= exit;
+    };
+    if (!clipAxis(start.x, end.x - start.x, -box.hx - inset, box.hx + inset)) return false;
+    if (!clipAxis(start.z, end.z - start.z, -box.hz - inset, box.hz + inset)) return false;
+    if (!clipAxis(start.y, end.y - start.y, box.minY - inset, box.maxY + inset)) return false;
+    return exit >= .012 && enter <= .988;
+  }
+
+  function segmentOccluded(from, to) {
+    const minimumX = Math.min(from.x, to.x);
+    const maximumX = Math.max(from.x, to.x);
+    const minimumZ = Math.min(from.z, to.z);
+    const maximumZ = Math.max(from.z, to.z);
+    const minimumY = Math.min(from.y, to.y);
+    const maximumY = Math.max(from.y, to.y);
+    for (let index = 0; index < colliders.length; index += 1) {
+      const box = colliders[index];
+      if (maximumY < box.minY || minimumY > box.maxY) continue;
+      const cosine = Math.abs(Math.cos(box.rotation || 0));
+      const sine = Math.abs(Math.sin(box.rotation || 0));
+      const extentX = cosine * box.hx + sine * box.hz + .08;
+      const extentZ = sine * box.hx + cosine * box.hz + .08;
+      if (maximumX < box.x - extentX || minimumX > box.x + extentX || maximumZ < box.z - extentZ || minimumZ > box.z + extentZ) continue;
+      if (segmentIntersectsCollider(from, to, box, .035)) return true;
+    }
+    const horizontalDistance = Math.hypot(to.x - from.x, to.z - from.z);
+    const samples = Math.min(24, Math.max(2, Math.ceil(horizontalDistance / 3.2)));
+    for (let index = 1; index < samples; index += 1) {
+      const ratio = index / samples;
+      const x = lerp(from.x, to.x, ratio);
+      const z = lerp(from.z, to.z, ratio);
+      const sightY = lerp(from.y, to.y, ratio);
+      if (terrainHeight(x, z) + .48 > sightY) return true;
+    }
+    return false;
+  }
+
+  function enemyEyePosition(enemy) {
+    const height = enemy.kind === "golem" ? 3.15 : enemy.kind === "warg" ? 1.35 : enemy.elite ? 2.35 : 1.85;
+    return enemy.root.position.clone().add(new THREE.Vector3(0, height, 0));
+  }
+
+  function playerSightPosition() {
+    return player.root.position.clone().add(new THREE.Vector3(0, 1.38, 0));
+  }
+
+  function roleSightProfile(enemy) {
+    const role = enemy.ai ? enemy.ai.role : "patrol_guard";
+    if (role === "tower_lookout") return { range: 48, halfAngle: 72, buildup: 1.28 };
+    if (role === "gate_sentry") return { range: 41, halfAngle: 64, buildup: 1.12 };
+    if (role === "beast_patrol") return { range: 34, halfAngle: 76, buildup: 1.18 };
+    if (role === "reserve") return { range: 29, halfAngle: 56, buildup: .9 };
+    return { range: 36, halfAngle: 60, buildup: 1 };
+  }
+
+  function enemyVisionSample(enemy) {
+    if (!enemy.ai || !player.root) return { visible: false, occluded: false, distance: Infinity, facing: -1 };
+    const eye = enemyEyePosition(enemy);
+    const target = playerSightPosition();
+    const dx = target.x - eye.x;
+    const dz = target.z - eye.z;
+    const horizontalDistance = Math.hypot(dx, dz);
+    const verticalDistance = Math.abs(target.y - eye.y);
+    const profile = roleSightProfile(enemy);
+    const forwardX = -Math.sin(enemy.root.rotation.y);
+    const forwardZ = -Math.cos(enemy.root.rotation.y);
+    const facing = horizontalDistance > .001 ? (forwardX * dx + forwardZ * dz) / horizontalDistance : 1;
+    const awarenessState = enemy.ai.state === "combat" || enemy.ai.state === "alert" || enemy.ai.state === "search" || enemy.ai.state === "suspicious";
+    const coneThreshold = Math.cos((profile.halfAngle + (awarenessState ? 24 : 0)) * Math.PI / 180);
+    const inCone = facing >= coneThreshold || horizontalDistance <= 4.5;
+    const inRange = horizontalDistance <= profile.range && verticalDistance <= Math.max(9, profile.range * .55);
+    const forcedBlind = enemy.ai.testBlindTime > 0;
+    const occluded = inRange && inCone ? segmentOccluded(eye, target) : false;
+    return { visible: !forcedBlind && inRange && inCone && !occluded, occluded, distance: horizontalDistance, facing, profile };
+  }
+
+  function setGroundEnemyAIState(enemy, nextState, reason) {
+    const ai = enemy && enemy.ai;
+    if (!ai || ai.state === nextState) return false;
+    ai.previousState = ai.state;
+    ai.state = nextState;
+    ai.stateTime = 0;
+    ai.transitionReason = reason || "state";
+    ai.path = [];
+    ai.pathIndex = 0;
+    ai.repathTimer = 0;
+    ai.blockedTime = 0;
+    ai.progressTime = 0;
+    ai.progressExpected = 0;
+    ai.progressX = enemy.root.position.x;
+    ai.progressZ = enemy.root.position.z;
+    ai.moveMode = nextState === "combat" || nextState === "alert" ? "run" : "walk";
+    enemy.engaged = nextState === "alert" || nextState === "combat" || nextState === "search";
+    if (nextState !== "combat") {
+      enemy.attackTimer = 0;
+      enemy.attackDelivered = false;
+      clearEnemyTelegraph(enemy);
+    }
+    if (nextState === "search") ai.searchRemaining = 4.5 + seeded(ai.seed + 71) * 2.5;
+    if (nextState === "guard") {
+      ai.detection = 0;
+      ai.lostSight = 0;
+      ai.guardDwell = 2.4 + seeded(ai.seed + ai.patrolIndex * 19 + 5) * 3.2;
+    }
+    return true;
+  }
+
+  function shareGarrisonAlert(source, position, reason) {
+    if (!source || !source.ai) return;
+    groundEnemies.forEach((other) => {
+      if (other === source || other.dead || other.tamed || !other.ai || other.strongholdId !== source.strongholdId) return;
+      if (other.ai.state === "combat" || other.ai.state === "alert") return;
+      const distance = distance2D(source.root.position, other.root.position);
+      const radius = source.ai.role === "tower_lookout" ? 24 : 19;
+      if (distance > radius) return;
+      const sourcePoint = enemyEyePosition(source);
+      const listenerPoint = enemyEyePosition(other);
+      if (distance > 8 && segmentOccluded(sourcePoint, listenerPoint)) return;
+      other.ai.lastKnown.copy(position);
+      other.ai.detection = Math.max(other.ai.detection, .58);
+      setGroundEnemyAIState(other, "suspicious", "shared-" + (reason || "alert"));
+      garrisonAIStats.alertsShared += 1;
+    });
+  }
+
+  function raiseGroundEnemyAlert(enemy, position, reason) {
+    if (!enemy || !enemy.ai) return;
+    enemy.ai.lastKnown.copy(position || player.root.position);
+    enemy.ai.detection = 1;
+    enemy.ai.lostSight = 0;
+    const changed = setGroundEnemyAIState(enemy, "alert", reason || "confirmed");
+    if (changed) shareGarrisonAlert(enemy, enemy.ai.lastKnown, reason || "confirmed");
+  }
+
+  function alertGroundEnemyFromDamage(enemy) {
+    if (!enemy || !enemy.ai || enemy.dead || enemy.tamed) return;
+    raiseGroundEnemyAlert(enemy, player.root.position, "damaged");
+  }
+
+  function enemyNavPointWalkable(x, z, radius) {
+    if (x < -HALF_WORLD || x > HALF_WORLD || z < -HALF_WORLD || z > HALF_WORLD) return false;
+    const y = terrainHeight(x, z);
+    if (y <= biome.waterLevel + .38) return false;
+    const sample = 1.25;
+    const slope = Math.max(
+      Math.abs(terrainHeight(x + sample, z) - terrainHeight(x - sample, z)),
+      Math.abs(terrainHeight(x, z + sample) - terrainHeight(x, z - sample))
+    ) / (sample * 2);
+    if (slope > 1.05) return false;
+    return !hitsCollider(x, z, radius == null ? .58 : radius, y, y + 3.35);
+  }
+
+  function buildStrongholdNavGrid(stronghold) {
+    if (!stronghold || stronghold.navGrid) return stronghold ? stronghold.navGrid : null;
+    const cell = 3.6;
+    const radius = (stronghold.kind === "keep" ? 47 : 37);
+    const halfCells = Math.ceil(radius / cell);
+    const size = halfCells * 2 + 1;
+    const originX = stronghold.x - halfCells * cell;
+    const originZ = stronghold.z - halfCells * cell;
+    const walkable = new Uint8Array(size * size);
+    let walkableCount = 0;
+    for (let row = 0; row < size; row += 1) {
+      for (let column = 0; column < size; column += 1) {
+        const x = originX + column * cell;
+        const z = originZ + row * cell;
+        const inside = Math.hypot(x - stronghold.x, z - stronghold.z) <= radius + cell;
+        const open = inside && enemyNavPointWalkable(x, z, .54);
+        walkable[row * size + column] = open ? 1 : 0;
+        if (open) walkableCount += 1;
+      }
+    }
+    stronghold.navGrid = { cell, radius, halfCells, size, originX, originZ, walkable, walkableCount };
+    return stronghold.navGrid;
+  }
+
+  function navCellIndex(grid, column, row) {
+    return row >= 0 && row < grid.size && column >= 0 && column < grid.size ? row * grid.size + column : -1;
+  }
+
+  function nearestWalkableNavCell(grid, x, z) {
+    const baseColumn = clamp(Math.round((x - grid.originX) / grid.cell), 0, grid.size - 1);
+    const baseRow = clamp(Math.round((z - grid.originZ) / grid.cell), 0, grid.size - 1);
+    for (let ring = 0; ring <= 4; ring += 1) {
+      let best = -1;
+      let bestDistance = Infinity;
+      for (let row = baseRow - ring; row <= baseRow + ring; row += 1) {
+        for (let column = baseColumn - ring; column <= baseColumn + ring; column += 1) {
+          if (ring && Math.abs(column - baseColumn) !== ring && Math.abs(row - baseRow) !== ring) continue;
+          const index = navCellIndex(grid, column, row);
+          if (index < 0 || !grid.walkable[index]) continue;
+          const cx = grid.originX + column * grid.cell;
+          const cz = grid.originZ + row * grid.cell;
+          const distance = Math.hypot(cx - x, cz - z);
+          if (distance < bestDistance) { best = index; bestDistance = distance; }
+        }
+      }
+      if (best >= 0) return best;
+    }
+    return -1;
+  }
+
+  function findStrongholdNavPath(enemy, target) {
+    if (!enemy.ai || !enemy.strongholdId) return [];
+    const stronghold = strongholds.find((item) => item.id === enemy.strongholdId);
+    const grid = buildStrongholdNavGrid(stronghold);
+    if (!grid || grid.walkableCount < 2) return [];
+    const start = nearestWalkableNavCell(grid, enemy.root.position.x, enemy.root.position.z);
+    const goal = nearestWalkableNavCell(grid, target.x, target.z);
+    if (start < 0 || goal < 0 || start === goal) return [];
+    const count = grid.size * grid.size;
+    const scores = new Float64Array(count);
+    const estimates = new Float64Array(count);
+    const previous = new Int32Array(count);
+    const closed = new Uint8Array(count);
+    scores.fill(Infinity);
+    estimates.fill(Infinity);
+    previous.fill(-1);
+    scores[start] = 0;
+    const goalColumn = goal % grid.size;
+    const goalRow = Math.floor(goal / grid.size);
+    estimates[start] = Math.hypot(start % grid.size - goalColumn, Math.floor(start / grid.size) - goalRow);
+    const open = [start];
+    const directions = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+    let iterations = 0;
+    while (open.length && iterations < count * 3) {
+      iterations += 1;
+      let bestOpen = 0;
+      for (let index = 1; index < open.length; index += 1) if (estimates[open[index]] < estimates[open[bestOpen]]) bestOpen = index;
+      const current = open.splice(bestOpen, 1)[0];
+      if (closed[current]) continue;
+      if (current === goal) break;
+      closed[current] = 1;
+      const currentColumn = current % grid.size;
+      const currentRow = Math.floor(current / grid.size);
+      directions.forEach((direction) => {
+        const column = currentColumn + direction[0];
+        const row = currentRow + direction[1];
+        const neighbor = navCellIndex(grid, column, row);
+        if (neighbor < 0 || !grid.walkable[neighbor] || closed[neighbor]) return;
+        if (direction[0] && direction[1]) {
+          const sideA = navCellIndex(grid, currentColumn + direction[0], currentRow);
+          const sideB = navCellIndex(grid, currentColumn, currentRow + direction[1]);
+          if (sideA < 0 || sideB < 0 || !grid.walkable[sideA] || !grid.walkable[sideB]) return;
+        }
+        const x = grid.originX + column * grid.cell;
+        const z = grid.originZ + row * grid.cell;
+        const currentX = grid.originX + currentColumn * grid.cell;
+        const currentZ = grid.originZ + currentRow * grid.cell;
+        const slopeCost = Math.abs(terrainHeight(x, z) - terrainHeight(currentX, currentZ)) * .22;
+        const tentative = scores[current] + (direction[0] && direction[1] ? 1.414 : 1) + slopeCost;
+        if (tentative >= scores[neighbor]) return;
+        previous[neighbor] = current;
+        scores[neighbor] = tentative;
+        estimates[neighbor] = tentative + Math.hypot(column - goalColumn, row - goalRow);
+        open.push(neighbor);
+      });
+    }
+    if (previous[goal] < 0) return [];
+    const cells = [];
+    let cursor = goal;
+    while (cursor !== start && cursor >= 0 && cells.length < count) {
+      cells.push(cursor);
+      cursor = previous[cursor];
+    }
+    cells.reverse();
+    const path = cells.map((index) => {
+      const column = index % grid.size;
+      const row = Math.floor(index / grid.size);
+      const x = grid.originX + column * grid.cell;
+      const z = grid.originZ + row * grid.cell;
+      return new THREE.Vector3(x, terrainHeight(x, z), z);
+    });
+    return path.filter((point, index) => index === path.length - 1 || index % 2 === 0);
+  }
+
+  function roleForGarrisonMember(stronghold, spot, index) {
+    const base = STRONGHOLD_GARRISONS[stronghold.kind] || STRONGHOLD_GARRISONS.hamlet;
+    const golemSlots = base.golem + (stronghold.kind === "fort" || stronghold.kind === "keep" ? 1 : 0);
+    const firstLightSlot = base.heavy + base.warg + golemSlots;
+    const slotIndex = Number.isInteger(spot.slotIndex) ? spot.slotIndex : index;
+    const baseType = spot.baseType || spot.type;
+    const lightIndex = Math.max(0, slotIndex - firstLightSlot);
+    if (baseType === "golem") return "heavy_defender";
+    if (baseType === "warg") return "beast_patrol";
+    if ((stronghold.kind === "watchpost" || stronghold.kind === "fort") && baseType === "biomeLight" && lightIndex === 0) return "tower_lookout";
+    if (baseType === "biomeHeavy") return slotIndex % 2 ? "heavy_defender" : "gate_sentry";
+    const rotation = ["gate_sentry", "courtyard_guard", "patrol_guard", "reserve"];
+    return rotation[lightIndex % rotation.length];
+  }
+
+  function assignGarrisonAI(enemy, stronghold, spot, index) {
+    const seed = worldLayout.salt + index * 97 + Math.round(Math.abs(spot.x * 17 + spot.z * 31));
+    const role = roleForGarrisonMember(stronghold, spot, index);
+    const outwardX = spot.x - stronghold.x;
+    const outwardZ = spot.z - stronghold.z;
+    const outwardLength = Math.hypot(outwardX, outwardZ) || 1;
+    let guardYaw = Math.atan2(-(outwardX / outwardLength), -(outwardZ / outwardLength));
+    if (role === "courtyard_guard" || role === "reserve") guardYaw += Math.PI;
+    const patrol = [new THREE.Vector3(spot.x, terrainHeight(spot.x, spot.z), spot.z)];
+    if (GARRISON_PATROL_ROLES.has(role)) {
+      const baseAngle = Math.atan2(spot.z - stronghold.z, spot.x - stronghold.x);
+      const baseRadius = clamp(Math.hypot(outwardX, outwardZ), 5, stronghold.kind === "keep" ? 30 : 23);
+      [-.42, .36, .74, -.82, 1.08, -1.18, 1.46, -1.52].forEach((offset, patrolIndex) => {
+        if (patrol.length >= 4) return;
+        const radius = clamp(baseRadius + (seeded(seed + 20 + patrolIndex) - .5) * 5, 5, stronghold.kind === "keep" ? 34 : 27);
+        const angle = baseAngle + offset;
+        const x = stronghold.x + Math.cos(angle) * radius;
+        const z = stronghold.z + Math.sin(angle) * radius;
+        if (enemyNavPointWalkable(x, z, enemy.hitRadius * .42)) patrol.push(new THREE.Vector3(x, terrainHeight(x, z), z));
+      });
+    }
+    enemy.ai = {
+      seed, role, state: "guard", previousState: null, stateTime: 0, transitionReason: "spawned-at-post",
+      home: new THREE.Vector3(spot.x, terrainHeight(spot.x, spot.z), spot.z), guardYaw,
+      patrol, patrolIndex: 0, guardDwell: 3.2 + seeded(seed + 5) * 3.8,
+      detection: 0, lostSight: 0, lastKnown: new THREE.Vector3(spot.x, terrainHeight(spot.x, spot.z), spot.z),
+      searchRemaining: 0, path: [], pathIndex: 0, repathTimer: 0, blockedTime: 0,
+      progressTime: 0, progressExpected: 0, progressX: spot.x, progressZ: spot.z, stuckCount: 0, recoveries: 0,
+      moveMode: "walk", sidestepSign: seeded(seed + 9) < .5 ? -1 : 1, lastSight: null, testBlindTime: 0,
+      senseTimer: seeded(seed + 12) * .16, senseElapsed: 0
+    };
+    enemy.engaged = false;
+    enemy.root.rotation.y = guardYaw;
+    setEnemyAction(enemy, "idle", true);
+  }
+
+  function updateEnemyPerception(enemy, dt, noiseRadius, noiseReason) {
+    const ai = enemy.ai;
+    if (!ai) return;
+    ai.testBlindTime = Math.max(0, ai.testBlindTime - dt);
+    const sight = enemyVisionSample(enemy);
+    ai.lastSight = { visible: sight.visible, occluded: sight.occluded, distance: sight.distance, facing: sight.facing };
+    if (sight.visible) {
+      ai.lastKnown.copy(player.root.position);
+      ai.lostSight = 0;
+      const proximity = clamp(1 - sight.distance / Math.max(1, sight.profile.range), .12, 1);
+      const awareMultiplier = ai.state === "suspicious" || ai.state === "search" ? 1.9 : 1;
+      ai.detection = clamp(ai.detection + dt * sight.profile.buildup * (.55 + proximity * 1.7) * awareMultiplier, 0, 1);
+      if (ai.state === "combat") ai.detection = 1;
+      if (ai.detection >= 1 && ai.state !== "combat" && ai.state !== "alert") raiseGroundEnemyAlert(enemy, player.root.position, "line-of-sight");
+      else if (ai.detection >= .2 && (ai.state === "guard" || ai.state === "patrol" || ai.state === "return")) setGroundEnemyAIState(enemy, "suspicious", "partial-sighting");
+    } else {
+      ai.lostSight += dt;
+      if (ai.state === "guard" || ai.state === "patrol" || ai.state === "return") ai.detection = Math.max(0, ai.detection - dt * .24);
+      else if (ai.state === "suspicious") ai.detection = Math.max(.15, ai.detection - dt * .08);
+      if (ai.state === "combat" && ai.lostSight > 1.35) setGroundEnemyAIState(enemy, "search", "lost-line-of-sight");
+    }
+    if (!sight.visible && noiseRadius > 0) {
+      const hearingDistance = distance2D(enemy.root.position, player.root.position);
+      if (hearingDistance <= noiseRadius) {
+        const blocked = segmentOccluded(enemyEyePosition(enemy), playerSightPosition());
+        const effectiveRadius = blocked ? noiseRadius * .42 : noiseRadius;
+        if (hearingDistance <= effectiveRadius) {
+          ai.lastKnown.copy(player.root.position);
+          ai.detection = Math.max(ai.detection, blocked ? .22 : .4);
+          if (ai.state === "guard" || ai.state === "patrol" || ai.state === "return") setGroundEnemyAIState(enemy, "suspicious", "heard-" + (noiseReason || "disturbance"));
+        }
+      }
+    }
+  }
+
+  function canEnemyOccupy(enemy, x, z) {
+    if (!enemyNavPointWalkable(x, z, enemy.hitRadius * .42)) return false;
+    const currentY = terrainHeight(enemy.root.position.x, enemy.root.position.z);
+    return Math.abs(terrainHeight(x, z) - currentY) <= 1.05;
+  }
+
+  function recoverGroundEnemy(enemy) {
+    const ai = enemy.ai;
+    const blocked = hitsCollider(enemy.root.position.x, enemy.root.position.z, enemy.hitRadius * .42, enemy.root.position.y, enemy.root.position.y + 3.35);
+    const originX = enemy.root.position.x;
+    const originZ = enemy.root.position.z;
+    for (let ring = 1; ring <= 6; ring += 1) {
+      const radius = ring * .55;
+      for (let index = 0; index < 16; index += 1) {
+        const angle = index / 16 * Math.PI * 2;
+        const x = originX + Math.cos(angle) * radius;
+        const z = originZ + Math.sin(angle) * radius;
+        if (!canEnemyOccupy(enemy, x, z)) continue;
+        enemy.root.position.set(x, terrainHeight(x, z), z);
+        if (ai) { ai.recoveries += 1; ai.repathTimer = 0; }
+        garrisonAIStats.stuckRecoveries += 1;
+        return true;
+      }
+    }
+    if (blocked && ai && enemyNavPointWalkable(ai.home.x, ai.home.z, enemy.hitRadius * .42)) {
+      enemy.root.position.copy(ai.home);
+      ai.recoveries += 1;
+      ai.repathTimer = 0;
+      garrisonAIStats.stuckRecoveries += 1;
+      return true;
+    }
+    return false;
+  }
+
+  function requestEnemyPath(enemy, target) {
+    if (!enemy.ai) return [];
+    enemy.ai.path = findStrongholdNavPath(enemy, target);
+    enemy.ai.pathIndex = 0;
+    enemy.ai.repathTimer = .8 + seeded(enemy.ai.seed + enemy.ai.stuckCount * 13 + 33) * .55;
+    garrisonAIStats.repaths += 1;
+    return enemy.ai.path;
+  }
+
+  function steerAroundObstacles(enemy, direction, target) {
+    const distance = 2.4 + enemy.hitRadius * .45;
+    if (canEnemyOccupy(enemy, enemy.root.position.x + direction.x * distance, enemy.root.position.z + direction.z * distance)) return direction;
+    const sign = enemy.ai ? enemy.ai.sidestepSign : 1;
+    const angles = [.48 * sign, -.48 * sign, .92 * sign, -.92 * sign, 1.34 * sign, -1.34 * sign];
+    let best = null;
+    let bestScore = -Infinity;
+    angles.forEach((angle) => {
+      const cosine = Math.cos(angle);
+      const sine = Math.sin(angle);
+      const x = direction.x * cosine - direction.z * sine;
+      const z = direction.x * sine + direction.z * cosine;
+      if (!canEnemyOccupy(enemy, enemy.root.position.x + x * distance, enemy.root.position.z + z * distance)) return;
+      const remaining = target ? Math.hypot(target.x - (enemy.root.position.x + x * distance), target.z - (enemy.root.position.z + z * distance)) : 0;
+      const score = direction.x * x + direction.z * z - remaining * .015;
+      if (score > bestScore) { bestScore = score; best = new THREE.Vector3(x, 0, z); }
+    });
+    return best;
+  }
+
+  function applyGroundEnemySeparation(enemy, direction) {
+    groundEnemies.forEach((other) => {
+      if (other === enemy || other.dead || other.tamed) return;
+      const separationX = enemy.root.position.x - other.root.position.x;
+      const separationZ = enemy.root.position.z - other.root.position.z;
+      const separationDistance = Math.hypot(separationX, separationZ);
+      const desired = Math.max(2.1, (enemy.hitRadius + other.hitRadius) * .72);
+      if (separationDistance <= .01 || separationDistance >= desired) return;
+      const awayX = separationX / separationDistance;
+      const awayZ = separationZ / separationDistance;
+      const approaching = Math.max(0, -(direction.x * awayX + direction.z * awayZ));
+      const strength = (desired - separationDistance) / desired * .9 + approaching * 1.05;
+      direction.x += awayX * strength;
+      direction.z += awayZ * strength;
+    });
+    return direction;
+  }
+
+  function enemyMovementDirection(enemy, target) {
+    const ai = enemy.ai;
+    let movementTarget = target;
+    const directX = target.x - enemy.root.position.x;
+    const directZ = target.z - enemy.root.position.z;
+    const directDistance = Math.hypot(directX, directZ);
+    const directDirection = directDistance > .001 ? new THREE.Vector3(directX / directDistance, 0, directZ / directDistance) : new THREE.Vector3();
+    const probeDistance = Math.min(4.2, Math.max(1.2, directDistance));
+    const directOpen = directDistance <= .001 || canEnemyOccupy(enemy, enemy.root.position.x + directDirection.x * probeDistance, enemy.root.position.z + directDirection.z * probeDistance);
+    if ((!directOpen || ai.blockedTime > .28) && (!ai.path.length || ai.repathTimer <= 0)) requestEnemyPath(enemy, target);
+    if (ai.path.length) {
+      while (ai.pathIndex < ai.path.length - 1 && distance2D(enemy.root.position, ai.path[ai.pathIndex]) < 1.45) ai.pathIndex += 1;
+      movementTarget = ai.path[ai.pathIndex] || target;
+      if (distance2D(enemy.root.position, movementTarget) < 1.2 && ai.pathIndex >= ai.path.length - 1) ai.path = [];
+    }
+    const dx = movementTarget.x - enemy.root.position.x;
+    const dz = movementTarget.z - enemy.root.position.z;
+    const length = Math.hypot(dx, dz);
+    if (length <= .001) return new THREE.Vector3();
+    const direction = new THREE.Vector3(dx / length, 0, dz / length);
+    const steered = steerAroundObstacles(enemy, direction, movementTarget);
+    if (steered) direction.copy(steered);
+    applyGroundEnemySeparation(enemy, direction);
+    return direction.normalize();
+  }
+
+  function moveGroundEnemyToward(enemy, target, speed, dt) {
+    const direction = enemyMovementDirection(enemy, target);
+    if (direction.lengthSq() < .01) return 0;
+    const startX = enemy.root.position.x;
+    const startZ = enemy.root.position.z;
+    const distance = Math.max(0, speed * dt);
+    const steps = Math.max(1, Math.ceil(distance / .24));
+    const stepDistance = distance / steps;
+    for (let index = 0; index < steps; index += 1) {
+      const nextX = enemy.root.position.x + direction.x * stepDistance;
+      const nextZ = enemy.root.position.z + direction.z * stepDistance;
+      if (canEnemyOccupy(enemy, nextX, nextZ)) {
+        enemy.root.position.x = nextX;
+        enemy.root.position.z = nextZ;
+      } else {
+        const xOpen = canEnemyOccupy(enemy, nextX, enemy.root.position.z);
+        const zOpen = canEnemyOccupy(enemy, enemy.root.position.x, nextZ);
+        if (xOpen && (!zOpen || Math.abs(direction.x) >= Math.abs(direction.z))) enemy.root.position.x = nextX;
+        else if (zOpen) enemy.root.position.z = nextZ;
+      }
+      enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
+    }
+    const moved = Math.hypot(enemy.root.position.x - startX, enemy.root.position.z - startZ);
+    enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-direction.x, -direction.z), dt * (enemy.ai.moveMode === "walk" ? 5.5 : 9));
+    enemy.walkCycle += moved * (enemy.kind === "golem" ? 1.15 : enemy.ai.moveMode === "walk" ? 1.45 : 2.1);
+    if (moved < distance * .18) enemy.ai.blockedTime += dt;
+    else enemy.ai.blockedTime = Math.max(0, enemy.ai.blockedTime - dt * 2.5);
+    enemy.ai.progressTime += dt;
+    enemy.ai.progressExpected += distance;
+    if (enemy.ai.progressTime >= .78) {
+      const progress = Math.hypot(enemy.root.position.x - enemy.ai.progressX, enemy.root.position.z - enemy.ai.progressZ);
+      if (progress < .3 && enemy.ai.progressExpected > .45) {
+        enemy.ai.stuckCount += 1;
+        enemy.ai.sidestepSign *= -1;
+        enemy.ai.repathTimer = 0;
+        requestEnemyPath(enemy, target);
+        recoverGroundEnemy(enemy);
+      }
+      enemy.ai.progressX = enemy.root.position.x;
+      enemy.ai.progressZ = enemy.root.position.z;
+      enemy.ai.progressTime = 0;
+      enemy.ai.progressExpected = 0;
+    }
+    return moved;
+  }
+
+  function finishEnemyAttack(enemy, dt) {
+    if (enemy.attackTimer <= 0) return;
+    const previous = enemy.attackTimer;
+    enemy.attackTimer = Math.max(0, enemy.attackTimer - dt);
+    if (enemy.telegraph) {
+      enemy.telegraph.position.set(enemy.root.position.x, terrainHeight(enemy.root.position.x, enemy.root.position.z) + .12, enemy.root.position.z);
+      enemy.telegraph.material.opacity = .16 + (1 - enemy.attackTimer / .72) * .48;
+      enemy.telegraph.scale.setScalar(.86 + (1 - enemy.attackTimer / .72) * .14);
+    }
+    if (!enemy.attackDelivered && previous > .38 && enemy.attackTimer <= .38) {
+      enemy.attackDelivered = true;
+      const freshOffset = player.root.position.clone().sub(enemy.root.position);
+      const freshDistance = freshOffset.length();
+      const facingDot = freshDistance > .001 ? freshOffset.clone().setY(0).normalize().dot(new THREE.Vector3(-Math.sin(enemy.root.rotation.y), 0, -Math.cos(enemy.root.rotation.y))) : 1;
+      const verticalDistance = Math.abs(player.root.position.y - enemy.root.position.y);
+      if (freshDistance < enemy.attackRange + .85 && verticalDistance < 3.1 && facingDot > .15 && !segmentOccluded(enemyEyePosition(enemy), playerSightPosition())) damagePlayer(enemy.damage, enemy.name);
+      createShockwave(enemy.root.position.clone(), enemy.attackRange, .22, enemy.elite ? 0xff6338 : 0xd18a52);
+      emitPlayerNoise(18, .3, "combat");
+    }
+    if (enemy.attackTimer <= 0) clearEnemyTelegraph(enemy);
+  }
+
+  function updateGroundEnemyAI(enemy, dt, noiseRadius, noiseReason) {
+    const ai = enemy.ai;
+    ai.stateTime += dt;
+    ai.repathTimer = Math.max(0, ai.repathTimer - dt);
+    ai.senseTimer -= dt;
+    ai.senseElapsed += dt;
+    if (ai.senseTimer <= 0) {
+      updateEnemyPerception(enemy, ai.senseElapsed, noiseRadius, noiseReason);
+      ai.senseElapsed = 0;
+      ai.senseTimer = ai.state === "combat" || ai.state === "alert" ? .08 : ai.state === "suspicious" || ai.state === "search" ? .12 : .2;
+    }
+    const homeDistance = distance2D(enemy.root.position, ai.home);
+    const playerCampDistance = enemy.camp ? Math.hypot(player.root.position.x - enemy.camp.x, player.root.position.z - enemy.camp.z) : 0;
+    if (enemy.camp && homeDistance > enemy.camp.radius + 7 && ai.state !== "return") setGroundEnemyAIState(enemy, "return", "home-leash");
+    if (enemy.camp && playerCampDistance > enemy.camp.radius + 14 && (ai.state === "combat" || ai.state === "alert") && ai.lostSight > .35) setGroundEnemyAIState(enemy, "search", "player-left-location");
+    let moving = false;
+    const stunned = enemy.hitStun > 0;
+    if (ai.state === "guard") {
+      ai.moveMode = "walk";
+      ai.guardDwell -= dt;
+      const scan = Math.sin(elapsed * .52 + enemy.phase) * (ai.role === "tower_lookout" ? .58 : .34);
+      enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, ai.guardYaw + scan, dt * 1.35);
+      if (GARRISON_PATROL_ROLES.has(ai.role) && ai.patrol.length > 1 && ai.guardDwell <= 0) {
+        ai.patrolIndex = (ai.patrolIndex + 1) % ai.patrol.length;
+        setGroundEnemyAIState(enemy, "patrol", "scheduled-patrol");
+      }
+    } else if (ai.state === "patrol") {
+      ai.moveMode = "walk";
+      const target = ai.patrol[ai.patrolIndex] || ai.home;
+      if (distance2D(enemy.root.position, target) <= 1.35) setGroundEnemyAIState(enemy, "guard", "patrol-pause");
+      else if (!stunned) moving = moveGroundEnemyToward(enemy, target, enemy.speed * .42 * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+    } else if (ai.state === "suspicious") {
+      ai.moveMode = "walk";
+      if (distance2D(enemy.root.position, ai.lastKnown) > 2.1 && ai.stateTime < 7.5 && !stunned) moving = moveGroundEnemyToward(enemy, ai.lastKnown, enemy.speed * .56 * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+      else setGroundEnemyAIState(enemy, "search", "investigate-last-known");
+    } else if (ai.state === "alert") {
+      ai.moveMode = "run";
+      const directionX = ai.lastKnown.x - enemy.root.position.x;
+      const directionZ = ai.lastKnown.z - enemy.root.position.z;
+      enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-directionX, -directionZ), dt * 11);
+      if (ai.stateTime >= .24) setGroundEnemyAIState(enemy, "combat", "alert-ready");
+    } else if (ai.state === "combat") {
+      ai.moveMode = "run";
+      const playerOffsetX = player.root.position.x - enemy.root.position.x;
+      const playerOffsetZ = player.root.position.z - enemy.root.position.z;
+      const playerDistance = Math.hypot(playerOffsetX, playerOffsetZ);
+      const verticalDistance = Math.abs(player.root.position.y - enemy.root.position.y);
+      const futureRanged = enemy.attackRange >= 6;
+      if (stunned) {
+        moving = false;
+      } else if (futureRanged && playerDistance < enemy.attackRange * .55) {
+        const retreat = enemy.root.position.clone().sub(player.root.position).setY(0).normalize().multiplyScalar(enemy.attackRange * .72).add(enemy.root.position);
+        moving = moveGroundEnemyToward(enemy, retreat, enemy.speed * .72, dt) > .001;
+      } else if (playerDistance > enemy.attackRange * (futureRanged ? .82 : .9) || verticalDistance > 2.8) {
+        let combatGoal = player.root.position;
+        if (ai.role === "heavy_defender" && enemy.camp) {
+          const fromHomeX = player.root.position.x - ai.home.x;
+          const fromHomeZ = player.root.position.z - ai.home.z;
+          const fromHomeDistance = Math.hypot(fromHomeX, fromHomeZ);
+          if (fromHomeDistance > 13) combatGoal = new THREE.Vector3(ai.home.x + fromHomeX / fromHomeDistance * 13, 0, ai.home.z + fromHomeZ / fromHomeDistance * 13);
+        } else if (ai.role === "beast_patrol" && playerDistance > enemy.attackRange + 2) {
+          const flankAngle = Math.atan2(playerOffsetZ, playerOffsetX) + ai.sidestepSign * .72;
+          combatGoal = new THREE.Vector3(player.root.position.x + Math.cos(flankAngle) * 2.8, 0, player.root.position.z + Math.sin(flankAngle) * 2.8);
+        }
+        moving = moveGroundEnemyToward(enemy, combatGoal, enemy.speed * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+      } else if (enemy.attackCooldown <= 0 && enemy.attackTimer <= 0) {
+        enemy.attackTimer = .72;
+        enemy.attackDelivered = false;
+        enemy.attackCooldown = enemy.attackInterval;
+        enemy.root.rotation.y = Math.atan2(-playerOffsetX, -playerOffsetZ);
+        beginEnemyTelegraph(enemy);
+      }
+    } else if (ai.state === "search") {
+      ai.moveMode = "walk";
+      ai.searchRemaining -= dt;
+      const lastDistance = distance2D(enemy.root.position, ai.lastKnown);
+      if (lastDistance > 2.2 && !stunned) moving = moveGroundEnemyToward(enemy, ai.lastKnown, enemy.speed * .55 * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+      else enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, ai.guardYaw + Math.sin(elapsed * 1.3 + enemy.phase) * 1.15, dt * 2.4);
+      if (ai.searchRemaining <= 0) setGroundEnemyAIState(enemy, "return", "search-expired");
+    } else if (ai.state === "return") {
+      ai.moveMode = "walk";
+      if (homeDistance <= 1.25) {
+        enemy.root.position.x = ai.home.x;
+        enemy.root.position.z = ai.home.z;
+        setGroundEnemyAIState(enemy, "guard", "post-restored");
+      } else if (!stunned) moving = moveGroundEnemyToward(enemy, ai.home, enemy.speed * .58 * (enemy.slowTime > 0 ? .62 : 1), dt) > .001;
+    }
+    finishEnemyAttack(enemy, dt);
+    enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
+    animateGroundEnemy(enemy, dt, moving);
   }
 
   function updateGroundEnemies(dt, idle) {
+    playerNoiseTime = Math.max(0, playerNoiseTime - dt);
+    if (playerNoiseTime <= 0) { playerNoiseRadius = 0; playerNoiseReason = "quiet"; }
+    const noise = currentPlayerNoise();
     groundEnemies.forEach((enemy) => {
       const renderDistance = isCoarse ? 175 : 275;
       const playerDistance = player.root ? distance2D(enemy.root.position, player.root.position) : 0;
@@ -4499,6 +5738,7 @@
       if (!enemy.root.visible && !enemy.dead) {
         clearEnemyTelegraph(enemy);
         enemy.attackTimer = 0;
+        if (enemy.ai && enemy.ai.state !== "guard" && enemy.ai.state !== "patrol" && enemy.ai.state !== "return") setGroundEnemyAIState(enemy, "return", "far-cull");
         return;
       }
       if (enemy.dead) {
@@ -4527,94 +5767,309 @@
       if (enemy.impulse && enemy.impulse.lengthSq() > .01) {
         const impulseX = enemy.root.position.x + enemy.impulse.x * dt;
         const impulseZ = enemy.root.position.z + enemy.impulse.z * dt;
-        const footY = enemy.root.position.y;
-        if (!hitsCollider(impulseX, impulseZ, enemy.hitRadius * .45, footY, footY + 3.6)) {
+        if (enemy.ai ? canEnemyOccupy(enemy, impulseX, impulseZ) : !hitsCollider(impulseX, impulseZ, enemy.hitRadius * .45, enemy.root.position.y, enemy.root.position.y + 3.6)) {
           enemy.root.position.x = clamp(impulseX, -HALF_WORLD, HALF_WORLD);
           enemy.root.position.z = clamp(impulseZ, -HALF_WORLD, HALF_WORLD);
         }
         enemy.impulse.multiplyScalar(Math.pow(.035, dt));
       }
-      if (enemy.camp) {
-        const playerCampDistance = player.root ? Math.hypot(player.root.position.x - enemy.camp.x, player.root.position.z - enemy.camp.z) : 0;
-        if (playerCampDistance > enemy.camp.radius) {
-          clearEnemyTelegraph(enemy);
-          enemy.attackTimer = 0;
-          const homeX = enemy.camp.x - enemy.root.position.x;
-          const homeZ = enemy.camp.z - enemy.root.position.z;
-          const homeDistance = Math.hypot(homeX, homeZ);
-          let campMoving = false;
-          if (homeDistance > 2.5 && enemy.hitStun <= 0) {
-            const directionX = homeX / homeDistance;
-            const directionZ = homeZ / homeDistance;
-            const movementSpeed = enemy.speed * .72 * (enemy.slowTime > 0 ? .62 : 1);
-            const nextX = enemy.root.position.x + directionX * movementSpeed * dt;
-            const nextZ = enemy.root.position.z + directionZ * movementSpeed * dt;
-            const enemyY = enemy.root.position.y;
-            if (!hitsCollider(nextX, nextZ, enemy.hitRadius * .45, enemyY, enemyY + 3.6)) {
-              enemy.root.position.x = nextX;
-              enemy.root.position.z = nextZ;
-            }
-            enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-directionX, -directionZ), dt * 7);
-            enemy.walkCycle += dt * enemy.speed * 1.7;
-            campMoving = true;
+      if (enemy.ai) updateGroundEnemyAI(enemy, dt, noise.radius, noise.reason);
+      else {
+        const offset = player.root.position.clone().sub(enemy.root.position).setY(0);
+        const distance = offset.length();
+        const moving = distance > enemy.attackRange && enemy.hitStun <= 0;
+        if (moving) {
+          const direction = offset.normalize();
+          const speed = enemy.speed * (enemy.slowTime > 0 ? .62 : 1);
+          const nextX = enemy.root.position.x + direction.x * speed * dt;
+          const nextZ = enemy.root.position.z + direction.z * speed * dt;
+          if (!hitsCollider(nextX, nextZ, enemy.hitRadius * .45, enemy.root.position.y, enemy.root.position.y + 3.6)) {
+            enemy.root.position.x = nextX;
+            enemy.root.position.z = nextZ;
           }
-          enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
-          animateGroundEnemy(enemy, dt, campMoving);
-          return;
+          enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-direction.x, -direction.z), dt * 9);
+          enemy.walkCycle += dt * enemy.speed * 2.1;
+        } else if (enemy.attackCooldown <= 0 && enemy.attackTimer <= 0) {
+          enemy.attackTimer = .72;
+          enemy.attackDelivered = false;
+          enemy.attackCooldown = enemy.attackInterval;
+          beginEnemyTelegraph(enemy);
         }
+        finishEnemyAttack(enemy, dt);
+        enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
+        animateGroundEnemy(enemy, dt, moving);
       }
-      const offset = player.root.position.clone().sub(enemy.root.position);
-      const distance = offset.length();
-      const moving = distance > enemy.attackRange && enemy.hitStun <= 0;
-      if (moving) {
-        const direction = offset.setY(0).normalize();
-        groundEnemies.forEach((other) => {
-          if (other === enemy || other.dead) return;
-          const separation = enemy.root.position.clone().sub(other.root.position).setY(0);
-          const length = separation.length();
-          if (length > .01 && length < 2.2) direction.addScaledVector(separation.normalize(), (2.2 - length) * .32);
-        });
-        direction.normalize();
-        const steered = steerAroundObstacles(enemy, direction);
-        if (steered) direction.copy(steered);
-        const movementSpeed = enemy.speed * (enemy.slowTime > 0 ? .62 : 1);
-        const nextX = enemy.root.position.x + direction.x * movementSpeed * dt;
-        const nextZ = enemy.root.position.z + direction.z * movementSpeed * dt;
-        const enemyY = enemy.root.position.y;
-        if (!hitsCollider(nextX, nextZ, enemy.hitRadius * .45, enemyY, enemyY + 3.6)) {
-          enemy.root.position.x = nextX;
-          enemy.root.position.z = nextZ;
-        }
-        enemy.root.rotation.y = rotateToward(enemy.root.rotation.y, Math.atan2(-direction.x, -direction.z), dt * 9);
-        enemy.walkCycle += dt * enemy.speed * (enemy.kind === "golem" ? 1.1 : 2.1);
-      } else if (distance <= enemy.attackRange && enemy.attackCooldown <= 0 && enemy.attackTimer <= 0) {
-        enemy.attackTimer = .72;
-        enemy.attackDelivered = false;
-        enemy.attackCooldown = enemy.attackInterval;
-        enemy.root.rotation.y = Math.atan2(-(player.root.position.x - enemy.root.position.x), -(player.root.position.z - enemy.root.position.z));
-        beginEnemyTelegraph(enemy);
-      }
-      if (enemy.attackTimer > 0) {
-        const previous = enemy.attackTimer;
-        enemy.attackTimer = Math.max(0, enemy.attackTimer - dt);
-        if (enemy.telegraph) {
-          enemy.telegraph.position.set(enemy.root.position.x, terrainHeight(enemy.root.position.x, enemy.root.position.z) + .12, enemy.root.position.z);
-          enemy.telegraph.material.opacity = .16 + (1 - enemy.attackTimer / .72) * .48;
-          enemy.telegraph.scale.setScalar(.86 + (1 - enemy.attackTimer / .72) * .14);
-        }
-        if (!enemy.attackDelivered && previous > .38 && enemy.attackTimer <= .38) {
-          enemy.attackDelivered = true;
-          const freshOffset = player.root.position.clone().sub(enemy.root.position);
-          const freshDistance = freshOffset.length();
-          const facingDot = freshDistance > .001 ? freshOffset.clone().setY(0).normalize().dot(new THREE.Vector3(-Math.sin(enemy.root.rotation.y), 0, -Math.cos(enemy.root.rotation.y))) : 1;
-          if (freshDistance < enemy.attackRange + .85 && facingDot > .15) damagePlayer(enemy.damage, enemy.name);
-          createShockwave(enemy.root.position.clone(), enemy.attackRange, .22, enemy.elite ? 0xff6338 : 0xd18a52);
-        }
-        if (enemy.attackTimer <= 0) clearEnemyTelegraph(enemy);
-      }
-      enemy.root.position.y = terrainHeight(enemy.root.position.x, enemy.root.position.z);
-      animateGroundEnemy(enemy, dt, moving);
     });
+  }
+
+  function garrisonAISummary() {
+    const active = groundEnemies.filter((enemy) => !enemy.dead && !enemy.tamed && enemy.ai);
+    const states = {};
+    const roles = {};
+    active.forEach((enemy) => {
+      states[enemy.ai.state] = (states[enemy.ai.state] || 0) + 1;
+      roles[enemy.ai.role] = (roles[enemy.ai.role] || 0) + 1;
+    });
+    const noise = currentPlayerNoise();
+    return {
+      actors: active.length,
+      states,
+      roles,
+      stationed: (states.guard || 0) + (states.patrol || 0),
+      aware: (states.suspicious || 0) + (states.alert || 0) + (states.combat || 0) + (states.search || 0),
+      navGrids: strongholds.filter((stronghold) => stronghold.navGrid).length,
+      navWalkableCells: strongholds.reduce((sum, stronghold) => sum + (stronghold.navGrid ? stronghold.navGrid.walkableCount : 0), 0),
+      repaths: garrisonAIStats.repaths,
+      stuckRecoveries: garrisonAIStats.stuckRecoveries,
+      alertsShared: garrisonAIStats.alertsShared,
+      playerNoise: noise
+    };
+  }
+
+  function captureGarrisonActorState(enemy) {
+    const ai = enemy.ai;
+    const aiState = {};
+    [
+      "state", "previousState", "stateTime", "transitionReason", "patrolIndex", "guardDwell",
+      "detection", "lostSight", "searchRemaining", "pathIndex", "repathTimer", "blockedTime",
+      "progressTime", "progressExpected", "progressX", "progressZ", "stuckCount", "recoveries",
+      "moveMode", "sidestepSign", "testBlindTime", "senseTimer", "senseElapsed"
+    ].forEach((key) => { aiState[key] = ai[key]; });
+    aiState.lastKnown = ai.lastKnown.clone();
+    aiState.lastSight = ai.lastSight ? Object.assign({}, ai.lastSight) : null;
+    aiState.path = ai.path.slice();
+    return {
+      enemy,
+      position: enemy.root.position.clone(), rotationY: enemy.root.rotation.y,
+      engaged: enemy.engaged, attackTimer: enemy.attackTimer, attackDelivered: enemy.attackDelivered,
+      attackCooldown: enemy.attackCooldown, ai: aiState
+    };
+  }
+
+  function restoreGarrisonActorState(saved) {
+    const enemy = saved.enemy;
+    const ai = enemy.ai;
+    enemy.root.position.copy(saved.position);
+    enemy.root.rotation.y = saved.rotationY;
+    enemy.engaged = saved.engaged;
+    enemy.attackTimer = saved.attackTimer;
+    enemy.attackDelivered = saved.attackDelivered;
+    enemy.attackCooldown = saved.attackCooldown;
+    Object.keys(saved.ai).forEach((key) => {
+      if (key !== "lastKnown" && key !== "lastSight" && key !== "path") ai[key] = saved.ai[key];
+    });
+    ai.lastKnown.copy(saved.ai.lastKnown);
+    ai.lastSight = saved.ai.lastSight ? Object.assign({}, saved.ai.lastSight) : null;
+    ai.path = saved.ai.path.slice();
+  }
+
+  function primeGarrisonProbeState(enemy) {
+    const ai = enemy.ai;
+    ai.state = "guard";
+    ai.previousState = null;
+    ai.stateTime = 0;
+    ai.transitionReason = "probe-ready";
+    ai.detection = 0;
+    ai.lostSight = 0;
+    ai.searchRemaining = 0;
+    ai.path = [];
+    ai.pathIndex = 0;
+    ai.repathTimer = 0;
+    ai.blockedTime = 0;
+    ai.progressTime = 0;
+    ai.progressExpected = 0;
+    ai.progressX = enemy.root.position.x;
+    ai.progressZ = enemy.root.position.z;
+    ai.moveMode = "walk";
+    ai.testBlindTime = 0;
+    enemy.engaged = false;
+    enemy.attackTimer = 0;
+    enemy.attackDelivered = false;
+  }
+
+  function garrisonAIDebug() {
+    return groundEnemies.filter((enemy) => enemy.ai).map((enemy) => ({
+      name: enemy.name, spawnKey: enemy.spawnKey || null, strongholdId: enemy.strongholdId,
+      role: enemy.ai.role, state: enemy.ai.state, previousState: enemy.ai.previousState,
+      reason: enemy.ai.transitionReason, animation: enemy.animationState, detection: enemy.ai.detection,
+      lastSight: enemy.ai.lastSight ? Object.assign({}, enemy.ai.lastSight) : null,
+      post: { x: enemy.ai.home.x, y: enemy.ai.home.y, z: enemy.ai.home.z },
+      postDistance: distance2D(enemy.root.position, enemy.ai.home), patrolPoints: enemy.ai.patrol.length,
+      patrolIndex: enemy.ai.patrolIndex, pathLength: Math.max(0, enemy.ai.path.length - enemy.ai.pathIndex),
+      blockedSeconds: enemy.ai.blockedTime, repathSeconds: enemy.ai.repathTimer,
+      stuckCount: enemy.ai.stuckCount, recoveries: enemy.ai.recoveries,
+      lastKnown: { x: enemy.ai.lastKnown.x, y: enemy.ai.lastKnown.y, z: enemy.ai.lastKnown.z },
+      x: enemy.root.position.x, y: enemy.root.position.y, z: enemy.root.position.z
+    }));
+  }
+
+  function garrisonBehaviorProbe() {
+    const candidates = groundEnemies.filter((enemy) => !enemy.dead && !enemy.tamed && enemy.ai && !enemy.telegraph);
+    const source = candidates.find((enemy) => candidates.some((other) => other !== enemy && other.strongholdId === enemy.strongholdId));
+    const listener = source && candidates.find((enemy) => enemy !== source && enemy.strongholdId === source.strongholdId);
+    if (!source || !listener) return { available: false, actors: candidates.length };
+    const actorStates = candidates.map(captureGarrisonActorState);
+    const savedPlayerPosition = player.root.position.clone();
+    const savedStats = Object.assign({}, garrisonAIStats);
+    try {
+      primeGarrisonProbeState(source);
+      primeGarrisonProbeState(listener);
+      listener.root.position.set(source.root.position.x + .8, terrainHeight(source.root.position.x + .8, source.root.position.z), source.root.position.z);
+      listener.ai.progressX = listener.root.position.x;
+      listener.ai.progressZ = listener.root.position.z;
+      let clearPosition = null;
+      let clearSample = null;
+      const sightRange = roleSightProfile(source).range;
+      const radii = [Math.min(10, sightRange * .3), Math.min(15, sightRange * .45), 6];
+      for (let radiusIndex = 0; radiusIndex < radii.length && !clearPosition; radiusIndex += 1) {
+        for (let angleIndex = 0; angleIndex < 16 && !clearPosition; angleIndex += 1) {
+          const angle = angleIndex / 16 * Math.PI * 2;
+          const x = source.root.position.x + Math.cos(angle) * radii[radiusIndex];
+          const z = source.root.position.z + Math.sin(angle) * radii[radiusIndex];
+          if (!enemyNavPointWalkable(x, z, .5)) continue;
+          player.root.position.set(x, terrainHeight(x, z), z);
+          source.root.rotation.y = Math.atan2(-(x - source.root.position.x), -(z - source.root.position.z));
+          const sample = enemyVisionSample(source);
+          if (sample.visible) { clearPosition = player.root.position.clone(); clearSample = sample; }
+        }
+      }
+      if (!clearPosition || !clearSample) return { available: false, reason: "no-clear-sight-sample" };
+      player.root.position.copy(clearPosition);
+      const alertsBefore = garrisonAIStats.alertsShared;
+      updateEnemyPerception(source, 1, 0, "quiet");
+      const sight = {
+        visible: clearSample.visible, state: source.ai.state, reason: source.ai.transitionReason,
+        detection: source.ai.detection, shared: listener.ai.state === "suspicious",
+        alertsShared: garrisonAIStats.alertsShared - alertsBefore
+      };
+
+      primeGarrisonProbeState(source);
+      source.ai.testBlindTime = 1;
+      const hearingDistance = distance2D(source.root.position, player.root.position);
+      updateEnemyPerception(source, .05, hearingDistance + 1, "test-footstep");
+      const hearing = {
+        state: source.ai.state, reason: source.ai.transitionReason,
+        lastKnownUpdated: distance2D(source.ai.lastKnown, player.root.position) < .01,
+        distance: hearingDistance
+      };
+
+      listener.root.position.set(source.root.position.x + .8, source.root.position.y, source.root.position.z);
+      const separationDirection = new THREE.Vector3(1, 0, 0);
+      const away = new THREE.Vector3(-1, 0, 0);
+      const beforeAwayDot = separationDirection.dot(away);
+      applyGroundEnemySeparation(source, separationDirection);
+      if (separationDirection.lengthSq() > .001) separationDirection.normalize();
+      const separation = { beforeAwayDot, afterAwayDot: separationDirection.dot(away), steersApart: separationDirection.dot(away) > beforeAwayDot + .2 };
+      return { available: true, sight, hearing, separation };
+    } finally {
+      actorStates.forEach(restoreGarrisonActorState);
+      player.root.position.copy(savedPlayerPosition);
+      garrisonAIStats = savedStats;
+    }
+  }
+
+  function garrisonOcclusionProbe() {
+    const box = colliders.find((candidate) => Number.isFinite(candidate.minY) && Number.isFinite(candidate.maxY)
+      && candidate.maxY - candidate.minY >= 1.4 && candidate.hx >= .18 && candidate.hz >= .18);
+    if (!box) return { available: false, colliders: colliders.length };
+    const cosine = Math.cos(box.rotation || 0);
+    const sine = Math.sin(box.rotation || 0);
+    const toWorld = (localX, localZ, y) => new THREE.Vector3(box.x + localX * cosine + localZ * sine, y, box.z - localX * sine + localZ * cosine);
+    const y = clamp(terrainHeight(box.x, box.z) + 1.45, box.minY + .18, box.maxY - .18);
+    const margin = 2.2;
+    const from = toWorld(-box.hx - margin, 0, y);
+    const to = toWorld(box.hx + margin, 0, y);
+    const clearFrom = toWorld(-box.hx - margin, box.hz + margin, y);
+    const clearTo = toWorld(box.hx + margin, box.hz + margin, y);
+    return {
+      available: true,
+      colliderBlocks: segmentIntersectsCollider(from, to, box, .035),
+      worldOccluded: segmentOccluded(from, to),
+      parallelControlBlocked: segmentIntersectsCollider(clearFrom, clearTo, box, .035),
+      height: box.maxY - box.minY
+    };
+  }
+
+  function garrisonSearchProbe() {
+    const enemy = groundEnemies.find((item) => !item.dead && !item.tamed && item.ai && !item.telegraph);
+    if (!enemy) return { available: false };
+    const ai = enemy.ai;
+    const saved = captureGarrisonActorState(enemy);
+    try {
+      ai.state = "combat";
+      ai.detection = 1;
+      ai.lostSight = 1.34;
+      ai.lastKnown.copy(player.root.position).add(new THREE.Vector3(3, 0, -2));
+      ai.testBlindTime = 2;
+      updateEnemyPerception(enemy, .03, 0, "quiet");
+      return { available: true, state: ai.state, reason: ai.transitionReason, lastKnownPreserved: distance2D(ai.lastKnown, player.root.position) > 1, searchSeconds: ai.searchRemaining };
+    } finally {
+      restoreGarrisonActorState(saved);
+    }
+  }
+
+  function garrisonStuckRecoveryProbe() {
+    const enemy = groundEnemies.find((item) => !item.dead && !item.tamed && item.ai && !item.telegraph);
+    if (!enemy) return { available: false };
+    let sample = null;
+    for (let index = 0; index < colliders.length && !sample; index += 1) {
+      const box = colliders[index];
+      if (!Number.isFinite(box.minY) || !Number.isFinite(box.maxY) || box.maxY - box.minY < .8) continue;
+      const footY = clamp(terrainHeight(box.x, box.z), box.minY + .04, box.maxY - .2);
+      if (hitsCollider(box.x, box.z, enemy.hitRadius * .42, footY, footY + 3.35)) sample = { box, footY };
+    }
+    if (!sample) return { available: false, colliders: colliders.length };
+    const saved = captureGarrisonActorState(enemy);
+    const savedStats = Object.assign({}, garrisonAIStats);
+    try {
+      enemy.root.position.set(sample.box.x, sample.footY, sample.box.z);
+      primeGarrisonProbeState(enemy);
+      enemy.ai.moveMode = "run";
+      const blockedBefore = hitsCollider(enemy.root.position.x, enemy.root.position.z, enemy.hitRadius * .42, enemy.root.position.y, enemy.root.position.y + 3.35);
+      const target = distance2D(enemy.root.position, enemy.ai.home) > 5 ? enemy.ai.home : enemy.root.position.clone().add(new THREE.Vector3(12, 0, 0));
+      moveGroundEnemyToward(enemy, target, Math.max(1, enemy.speed), .82);
+      const blockedAfter = hitsCollider(enemy.root.position.x, enemy.root.position.z, enemy.hitRadius * .42, enemy.root.position.y, enemy.root.position.y + 3.35);
+      const displacement = Math.hypot(enemy.root.position.x - sample.box.x, enemy.root.position.z - sample.box.z);
+      return {
+        available: true, blockedBefore, recovered: enemy.ai.recoveries > saved.ai.recoveries,
+        automatic: enemy.ai.stuckCount > saved.ai.stuckCount, blockedAfter, displacement,
+        repaths: garrisonAIStats.repaths - savedStats.repaths
+      };
+    } finally {
+      restoreGarrisonActorState(saved);
+      garrisonAIStats = savedStats;
+    }
+  }
+
+  function garrisonPathProbe() {
+    const candidates = groundEnemies.filter((enemy) => !enemy.dead && !enemy.tamed && enemy.ai && enemy.strongholdId);
+    for (let enemyIndex = 0; enemyIndex < candidates.length; enemyIndex += 1) {
+      const enemy = candidates[enemyIndex];
+      const stronghold = strongholds.find((item) => item.id === enemy.strongholdId);
+      const grid = buildStrongholdNavGrid(stronghold);
+      if (!grid) continue;
+      const targets = [];
+      for (let index = 0; index < grid.walkable.length; index += 1) {
+        if (!grid.walkable[index]) continue;
+        const column = index % grid.size;
+        const row = Math.floor(index / grid.size);
+        const x = grid.originX + column * grid.cell;
+        const z = grid.originZ + row * grid.cell;
+        targets.push({ x, z, distance: Math.hypot(x - enemy.root.position.x, z - enemy.root.position.z) });
+      }
+      targets.sort((a, b) => b.distance - a.distance);
+      for (let targetIndex = 0; targetIndex < Math.min(12, targets.length); targetIndex += 1) {
+        const target = new THREE.Vector3(targets[targetIndex].x, 0, targets[targetIndex].z);
+        const path = findStrongholdNavPath(enemy, target);
+        if (!path.length) continue;
+        return {
+          available: true, strongholdId: stronghold.id, gridCells: grid.walkableCount,
+          waypoints: path.length, distance: targets[targetIndex].distance,
+          allWalkable: path.every((point) => enemyNavPointWalkable(point.x, point.z, .5))
+        };
+      }
+    }
+    return { available: false, navGrids: strongholds.filter((stronghold) => stronghold.navGrid).length };
   }
 
   function interact() {
@@ -4638,6 +6093,10 @@
     dragonSouls.forEach(removeDragonSoul);
     dragonSouls = [];
     bossSpawned = false;
+    garrisonAIStats = { repaths: 0, stuckRecoveries: 0, alertsShared: 0 };
+    playerNoiseRadius = 0;
+    playerNoiseTime = 0;
+    playerNoiseReason = "quiet";
     worldLayout.forts.forEach((fort, index) => {
       const angle = Math.atan2(fort[1], fort[0]) + .55;
       createDragon(worldProfile.dragonNames[index], clamp(fort[0] + Math.cos(angle) * 62, -560, 560), clamp(fort[1] + Math.sin(angle) * 62, -560, 560), false);
@@ -4650,6 +6109,7 @@
     const handledMemberKeys = new Set(savedRun && savedRun.world && Array.isArray(savedRun.world.handledStrongholdMembers) ? savedRun.world.handledStrongholdMembers : []);
     strongholds.forEach((stronghold) => {
       stronghold.members = [];
+      buildStrongholdNavGrid(stronghold);
       if (stronghold.cleared) return;
       const base = STRONGHOLD_GARRISONS[stronghold.kind] || STRONGHOLD_GARRISONS.hamlet;
       const countBonus = Math.min(4, Math.floor((player.level - 1) / 6));
@@ -4659,8 +6119,8 @@
       const plan = stronghold.spots.filter((spot) => spot.type === "biomeHeavy" || spot.type === "warg")
         .concat(stronghold.spots.filter((spot) => spot.type === "golem").slice(0, golemCount))
         .concat(stronghold.spots.filter((spot) => spot.type === "biomeLight").slice(0, base.light + countBonus)
-          .map((spot) => ({ x: spot.x, z: spot.z, type: spot.roll < promoteRoll ? "biomeHeavy" : "biomeLight" })));
-      plan.forEach((spot) => {
+          .map((spot) => Object.assign({}, spot, { type: spot.roll < promoteRoll ? "biomeHeavy" : "biomeLight" })));
+      plan.forEach((spot, memberIndex) => {
         const spawnKey = stronghold.id + ":" + Math.round(spot.x * 10) + ":" + Math.round(spot.z * 10);
         if (handledMemberKeys.has(spawnKey)) return;
         const enemy = createGroundEnemy(spot.type, spot.x, spot.z, threat);
@@ -4668,6 +6128,7 @@
         enemy.spawnKey = spawnKey;
         enemy.camp = { x: stronghold.x, z: stronghold.z, radius: stronghold.kind === "keep" ? 40 : 30 };
         enemy.name = stronghold.name + " " + enemy.name;
+        assignGarrisonAI(enemy, stronghold, spot, memberIndex);
         stronghold.members.push(enemy);
       });
     });
@@ -5448,6 +6909,7 @@
     player.airbornePhase = "jump";
     player.landingTime = 0;
     player.stamina -= 10;
+    emitPlayerNoise(13, .32, "jump");
     audio.tone(120, 185, .12, "triangle", .014);
   }
 
@@ -5467,6 +6929,7 @@
     player.attackTime = 0;
     player.pendingAttack = null;
     player.stamina -= 22;
+    emitPlayerNoise(17, .42, "dodge");
     setPlayerModelAction("roll", true);
     audio.tone(185, 95, .16, "triangle", .018);
     if (hasSkill("thunderstep") && player.shout >= 100) {
@@ -5491,6 +6954,7 @@
     player.attackVariant += 1;
     player.stamina -= staminaCost;
     player.root.rotation.y = rotateToward(player.root.rotation.y, cameraYaw, .7);
+    emitPlayerNoise(weaponId === "bow" ? 28 : weaponId === "staff" ? 32 : weaponId === "axe" ? 30 : 23, .55, weaponId + "-attack");
     audio.swing();
     player.pendingAttack = { weaponId, releaseAt: player.attackDuration * .55, executed: false };
   }
@@ -5641,6 +7105,7 @@
       player.stamina = Math.min(maxStamina(), player.stamina + 25);
     }
     player.resonanceTime = 1.5 + skillRank("resonance") * .75;
+    emitPlayerNoise(70, 1.15, "dragon-shout");
     audio.shoutSound();
     showMessage("FUS RO DAH", "#bceaf4");
     const forceMultiplier = 1 + skillRank("force") * .12;
@@ -5912,6 +7377,7 @@
     finalAmount = Math.max(1, Math.round(finalAmount));
     const appliedDamage = Math.min(dragon.health, finalAmount);
     dragon.engaged = true;
+    if (dragon.kind !== "dragon") alertGroundEnemyFromDamage(dragon);
     dragon.health -= finalAmount;
     if (dragon.health > 0 && isTameableEnemy(dragon) && damageSource === "weapon") {
       if (weaponId === "staff") dragon.tameProgress += 30;
@@ -6113,11 +7579,14 @@
 
   function updateWorldDecor(dt) {
     if (sky) sky.rotation.y += dt * .0013;
+    forestVisibilityTimer -= dt;
+    if (forestVisibilityTimer <= 0) updateAncientForestVisibility(true);
     strongholds.forEach((stronghold, index) => {
       if (!stronghold.marker || !stronghold.markerMaterial) return;
       stronghold.marker.rotation.z += dt * (stronghold.cleared ? .08 : .22);
       stronghold.markerMaterial.opacity = stronghold.cleared ? .12 : .34 + Math.sin(elapsed * 2 + index) * .1;
     });
+    updateCaptureFlags(dt);
     updateExperienceRunes(dt);
     updateDragonSouls(dt);
     updateChests(dt);
@@ -6477,6 +7946,16 @@
       }
       mapContext.fillStyle = landmark.discovered ? MARKER_STYLES.outpostDiscovered.color : landmark.revealed ? MARKER_STYLES.poi.color : MARKER_STYLES.outpostHidden.color;
       mapContext.fillRect(point.x - 2.5, point.y - 2.5, 5, 5);
+      mapContext.restore();
+    });
+    strongholds.filter((stronghold) => stronghold.cleared && stronghold.captureFlag).forEach((stronghold) => {
+      const point = toMap(stronghold.captureFlag.root.position);
+      mapContext.save();
+      mapContext.strokeStyle = "#7edcf2";
+      mapContext.fillStyle = "rgba(71,143,218,.9)";
+      mapContext.lineWidth = 1.25;
+      mapContext.beginPath(); mapContext.moveTo(point.x - 2, point.y + 4); mapContext.lineTo(point.x - 2, point.y - 5); mapContext.stroke();
+      mapContext.beginPath(); mapContext.moveTo(point.x - 1.5, point.y - 5); mapContext.lineTo(point.x + 4, point.y - 3); mapContext.lineTo(point.x - 1.5, point.y - 1); mapContext.closePath(); mapContext.fill();
       mapContext.restore();
     });
     allEnemies().forEach((enemy) => {
@@ -6985,7 +8464,7 @@
       strongholds: {
         cleared: strongholds.filter((stronghold) => stronghold.cleared).length,
         total: strongholds.length,
-        list: strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), cleared: stronghold.cleared }))
+        list: strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), cleared: stronghold.cleared, flagRaised: Boolean(stronghold.captureFlag && stronghold.captureFlag.root.visible) }))
       },
       runesCollected, totalRunes: experienceRunes.length,
       chestsOpened: chests.filter((chest) => chest.opened).length, totalChests: chests.length,
@@ -6997,6 +8476,32 @@
         importedModels: visualAssets.models ? Object.keys(visualAssets.models).length : 0,
         importedModelInstances,
         modelSlots: visualAssets.modelPaths ? Object.keys(visualAssets.modelPaths) : [],
+        canonicalScale: {
+          unitMeters: CANONICAL_WORLD_SCALE.unitMeters,
+          wardenHeight: CANONICAL_WORLD_SCALE.wardenHeight,
+          doorHeight: CANONICAL_WORLD_SCALE.doorHeight,
+          doorWidth: CANONICAL_WORLD_SCALE.doorWidth,
+          houseHeight: CANONICAL_WORLD_SCALE.houseHeight.slice(),
+          castleWallHeight: CANONICAL_WORLD_SCALE.castleWallHeight.slice(),
+          gateHeight: CANONICAL_WORLD_SCALE.gateHeight.slice(),
+          towerHeight: CANONICAL_WORLD_SCALE.towerHeight.slice(),
+          structures: Object.keys(MODEL_SCALE_TARGETS).reduce((result, id) => {
+            const metric = modelScaleRegistry[id];
+            if (metric) result[id] = {
+              role: metric.role, width: metric.worldWidth, height: metric.worldHeight, depth: metric.worldDepth,
+              scale: metric.canonicalScale, verticalScale: metric.canonicalScaleY
+            };
+            return result;
+          }, {})
+        },
+        forest: Object.assign({}, forestReport),
+        infrastructure: { total: infrastructureReport.total, byKind: Object.assign({}, infrastructureReport.byKind), colliders: infrastructureReport.colliders, importedModels: infrastructureReport.importedModels },
+        skyProfile: {
+          id: skyReport.id, signature: skyReport.signature, features: skyReport.features.slice(),
+          featureCount: skyReport.featureCount || 0, gradientStops: skyReport.gradientStops || 0,
+          horizonBlend: Boolean(skyReport.horizonBlend), environmentMap: Boolean(visualAssets.environment)
+        },
+        capturedFlags: { total: captureFlags.length, raised: captureFlags.filter((flag) => flag.root.visible && flag.target > 0).length },
         grassInstances: grassField ? grassField.count : 0,
         props: { kind: biomePropsReport.kind, total: biomePropsReport.total, byKind: Object.assign({}, biomePropsReport.byKind) },
         outpostsDiscovered,
@@ -7006,6 +8511,7 @@
         animatedWarden: Boolean(player.modelMixer), biomeGeometry: worldProfile.geometry,
         biomeEnemyModels: [worldProfile.lightEnemy[0], worldProfile.heavyEnemy[0]],
         biomeEnemyNames: [worldProfile.lightEnemy[1], worldProfile.heavyEnemy[1]],
+        garrisonAI: garrisonAISummary(),
         routeReports: verticalRouteReports.map((report) => Object.assign({}, report)),
         layoutForts: worldLayout.forts.map((fort) => ({ x: Math.round(fort[0] * 10) / 10, z: Math.round(fort[1] * 10) / 10, name: fort[4] })),
         pois: (worldLayout.pois || []).map((poi) => ({ kind: poi.kind, name: poi.name, x: Math.round(poi.x), z: Math.round(poi.z) })),
@@ -7117,7 +8623,11 @@
         setEnemyTameReady(enemy);
         return true;
       },
-      strongholdDebug: () => strongholds.map((stronghold) => ({ id: stronghold.id, name: stronghold.name, kind: stronghold.kind, alive: strongholdAliveCount(stronghold), total: stronghold.members.length, cleared: stronghold.cleared })),
+      strongholdDebug: () => strongholds.map((stronghold) => ({
+        id: stronghold.id, name: stronghold.name, kind: stronghold.kind,
+        alive: strongholdAliveCount(stronghold), total: stronghold.members.length, cleared: stronghold.cleared,
+        flagRaised: Boolean(stronghold.captureFlag && stronghold.captureFlag.root.visible && stronghold.captureFlag.target > 0)
+      })),
       clearStronghold: clearStrongholdById,
       setQuestComplete: () => { questStage = 3; bossSpawned = true; updateQuestUI(); },
       objectiveInfo: () => currentObjective(),
@@ -7191,12 +8701,26 @@
       endRun: (victory) => endGame(Boolean(victory)),
       shoutReady: () => { player.shout = 100; },
       damagePlayer,
-      enemyDebug: () => groundEnemies.map((enemy) => ({ name: enemy.name, kind: enemy.kind, health: enemy.health, telegraph: Boolean(enemy.telegraph), animation: enemy.animationState, threat: enemy.threat, camp: Boolean(enemy.camp), strongholdId: enemy.strongholdId, tamed: enemy.tamed, tameReady: enemy.tameReady, tameProgress: enemy.tameProgress, x: enemy.root.position.x, y: enemy.root.position.y, z: enemy.root.position.z, impulse: enemy.impulse ? enemy.impulse.length() : 0 })),
+      enemyDebug: () => groundEnemies.map((enemy) => ({ name: enemy.name, kind: enemy.kind, health: enemy.health, telegraph: Boolean(enemy.telegraph), animation: enemy.animationState, threat: enemy.threat, camp: Boolean(enemy.camp), strongholdId: enemy.strongholdId, tamed: enemy.tamed, tameReady: enemy.tameReady, tameProgress: enemy.tameProgress, aiRole: enemy.ai ? enemy.ai.role : null, aiState: enemy.ai ? enemy.ai.state : null, detection: enemy.ai ? enemy.ai.detection : null, x: enemy.root.position.x, y: enemy.root.position.y, z: enemy.root.position.z, impulse: enemy.impulse ? enemy.impulse.length() : 0 })),
+      garrisonAIDebug,
+      garrisonBehaviorProbe,
+      garrisonOcclusionProbe,
+      garrisonSearchProbe,
+      garrisonStuckRecoveryProbe,
+      garrisonPathProbe,
       poiDebug: () => poiDebugInfo.map((info) => ({ kind: info.kind, name: info.name, chests: info.chests, guards: info.guards, collidersAdded: info.collidersAdded })),
       forceEnemyAttack: () => {
         const enemy = groundEnemies.find((item) => !item.dead && !item.camp) || groundEnemies.find((item) => !item.dead);
         if (!enemy) return false;
         enemy.root.position.copy(player.root.position).add(new THREE.Vector3(0, 0, -Math.max(1.5, enemy.attackRange - .2)));
+        if (enemy.ai) {
+          enemy.ai.home.copy(enemy.root.position);
+          enemy.ai.lastKnown.copy(player.root.position);
+          enemy.ai.detection = 1;
+          enemy.ai.testBlindTime = 0;
+          if (enemy.camp) { enemy.camp.x = enemy.root.position.x; enemy.camp.z = enemy.root.position.z; }
+          setGroundEnemyAIState(enemy, "combat", "test-forced-attack");
+        }
         enemy.attackCooldown = 0;
         enemy.attackTimer = 0;
         updateGroundEnemies(.01, false);
@@ -7261,6 +8785,30 @@
       },
       forceCritical: () => { player.forceNextCritical = true; },
       modelCatalog: () => Object.assign({}, visualAssets.modelPaths || {}),
+      modelScaleRegistry: () => Object.keys(modelScaleRegistry).reduce((result, id) => {
+        const metric = modelScaleRegistry[id];
+        result[id] = {
+          role: metric.role,
+          source: { width: metric.sx, height: metric.sy, depth: metric.sz },
+          world: { width: metric.worldWidth, height: metric.worldHeight, depth: metric.worldDepth },
+          scale: metric.canonicalScale, verticalScale: metric.canonicalScaleY,
+          targetHeight: metric.targetHeight, targetSpan: metric.targetSpan
+        };
+        return result;
+      }, {}),
+      forestDebug: () => Object.assign({}, forestReport, {
+        lodChunks: forestChunks.map((chunk) => ({
+          x: chunk.centerX, z: chunk.centerZ, count: chunk.count,
+          lod: chunk.nearMeshes[0].visible ? "near" : chunk.farMesh.visible ? "far" : "culled"
+        }))
+      }),
+      infrastructureDebug: () => (worldLayout.infrastructure || []).map((site) => Object.assign({}, site)),
+      skyDebug: () => Object.assign({}, skyReport, { features: skyReport.features.slice(), environmentMap: Boolean(visualAssets.environment) }),
+      captureFlagDebug: () => captureFlags.map((flag) => ({
+        strongholdId: flag.strongholdId, visible: flag.root.visible, raised: flag.raise, target: flag.target,
+        minimapMarker: Boolean(flag.root.visible && flag.target > 0),
+        x: flag.root.position.x, y: flag.root.position.y, z: flag.root.position.z, baseY: flag.baseY, height: flag.height
+      })),
       skillSchema: () => skillTree.map((branch) => ({ id: branch.id, scope: branch.scope || "permanent", nodes: branch.nodes.map((node) => ({ id: node.id, scope: node.scope, maxRank: node.maxRank, cost: node.cost, requiredMastery: node.requiredMastery || null })) })),
       platformProbe: () => {
         const platform = platforms[0];
