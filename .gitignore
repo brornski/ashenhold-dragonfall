@@ -1,4 +1,5 @@
 .vercel/
+multiplayer-server/node_modules/
 assets/dragons.png
 test-results/*.json
 !test-results/package.json
