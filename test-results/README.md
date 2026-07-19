@@ -21,6 +21,7 @@ python -m http.server 4173 --bind 127.0.0.1
 Then run from `test-results/`:
 
 - `npm run smoke` - deterministic gameplay regression, including world scale, forest LOD/culling, capture flags, strongholds, relic power, taming, collision, sprint, and victory
+- `npm run ai` - deterministic living-garrison roles, patrols, perception, state, navigation, separation, and recovery audit
 - `npm run audit` - multi-biome/seed sky, ecology, infrastructure, progression, combat, save, scaling, and mobile audit
 - `npm run a11y` - axe-core scan of title, gameplay, skills, and mobile states
 - `npm run payload` - boot timing, transfer budget, renderer, diagnostics, and same-origin gate
