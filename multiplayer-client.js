@@ -57,6 +57,7 @@
       this.realm = null;
       this.isHost = false;
       this.worldReady = false;
+      this.started = false;
       this.snapshot = null;
       this.listeners = new Map();
       this.remoteTracks = new Map();
@@ -156,6 +157,7 @@
         this.realm = message.realm;
         this.isHost = Boolean(message.isHost);
         this.worldReady = Boolean(message.worldReady);
+        this.started = Boolean(message.started);
         this.reconnectAttempts = 0;
         this.setStatus("connected");
         if (message.snapshot) this.ingestSnapshot(message.snapshot);
@@ -188,6 +190,8 @@
       this.snapshot = snapshot;
       this.realm = snapshot.realm || this.realm;
       this.worldReady = Boolean(snapshot.worldReady);
+      this.started = Boolean(snapshot.started);
+      this.isHost = snapshot.hostId ? snapshot.hostId === this.playerId : this.isHost;
       this.updateTracks(this.remoteTracks, (snapshot.players || []).filter((player) => player.id !== this.playerId), now);
       this.updateTracks(this.enemyTracks, snapshot.enemies || [], now);
       for (const event of snapshot.recentEvents || []) this.ingestEvent(event);
@@ -246,6 +250,8 @@
     }
 
     registerWorld(world) { return this.sendRaw({ type: "register_world", world }); }
+    startRealm() { return this.sendRaw({ type: "start_realm" }); }
+    sendHostEnemyState(enemies) { return this.sendRaw({ type: "host_enemy_state", enemies }); }
     attack(targetId, weapon, damage, critical = false) { return this.sendRaw({ type: "attack", targetId, weapon, damage, critical }); }
     openChest(chestId) { return this.sendRaw({ type: "open_chest", chestId }); }
     tame(enemyId) { return this.sendRaw({ type: "tame", enemyId }); }

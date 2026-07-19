@@ -168,7 +168,7 @@ function buildRoom(code, event, now) {
   return {
     code, biome: cleanId(event.biome, "jungle").toLowerCase(), seed: Math.max(1, Math.floor(Number(event.seed) || 424242)),
     createdAt: now, updatedAt: now, revision: 0, sockets: new Set(), players: new Map(), enemies: new Map(),
-    strongholds: new Map(), chests: new Map(), navigation: null, worldReady: false, hostId: null,
+    strongholds: new Map(), chests: new Map(), navigation: null, worldReady: false, started: false, hostId: null,
     lastSnapshotAt: 0, lastAiAt: now, eventSequence: 0, pendingEvents: []
   };
 }
@@ -197,6 +197,8 @@ export class RealmServer {
     room.updatedAt = this.now();
     if (event.type === "player_state") return this.playerState(room, player, event);
     if (event.type === "register_world") return this.registerWorld(room, player, event);
+    if (event.type === "start_realm") return this.startRealm(room, player);
+    if (event.type === "host_enemy_state") return this.hostEnemyState(room, player, event);
     if (event.type === "attack") return this.attack(room, player, event);
     if (event.type === "open_chest") return this.openChest(room, player, event);
     if (event.type === "tame") return this.tame(room, player, event);
@@ -240,7 +242,8 @@ export class RealmServer {
     safeSend(socket, {
       type: "welcome", protocol: PROTOCOL_VERSION, playerId, roomCode: room.code,
       realm: { biome: room.biome, seed: room.seed }, maxPlayers: MAX_PLAYERS,
-      isHost: room.hostId === playerId, worldReady: room.worldReady, snapshot: this.snapshot(room, playerId)
+      isHost: room.hostId === playerId, worldReady: room.worldReady, started: room.started,
+      snapshot: this.snapshot(room, playerId)
     });
     this.queueEvent(room, "presence", { playerId, name: player.name, connected: true });
     this.broadcast(room, { type: "presence", player: serializablePlayer(player), playerCount: connectedCount + 1 }, socket);
@@ -346,6 +349,35 @@ export class RealmServer {
     return true;
   }
 
+  startRealm(room, player) {
+    if (room.hostId !== player.id) return this.reject(player.socket, "HOST_ONLY", "Only the party host may start the realm.");
+    if (!room.worldReady) return this.reject(player.socket, "WORLD_NOT_READY", "Initialize the shared realm before starting.");
+    if (room.started) return true;
+    room.started = true; room.revision += 1;
+    this.queueEvent(room, "realm_started", { playerId: player.id });
+    return true;
+  }
+
+  hostEnemyState(room, player, event) {
+    if (room.hostId !== player.id) return this.reject(player.socket, "HOST_ONLY", "Only the party host may drive roaming dragon movement.");
+    const now = this.now();
+    let changed = false;
+    for (const incoming of (Array.isArray(event.enemies) ? event.enemies : []).slice(0, 24)) {
+      const enemy = room.enemies.get(cleanId(incoming.id, ""));
+      if (!enemy || enemy.kind !== "dragon" || enemy.dead || enemy.tamedBy) continue;
+      const next = { x: clamp(incoming.x, -WORLD_LIMIT, WORLD_LIMIT), z: clamp(incoming.z, -WORLD_LIMIT, WORLD_LIMIT) };
+      const elapsed = enemy.lastHostStateAt ? clamp((now - enemy.lastHostStateAt) / 1000, .035, 1) : 1;
+      if (distance2D(enemy, next) > 18 + elapsed * 125) continue;
+      enemy.x = next.x; enemy.y = clamp(incoming.y, -40, 240); enemy.z = next.z;
+      enemy.rotation = clamp(incoming.rotation, -Math.PI * 8, Math.PI * 8);
+      enemy.state = cleanId(incoming.state, enemy.state).slice(0, 20);
+      enemy.targetId = incoming.targetId ? cleanId(incoming.targetId, "") : null;
+      enemy.lastHostStateAt = now; changed = true;
+    }
+    if (changed) room.revision += 1;
+    return changed;
+  }
+
   attack(room, player, event) {
     const weapon = WEAPON_RULES[event.weapon] ? event.weapon : player.weapon;
     const rule = WEAPON_RULES[weapon]; const now = this.now();
@@ -417,6 +449,7 @@ export class RealmServer {
     return {
       revision: room.revision, serverAt: this.now(), roomCode: room.code,
       realm: { biome: room.biome, seed: room.seed }, worldReady: room.worldReady,
+      started: room.started, hostId: room.hostId,
       players: [...room.players.values()].map(serializablePlayer),
       enemies: [...room.enemies.values()].map(serializableEnemy),
       strongholds: [...room.strongholds.values()].map(serializableStronghold),
@@ -427,7 +460,15 @@ export class RealmServer {
 
   tick(now = this.now()) {
     for (const [code, room] of this.rooms) {
-      for (const [id, player] of room.players) if (!player.connected && now - player.lastSeenAt > RECONNECT_GRACE_MS) room.players.delete(id);
+      for (const [id, player] of room.players) {
+        if (player.connected || now - player.lastSeenAt <= RECONNECT_GRACE_MS) continue;
+        room.players.delete(id);
+        if (room.hostId === id) {
+          const successor = [...room.players.values()].filter((candidate) => candidate.connected).sort((a, b) => a.joinedAt - b.joinedAt)[0];
+          room.hostId = successor?.id || null;
+          if (successor) this.queueEvent(room, "host_changed", { playerId: successor.id });
+        }
+      }
       if (!room.sockets.size && now - room.updatedAt > ROOM_TTL_MS) { this.rooms.delete(code); continue; }
       const aiElapsed = now - room.lastAiAt;
       if (room.worldReady && aiElapsed >= AI_STEP_MS) {

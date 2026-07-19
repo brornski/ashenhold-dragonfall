@@ -138,6 +138,12 @@ test("two Wardens share an authoritative realm, garrison, chest, and reconnect s
   assert.equal(registered.snapshot.enemies.length, 2);
   assert.equal(registered.snapshot.strongholds[0].cleared, false);
 
+  guest.send({ type: "start_realm" });
+  await guest.waitFor((message) => message.type === "error" && message.code === "HOST_ONLY");
+  host.send({ type: "start_realm" });
+  const realmStarted = await guest.waitFor(eventNamed("realm_started"));
+  assert.equal(realmStarted.event.playerId, "host-browser-tab");
+
   host.send({ type: "attack", targetId: "shrine-guard", weapon: "blade", damage: 40, critical: false });
   const damageEvent = await guest.waitFor(eventNamed("enemy_damage"));
   assert.equal(damageEvent.event.dead, true);
@@ -170,6 +176,7 @@ test("two Wardens share an authoritative realm, garrison, chest, and reconnect s
   const replacement = await connect();
   const reconnectWelcome = await hello(replacement, { roomCode: hostWelcome.roomCode, clientId: "guest-browser-tab", name: "Guest Returned" });
   assert.equal(reconnectWelcome.playerId, "guest-browser-tab");
+  assert.equal(reconnectWelcome.started, true);
   const restored = reconnectWelcome.snapshot.players.find((player) => player.id === "guest-browser-tab");
   assert.equal(restored.name, "Guest Returned");
   assert.equal(restored.connected, true);
@@ -197,4 +204,3 @@ test("rooms enforce the four-Warden ceiling", async () => {
     for (const client of clients) client.close();
   }
 });
-
