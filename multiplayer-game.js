@@ -20,6 +20,7 @@
 
     bind() {
       this.disposers.push(this.client.on("welcome", (message) => {
+        if (this.client.lastWelcomeWasReconnect) this.stats.reconnects += 1;
         this.lastAppliedRevision = -1;
         this.worldRegistrationSent = Boolean(message.worldReady);
         this.startSent = Boolean(message.started);
@@ -48,7 +49,6 @@
       }));
       this.disposers.push(this.client.on("disconnect", (detail) => this.adapter.onDisconnect?.(detail)));
       this.disposers.push(this.client.on("status", (status) => {
-        if (status === "connected" && this.client.reconnectAttempts) this.stats.reconnects += 1;
         this.adapter.onNetworkStatus?.(status);
       }));
     }
@@ -86,8 +86,8 @@
       return true;
     }
 
-    attack(targetId, weapon, damage, critical) {
-      return this.party.multiplayer && this.client.attack(targetId, weapon, damage, critical);
+    attack(targetId, weapon, damage, critical, actionId, effects) {
+      return this.party.multiplayer && this.client.attack(targetId, weapon, damage, critical, actionId, effects);
     }
 
     openChest(chestId) {

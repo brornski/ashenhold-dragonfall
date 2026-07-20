@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import WebSocket from "ws";
 import { createAshenholdServer } from "../create-server.mjs";
+import { RealmServer } from "../core.mjs";
 
 let instance;
 let websocketUrl;
@@ -41,9 +42,14 @@ class TestClient {
     });
   }
 
-  close() {
+  close(code, reason) {
     openClients.delete(this);
-    if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) this.socket.close();
+    if (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) this.socket.close(code, reason);
+  }
+
+  terminate() {
+    openClients.delete(this);
+    this.socket.terminate();
   }
 }
 
@@ -62,8 +68,9 @@ async function connect() {
 function hello(client, options = {}) {
   client.send({
     type: "hello",
-    protocol: 1,
-    clientId: options.clientId || crypto.randomUUID(),
+    protocol: 2,
+    playerId: options.playerId,
+    reconnectToken: options.reconnectToken,
     name: options.name || "Test Warden",
     create: Boolean(options.create),
     roomCode: options.roomCode,
@@ -79,6 +86,39 @@ function eventNamed(name) {
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+class MemorySocket {
+  constructor() {
+    this.readyState = 1;
+    this.messages = [];
+  }
+
+  send(raw) {
+    this.messages.push(JSON.parse(raw));
+  }
+
+  close() {
+    this.readyState = 3;
+  }
+
+  find(predicate) {
+    return [...this.messages].reverse().find(predicate);
+  }
+}
+
+function memoryHello(realm, socket, options = {}) {
+  realm.attach(socket);
+  realm.receive(socket, JSON.stringify({
+    type: "hello", protocol: 2, create: Boolean(options.create), roomCode: options.roomCode,
+    playerId: options.playerId, reconnectToken: options.reconnectToken,
+    name: options.name || "Memory Warden", biome: "jungle", seed: 55119
+  }));
+  return socket.find((message) => message.type === "welcome" || message.type === "error");
+}
+
+function memorySend(realm, socket, event) {
+  return realm.receive(socket, JSON.stringify(event));
 }
 
 before(async () => {
@@ -105,22 +145,26 @@ test("health endpoint advertises the room service", async () => {
   assert.deepEqual({ ok: body.ok, service: body.service, protocol: body.protocol, maxPlayers: body.maxPlayers }, {
     ok: true,
     service: "ashenhold-multiplayer",
-    protocol: 1,
+    protocol: 2,
     maxPlayers: 4
   });
 });
 
 test("two Wardens share an authoritative realm, garrison, chest, and reconnect state", async () => {
   const host = await connect();
-  const hostWelcome = await hello(host, { create: true, clientId: "host-browser-tab", name: "Host Warden", biome: "volcanic", seed: 90210 });
+  const hostWelcome = await hello(host, { create: true, name: "Host Warden", biome: "volcanic", seed: 90210 });
   assert.equal(hostWelcome.type, "welcome");
+  assert.match(hostWelcome.playerId, /^[0-9a-f-]{36}$/i);
+  assert.ok(hostWelcome.reconnectToken.length >= 40);
   assert.match(hostWelcome.roomCode, /^[A-Z2-9]{6}$/);
   assert.deepEqual(hostWelcome.realm, { biome: "volcanic", seed: 90210 });
+  host.send({ type: "hello", protocol: 2, create: true, name: "Duplicate Host" });
+  await host.waitFor((message) => message.type === "error" && message.code === "ALREADY_JOINED");
 
   const guest = await connect();
-  const guestWelcome = await hello(guest, { roomCode: hostWelcome.roomCode, clientId: "guest-browser-tab", name: "Guest Warden" });
+  const guestWelcome = await hello(guest, { roomCode: hostWelcome.roomCode, name: "Guest Warden" });
   assert.equal(guestWelcome.type, "welcome");
-  await host.waitFor((message) => message.type === "presence" && message.player?.id === "guest-browser-tab");
+  await host.waitFor((message) => message.type === "presence" && message.player?.id === guestWelcome.playerId);
 
   host.send({
     type: "register_world",
@@ -137,15 +181,31 @@ test("two Wardens share an authoritative realm, garrison, chest, and reconnect s
   const registered = await guest.waitFor((message) => message.type === "world_registered" && message.accepted);
   assert.equal(registered.snapshot.enemies.length, 2);
   assert.equal(registered.snapshot.strongholds[0].cleared, false);
+  assert.equal(JSON.stringify(registered.snapshot).includes(hostWelcome.reconnectToken), false);
+  assert.equal(JSON.stringify(registered.snapshot).includes(guestWelcome.reconnectToken), false);
 
   guest.send({ type: "start_realm" });
   await guest.waitFor((message) => message.type === "error" && message.code === "HOST_ONLY");
   host.send({ type: "start_realm" });
   const realmStarted = await guest.waitFor(eventNamed("realm_started"));
-  assert.equal(realmStarted.event.playerId, "host-browser-tab");
+  assert.equal(realmStarted.event.playerId, hostWelcome.playerId);
+
+  host.send({
+    type: "register_enemy",
+    enemy: { id: "dragon-boss-vharok", name: "Vharok", kind: "dragon", boss: true, x: 48, y: 42, z: 248, health: 520, maxHealth: 520, speed: 15, range: 45, damage: 30, sight: 100 }
+  });
+  const lateBoss = await guest.waitFor((message) => message.type === "enemy_registered" && message.accepted && message.enemyId === "dragon-boss-vharok");
+  const registeredBoss = lateBoss.snapshot.enemies.find((enemy) => enemy.id === "dragon-boss-vharok");
+  assert.deepEqual({ boss: registeredBoss.boss, health: registeredBoss.health, damage: registeredBoss.damage }, { boss: true, health: 520, damage: 30 });
+  host.send({ type: "register_enemy", enemy: { id: "dragon-boss-vharok", kind: "dragon", boss: true, x: 0, z: 0, health: 1 } });
+  const duplicateBoss = await host.waitFor((message) => message.type === "enemy_registered" && !message.accepted && message.enemyId === "dragon-boss-vharok");
+  assert.equal(duplicateBoss.reason, "already_registered");
+  host.send({ type: "attack", targetId: "dragon-boss-vharok", weapon: "bow", damage: 1, critical: false });
+  const aerialDamage = await host.waitFor((message) => eventNamed("enemy_damage")(message) && message.event.enemyId === "dragon-boss-vharok");
+  assert.equal(aerialDamage.event.health, 519, "ranged attacks can reach an airborne co-op dragon");
 
   host.send({ type: "attack", targetId: "shrine-guard", weapon: "blade", damage: 40, critical: false });
-  const damageEvent = await guest.waitFor(eventNamed("enemy_damage"));
+  const damageEvent = await guest.waitFor((message) => eventNamed("enemy_damage")(message) && message.event.enemyId === "shrine-guard");
   assert.equal(damageEvent.event.dead, true);
   const clearEvent = await guest.waitFor(eventNamed("stronghold_cleared"));
   assert.deepEqual({ id: clearEvent.event.strongholdId, flagRaised: clearEvent.event.flagRaised }, { id: "shrine-ember", flagRaised: true });
@@ -159,11 +219,11 @@ test("two Wardens share an authoritative realm, garrison, chest, and reconnect s
   guest.send({ type: "player_state", state: { x: 0, y: 0, z: 210, rotation: 0, health: 100, maxHealth: 100, stamina: 100, weapon: "blade" } });
   await delay(45);
   guest.send({ type: "open_chest", chestId: "shrine-chest" });
-  const guestReward = await guest.waitFor((message) => eventNamed("chest_opened")(message) && message.event.playerId === "guest-browser-tab");
+  const guestReward = await guest.waitFor((message) => eventNamed("chest_opened")(message) && message.event.playerId === guestWelcome.playerId);
   assert.deepEqual(guestReward.event.powerUp, { type: "sprint", amount: 3 });
 
   host.send({ type: "open_chest", chestId: "shrine-chest" });
-  const hostReward = await host.waitFor((message) => eventNamed("chest_opened")(message) && message.event.playerId === "host-browser-tab");
+  const hostReward = await host.waitFor((message) => eventNamed("chest_opened")(message) && message.event.playerId === hostWelcome.playerId);
   assert.equal(hostReward.event.powerUp.amount, 3, "each Warden receives a personal permanent reward");
   host.send({ type: "open_chest", chestId: "shrine-chest" });
   await host.waitFor((message) => message.type === "error" && message.code === "CHEST_CLAIMED");
@@ -174,10 +234,13 @@ test("two Wardens share an authoritative realm, garrison, chest, and reconnect s
   guest.close();
   await delay(30);
   const replacement = await connect();
-  const reconnectWelcome = await hello(replacement, { roomCode: hostWelcome.roomCode, clientId: "guest-browser-tab", name: "Guest Returned" });
-  assert.equal(reconnectWelcome.playerId, "guest-browser-tab");
+  const reconnectWelcome = await hello(replacement, {
+    roomCode: hostWelcome.roomCode, playerId: guestWelcome.playerId,
+    reconnectToken: guestWelcome.reconnectToken, name: "Guest Returned"
+  });
+  assert.equal(reconnectWelcome.playerId, guestWelcome.playerId);
   assert.equal(reconnectWelcome.started, true);
-  const restored = reconnectWelcome.snapshot.players.find((player) => player.id === "guest-browser-tab");
+  const restored = reconnectWelcome.snapshot.players.find((player) => player.id === guestWelcome.playerId);
   assert.equal(restored.name, "Guest Returned");
   assert.equal(restored.connected, true);
   replacement.close();
@@ -189,18 +252,219 @@ test("rooms enforce the four-Warden ceiling", async () => {
   try {
     const host = await connect();
     clients.push(host);
-    const welcome = await hello(host, { create: true, clientId: "capacity-1" });
+    const welcome = await hello(host, { create: true });
     for (let index = 2; index <= 4; index += 1) {
       const client = await connect();
       clients.push(client);
-      const joined = await hello(client, { roomCode: welcome.roomCode, clientId: `capacity-${index}` });
+      const joined = await hello(client, { roomCode: welcome.roomCode });
       assert.equal(joined.type, "welcome");
     }
     const overflow = await connect();
     clients.push(overflow);
-    const rejected = await hello(overflow, { roomCode: welcome.roomCode, clientId: "capacity-5" });
+    const rejected = await hello(overflow, { roomCode: welcome.roomCode });
     assert.deepEqual({ type: rejected.type, code: rejected.code }, { type: "error", code: "ROOM_FULL" });
   } finally {
     for (const client of clients) client.close();
   }
+});
+
+test("private reconnect credentials resist takeover and preserve host succession", async () => {
+  const clients = [];
+  try {
+    const host = await connect(); clients.push(host);
+    const hostWelcome = await hello(host, { create: true, name: "Credential Host" });
+    const guest = await connect(); clients.push(guest);
+    const guestWelcome = await hello(guest, { roomCode: hostWelcome.roomCode, name: "Successor" });
+
+    const missing = await connect(); clients.push(missing);
+    const missingResult = await hello(missing, { roomCode: hostWelcome.roomCode, playerId: hostWelcome.playerId });
+    assert.deepEqual({ type: missingResult.type, code: missingResult.code }, { type: "error", code: "IDENTITY_REJECTED" });
+
+    const wrong = await connect(); clients.push(wrong);
+    const wrongResult = await hello(wrong, { roomCode: hostWelcome.roomCode, playerId: hostWelcome.playerId, reconnectToken: "wrong-token" });
+    assert.deepEqual({ type: wrongResult.type, code: wrongResult.code }, { type: "error", code: "IDENTITY_REJECTED" });
+    host.send({ type: "ping", sentAt: 7734 });
+    assert.equal((await host.waitFor((message) => message.type === "pong" && message.sentAt === 7734)).sentAt, 7734,
+      "failed takeover attempts leave the victim connected");
+
+    host.terminate();
+    await guest.waitFor((message) => eventNamed("host_changed")(message) && message.event.playerId === guestWelcome.playerId);
+    const replacement = await connect(); clients.push(replacement);
+    const restored = await hello(replacement, {
+      roomCode: hostWelcome.roomCode, playerId: hostWelcome.playerId,
+      reconnectToken: hostWelcome.reconnectToken, name: "Credential Host Returned"
+    });
+    assert.equal(restored.type, "welcome");
+    assert.equal(restored.playerId, hostWelcome.playerId);
+    assert.equal(restored.isHost, false, "the connected successor retains host authority");
+    assert.equal(restored.snapshot.hostId, guestWelcome.playerId);
+    assert.equal(JSON.stringify(restored.snapshot).includes(hostWelcome.reconnectToken), false);
+    assert.equal(JSON.stringify(restored.snapshot).includes(guestWelcome.reconnectToken), false);
+  } finally {
+    for (const client of clients) client.close();
+  }
+});
+
+test("disconnected identities reserve a room slot during reconnect grace", async () => {
+  const clients = [];
+  try {
+    const host = await connect(); clients.push(host);
+    const hostWelcome = await hello(host, { create: true });
+    const joined = [];
+    for (let index = 0; index < 3; index += 1) {
+      const client = await connect(); clients.push(client);
+      joined.push({ client, welcome: await hello(client, { roomCode: hostWelcome.roomCode }) });
+    }
+    const departing = joined[2];
+    departing.client.terminate();
+    await host.waitFor((message) => message.type === "presence" && message.player?.id === departing.welcome.playerId && !message.player.connected);
+
+    const newcomer = await connect(); clients.push(newcomer);
+    const rejected = await hello(newcomer, { roomCode: hostWelcome.roomCode });
+    assert.deepEqual({ type: rejected.type, code: rejected.code }, { type: "error", code: "ROOM_FULL" });
+
+    const replacement = await connect(); clients.push(replacement);
+    const restored = await hello(replacement, {
+      roomCode: hostWelcome.roomCode, playerId: departing.welcome.playerId,
+      reconnectToken: departing.welcome.reconnectToken
+    });
+    assert.equal(restored.type, "welcome");
+    assert.equal(restored.playerId, departing.welcome.playerId);
+    assert.equal(restored.snapshot.players.filter((player) => player.connected).length, 4);
+  } finally {
+    for (const client of clients) client.close();
+  }
+});
+
+test("max health growth is allowance-bound and a fallen host yields boss authority", () => {
+  let now = 1000;
+  const realm = new RealmServer({ now: () => now, randomCode: () => "HEALTH" });
+  const host = new MemorySocket();
+  const hostWelcome = memoryHello(realm, host, { create: true, name: "Health Host" });
+  const guest = new MemorySocket();
+  const guestWelcome = memoryHello(realm, guest, { roomCode: hostWelcome.roomCode, name: "Living Guest" });
+  memorySend(realm, host, {
+    type: "register_world",
+    world: {
+      navigation: { cellSize: 5, width: 8, height: 8, originX: -20, originZ: 190, blockedRuns: [6, 2] },
+      strongholds: [], enemies: [],
+      chests: [{ id: "health-chest", x: 0, y: 0, z: 210, powerUp: { type: "health", amount: 3 } }]
+    }
+  });
+  memorySend(realm, host, { type: "start_realm" });
+  now += 40;
+  memorySend(realm, host, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 100, maxHealth: 100 } });
+  memorySend(realm, guest, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 100, maxHealth: 100 } });
+  const room = realm.rooms.get(hostWelcome.roomCode);
+  assert.equal(room.navigation.blocked.size, 2, "RLE navigation cells are decoded server-side");
+  memorySend(realm, host, { type: "open_chest", chestId: "health-chest" });
+  now += 40;
+  memorySend(realm, host, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 5000, maxHealth: 5000 } });
+  const hostPlayer = room.players.get(hostWelcome.playerId);
+  assert.equal(hostPlayer.maxHealth, 105, "the health relic grants only its bounded maximum-growth allowance");
+  for (let index = 0; index < 20; index += 1) {
+    now += 40;
+    memorySend(realm, host, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 5000, maxHealth: 5000 } });
+  }
+  assert.equal(hostPlayer.maxHealth, 105, "rapid max-health reports cannot ratchet the cap upward");
+
+  now += 40;
+  memorySend(realm, host, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 0, maxHealth: 5000 } });
+  assert.equal(room.hostId, guestWelcome.playerId, "an alive connected Warden succeeds a fallen host");
+  now += 40;
+  memorySend(realm, host, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 105, maxHealth: 105 } });
+  assert.equal(hostPlayer.health, 0, "player-state reports cannot self-revive a fallen Warden");
+  memorySend(realm, guest, {
+    type: "register_enemy",
+    enemy: { id: "dragon-boss-vharok", name: "Vharok", kind: "dragon", boss: true, x: 20, y: 40, z: 220, health: 520, maxHealth: 520 }
+  });
+  assert.equal(room.enemies.get("dragon-boss-vharok")?.boss, true, "the successor can register the late boss");
+});
+
+test("authoritative status effects are bounded, tick, slow movement, and expire", () => {
+  let now = 1000;
+  const realm = new RealmServer({ now: () => now, randomCode: () => "STATUS" });
+  const host = new MemorySocket();
+  const welcome = memoryHello(realm, host, { create: true });
+  memorySend(realm, host, {
+    type: "register_world",
+    world: {
+      navigation: { cellSize: 5, width: 20, height: 20, originX: -40, originZ: 170, blockedRuns: [] },
+      strongholds: [], chests: [],
+      enemies: [{ id: "status-guard", kind: "biomeLight", name: "Status Guard", x: 0, y: 0, z: 210,
+        health: 100, maxHealth: 100, speed: 10, range: 1, damage: 2, sight: 100, state: "combat", tameable: true }]
+    }
+  });
+  memorySend(realm, host, { type: "start_realm" });
+  now += 40;
+  memorySend(realm, host, { type: "player_state", state: { x: 6, y: 0, z: 210, health: 100, maxHealth: 100, weapon: "staff" } });
+  const room = realm.rooms.get(welcome.roomCode);
+  const enemy = room.enemies.get("status-guard");
+  memorySend(realm, host, {
+    type: "attack", actionId: "staff-one", targetId: enemy.id, weapon: "staff", damage: 1,
+    critical: false, effects: { tameProgress: 9999, slowMs: 999999 }
+  });
+  assert.equal(enemy.tameProgress, 30);
+  assert.equal(enemy.slowUntil, now + 2050);
+  const beforeSlowMove = enemy.x;
+  now += 100;
+  realm.tick(now);
+  const slowMove = enemy.x - beforeSlowMove;
+  assert.ok(slowMove > .8 && slowMove < .9, `expected a 62% movement step, received ${slowMove}`);
+
+  memorySend(realm, host, {
+    type: "attack", actionId: "blade-one", targetId: enemy.id, weapon: "blade", damage: 10,
+    effects: { bleedDamage: 999999 }
+  });
+  assert.equal(enemy.bleedDamage, 2, "bleed is capped from the accepted hit amount");
+  const afterBlade = enemy.health;
+  now += 1000;
+  realm.tick(now);
+  assert.equal(enemy.health, afterBlade - 2, "server time applies the bounded bleed tick");
+  const beforeFastMove = enemy.x;
+  now = enemy.slowUntil + 50;
+  realm.tick(now);
+  assert.ok(enemy.x - beforeFastMove > slowMove * 2, "movement returns to full speed after slow expiry");
+  const beforeReusedAction = enemy.health;
+  memorySend(realm, host, {
+    type: "attack", actionId: "staff-one", targetId: enemy.id, weapon: "staff", damage: 1,
+    effects: { tameProgress: 0, slowMs: 0 }
+  });
+  assert.equal(enemy.health, beforeReusedAction - 1, "an expired pre-reconnect action id cannot poison a new page session");
+});
+
+test("player hit acknowledgements preserve avoidance and timeout unacknowledged damage", () => {
+  let now = 1000;
+  const realm = new RealmServer({ now: () => now, randomCode: () => "HITACK" });
+  const host = new MemorySocket();
+  const welcome = memoryHello(realm, host, { create: true });
+  memorySend(realm, host, {
+    type: "register_world",
+    world: { navigation: null, strongholds: [], chests: [], enemies: [
+      { id: "hit-guard", kind: "biomeHeavy", name: "Hit Guard", x: 0, y: 0, z: 210,
+        health: 100, maxHealth: 100, speed: 1, range: 2, damage: 10, sight: 50, state: "combat" }
+    ] }
+  });
+  memorySend(realm, host, { type: "start_realm" });
+  now += 40;
+  memorySend(realm, host, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 100, maxHealth: 100 } });
+  now += 100;
+  realm.tick(now);
+  const firstHit = host.find((message) => eventNamed("player_hit")(message));
+  assert.ok(firstHit?.event.hitId);
+  memorySend(realm, host, { type: "player_health_ack", hitId: firstHit.event.hitId, health: 100, maxHealth: 100 });
+  const avoided = host.find((message) => eventNamed("player_damage")(message) && message.event.hitId === firstHit.event.hitId);
+  assert.equal(avoided.event.avoided, true);
+  assert.equal(realm.rooms.get(welcome.roomCode).players.get(welcome.playerId).health, 100);
+
+  now += 1100;
+  realm.tick(now);
+  const hits = host.messages.filter(eventNamed("player_hit"));
+  const secondHit = hits[hits.length - 1];
+  assert.notEqual(secondHit.event.hitId, firstHit.event.hitId);
+  now += 751;
+  realm.tick(now);
+  const timedOut = host.find((message) => eventNamed("player_damage")(message) && message.event.hitId === secondHit.event.hitId);
+  assert.equal(timedOut.event.timedOut, true);
+  assert.equal(realm.rooms.get(welcome.roomCode).players.get(welcome.playerId).health, 90);
 });

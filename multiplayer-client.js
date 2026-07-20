@@ -1,11 +1,12 @@
 (() => {
   "use strict";
 
-  const PROTOCOL_VERSION = 1;
+  const PROTOCOL_VERSION = 2;
   const STATE_RATE_MS = 50;
   const INTERPOLATION_MS = 110;
   const CLIENT_ID_KEY = "ashenhold.multiplayer.clientId";
   const SERVER_URL_KEY = "ashenhold.multiplayer.serverUrl";
+  const RECONNECT_KEY_PREFIX = "ashenhold.multiplayer.reconnect.";
 
   function safeStorage(storage, operation, ...args) {
     try { return storage?.[operation](...args); } catch { return null; }
@@ -17,6 +18,19 @@
     const id = window.crypto?.randomUUID?.() || `warden-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     safeStorage(window.sessionStorage, "setItem", CLIENT_ID_KEY, id);
     return id;
+  }
+
+  function reconnectCredentials(roomCode) {
+    if (!roomCode) return null;
+    try {
+      const value = JSON.parse(safeStorage(window.sessionStorage, "getItem", RECONNECT_KEY_PREFIX + roomCode) || "null");
+      return value?.playerId && value?.token ? { playerId: String(value.playerId), reconnectToken: String(value.token) } : null;
+    } catch { return null; }
+  }
+
+  function storeReconnectCredentials(roomCode, playerId, token) {
+    if (!roomCode || !playerId || !token) return;
+    safeStorage(window.sessionStorage, "setItem", RECONNECT_KEY_PREFIX + roomCode, JSON.stringify({ playerId, token }));
   }
 
   function configuredUrl() {
@@ -70,6 +84,7 @@
       this.connectOptions = null;
       this.intentionalClose = false;
       this.reconnectAttempts = 0;
+      this.lastWelcomeWasReconnect = false;
       this.reconnectTimer = null;
       this.connectPromise = null;
     }
@@ -116,16 +131,17 @@
       this.setStatus(this.reconnectAttempts ? "reconnecting" : "connecting");
       this.connectPromise = new Promise((resolve, reject) => {
         let settled = false;
+        let failure = null;
         const socket = new WebSocket(this.url);
         this.socket = socket;
         const timeout = window.setTimeout(() => {
           if (settled) return;
-          settled = true;
+          failure = new Error("The multiplayer server did not answer in time.");
           socket.close();
-          reject(new Error("The multiplayer server did not answer in time."));
         }, 9000);
         socket.addEventListener("open", () => {
-          this.sendRaw({ type: "hello", protocol: PROTOCOL_VERSION, clientId: this.clientId, ...this.connectOptions });
+          const credentials = reconnectCredentials(this.connectOptions.roomCode);
+          this.sendRaw({ type: "hello", protocol: PROTOCOL_VERSION, clientId: this.clientId, ...this.connectOptions, ...(credentials || {}) });
         });
         socket.addEventListener("message", (messageEvent) => {
           let message;
@@ -134,16 +150,19 @@
           if (!settled && message.type === "welcome") {
             settled = true; clearTimeout(timeout); resolve(message);
           } else if (!settled && message.type === "error") {
-            settled = true; clearTimeout(timeout); reject(new Error(message.message || message.code));
+            failure = new Error(message.message || message.code); clearTimeout(timeout);
+            this.intentionalClose = true;
+            try { socket.close(4003, "Handshake rejected"); } catch { /* close is best effort */ }
           }
         });
         socket.addEventListener("error", () => this.emit("transport_error", { status: this.status }));
         socket.addEventListener("close", (event) => {
           clearTimeout(timeout);
-          if (!settled) { settled = true; reject(new Error(event.reason || "The multiplayer connection closed.")); }
-          this.connectPromise = null;
-          this.socket = null;
-          this.handleClose(event);
+          if (!settled) { settled = true; reject(failure || new Error(event.reason || "The multiplayer connection closed.")); }
+          if (this.socket === socket) {
+            this.socket = null;
+            this.handleClose(event);
+          }
         });
       }).finally(() => { this.connectPromise = null; });
       return this.connectPromise;
@@ -152,12 +171,19 @@
     handleMessage(message) {
       if (!message || typeof message.type !== "string") return;
       if (message.type === "welcome") {
+        if (this.roomCode && this.roomCode !== message.roomCode) {
+          this.seenEvents.clear();
+          this.remoteTracks.clear();
+          this.enemyTracks.clear();
+        }
         this.playerId = message.playerId;
         this.roomCode = message.roomCode;
+        storeReconnectCredentials(message.roomCode, message.playerId, message.reconnectToken);
         this.realm = message.realm;
         this.isHost = Boolean(message.isHost);
         this.worldReady = Boolean(message.worldReady);
         this.started = Boolean(message.started);
+        this.lastWelcomeWasReconnect = this.reconnectAttempts > 0;
         this.reconnectAttempts = 0;
         this.setStatus("connected");
         if (message.snapshot) this.ingestSnapshot(message.snapshot);
@@ -168,6 +194,9 @@
         if (message.snapshot) this.ingestSnapshot(message.snapshot);
         if (message.accepted) this.worldReady = true;
         this.emit("world_registered", message);
+      } else if (message.type === "enemy_registered") {
+        if (message.snapshot) this.ingestSnapshot(message.snapshot);
+        this.emit("enemy_registered", message);
       } else if (message.type === "event") {
         this.ingestEvent(message.event);
       } else if (message.type === "presence") {
@@ -192,7 +221,7 @@
       this.worldReady = Boolean(snapshot.worldReady);
       this.started = Boolean(snapshot.started);
       this.isHost = snapshot.hostId ? snapshot.hostId === this.playerId : this.isHost;
-      this.updateTracks(this.remoteTracks, (snapshot.players || []).filter((player) => player.id !== this.playerId), now);
+      this.updateTracks(this.remoteTracks, (snapshot.players || []).filter((player) => player.id !== this.playerId && player.connected !== false), now);
       this.updateTracks(this.enemyTracks, snapshot.enemies || [], now);
       for (const event of snapshot.recentEvents || []) this.ingestEvent(event);
       this.emit("snapshot", snapshot);
@@ -250,11 +279,13 @@
     }
 
     registerWorld(world) { return this.sendRaw({ type: "register_world", world }); }
+    registerEnemy(enemy) { return this.sendRaw({ type: "register_enemy", enemy }); }
     startRealm() { return this.sendRaw({ type: "start_realm" }); }
     sendHostEnemyState(enemies) { return this.sendRaw({ type: "host_enemy_state", enemies }); }
-    attack(targetId, weapon, damage, critical = false) { return this.sendRaw({ type: "attack", targetId, weapon, damage, critical }); }
+    attack(targetId, weapon, damage, critical = false, actionId = "", effects = null) { return this.sendRaw({ type: "attack", targetId, weapon, damage, critical, actionId, effects }); }
     openChest(chestId) { return this.sendRaw({ type: "open_chest", chestId }); }
     tame(enemyId) { return this.sendRaw({ type: "tame", enemyId }); }
+    acknowledgeHit(hitId, health, maxHealth) { return this.sendRaw({ type: "player_health_ack", hitId, health, maxHealth }); }
 
     ping() {
       const now = performance.now();
