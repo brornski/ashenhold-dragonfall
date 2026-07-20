@@ -127,6 +127,8 @@ async function boot(page) {
   await page.keyboard.up("KeyW");
   await page.keyboard.up("Shift");
   const slideCollision = await page.evaluate(() => window.__ASHENHOLD_TEST__.slideCollisionProbe());
+  const momentumHook = await page.evaluate(() => window.__ASHENHOLD_TEST__.jumpMomentumProbe?.() || null);
+  await page.close();
 
   const mobileSkillsButton = await mobile.locator("#mobileSkills").boundingBox();
   const mobileSlideButton = await mobile.locator("#mobileSlide").boundingBox();
@@ -161,7 +163,6 @@ async function boot(page) {
   const takeoffDirectionAlignment = vectorLength(takeoffVector) > .001 && vectorLength(earlyAirVector) > .001
     ? (takeoffVector.x * earlyAirVector.x + takeoffVector.z * earlyAirVector.z) / (vectorLength(takeoffVector) * vectorLength(earlyAirVector))
     : 0;
-  const momentumHook = await page.evaluate(() => window.__ASHENHOLD_TEST__.jumpMomentumProbe?.() || null);
   const checks = {
     shorelineRouteFound: water.available,
     waterEntryDoesNotStick: water.available && water.entryDistance >= water.route.distance * .8 && water.enteredWading,
