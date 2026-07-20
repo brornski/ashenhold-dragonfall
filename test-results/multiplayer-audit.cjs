@@ -404,6 +404,21 @@ async function closePageClient(page) {
       guest.page.waitForFunction(() => window.AshenholdParty.client.worldReady, null, { timeout: 10000 })
     ]);
 
+    const preStartErrorIndex = (await clientState(host.page)).audit.serverErrors.length;
+    await host.page.evaluate(() => window.AshenholdParty.client.attack("audit-guard", "blade", 1));
+    await waitForServerError(host.page, "REALM_NOT_STARTED", preStartErrorIndex);
+    const preStartRejected = (await clientState(host.page)).audit.serverErrors
+      .slice(preStartErrorIndex)
+      .some((error) => error.code === "REALM_NOT_STARTED");
+
+    await host.page.evaluate(() => window.AshenholdParty.client.startRealm());
+    await Promise.all([
+      host.page.waitForFunction(() => window.AshenholdParty.client.started, null, { timeout: 6000 }),
+      guest.page.waitForFunction(() => window.AshenholdParty.client.started, null, { timeout: 6000 })
+    ]);
+    const preloadedByApp = [host, guest].every((entry) => Object.values(entry.modules.preloaded).every(Boolean));
+    if (preloadedByApp) await Promise.all([ensurePlaying(host.page), ensurePlaying(guest.page)]);
+
     await sendPlayerFrame(host.page, playerFrame(1.25, 0, 209, { moving: true, sprinting: true, rotation: 0.42 }));
     await guest.page.waitForFunction((id) => {
       const player = window.AshenholdParty.client.snapshot?.players?.find((item) => item.id === id);
@@ -465,14 +480,6 @@ async function closePageClient(page) {
     ]);
     const reconnected = await clientState(guest.page);
 
-    await host.page.evaluate(() => window.AshenholdParty.client.startRealm());
-    await Promise.all([
-      host.page.waitForFunction(() => window.AshenholdParty.client.started, null, { timeout: 6000 }),
-      guest.page.waitForFunction(() => window.AshenholdParty.client.started, null, { timeout: 6000 })
-    ]);
-
-    const preloadedByApp = [host, guest].every((entry) => Object.values(entry.modules.preloaded).every(Boolean));
-    if (preloadedByApp) await Promise.all([ensurePlaying(host.page), ensurePlaying(guest.page)]);
     const fallbackAvatars = await Promise.all([renderFallbackAvatar(host.page), renderFallbackAvatar(guest.page)]);
     if (preloadedByApp) {
       await Promise.all([host.page, guest.page].map((page) => page.waitForFunction(() => {
@@ -511,6 +518,7 @@ async function closePageClient(page) {
       productionUiHostJoin: joinedHost.isHost && !joinedGuest.isHost && /^[A-Z2-9]{6}$/.test(joinedHost.roomCode) && joinedGuest.roomCode === joinedHost.roomCode,
       deterministicRealmShared: [joinedHost, joinedGuest].every((state) => state.realm?.biome === BIOME && Number(state.realm?.seed) === SEED),
       twoPlayerRosterShared: [joinedHost, joinedGuest].every((state) => state.snapshot?.players?.filter((player) => player.connected).length === 2) && joinedHost.roster.length === 2 && joinedGuest.roster.length === 2,
+      gameplayRequiresRealmStart: preStartRejected,
       movementPropagatesBothWays: Math.abs(report.movement.hostSeenByGuest?.x - 1.25) < .01 && Math.abs(report.movement.guestSeenByHost?.x + 1.5) < .01,
       twoRemoteTracksShared: finalStates.every((state) => state.sampledRemotePlayers.length === 1),
       twoRemoteAvatarsConstructed: fallbackAvatars.every((entry) => entry.count === 1 && entry.sceneChildren === 1),
