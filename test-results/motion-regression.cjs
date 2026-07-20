@@ -13,8 +13,8 @@ function diagnostics(page) {
   return result;
 }
 
-async function boot(page, biome = "jungle", seed = 424242) {
-  await page.goto(`${BASE}?test&biome=${biome}&seed=${seed}`, { waitUntil: "networkidle", timeout: 90000 });
+async function boot(page) {
+  await page.goto(`${BASE}?test`, { waitUntil: "networkidle", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   await page.evaluate(() => window.__ASHENHOLD_TEST__.start());
   await page.waitForFunction(() => window.ashenholdGame.snapshot().state === "playing");
@@ -26,7 +26,7 @@ async function boot(page, biome = "jungle", seed = 424242) {
   const mobile = await browser.newPage({ viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true });
   const desktopDiagnostics = diagnostics(page);
   const mobileDiagnostics = diagnostics(mobile);
-  await Promise.all([boot(page), boot(mobile, "shore", 303030)]);
+  await Promise.all([boot(page), boot(mobile)]);
 
   const chest = await page.evaluate(() => {
     const test = window.__ASHENHOLD_TEST__;
@@ -69,12 +69,16 @@ async function boot(page, biome = "jungle", seed = 424242) {
   await page.evaluate(() => window.__ASHENHOLD_TEST__.prepareSlideSurface("flat"));
   await page.keyboard.down("Shift");
   await page.keyboard.down("KeyW");
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.12));
+  const sprintMomentumStart = await page.evaluate(() => window.ashenholdGame.snapshot());
   await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.08));
   const sprintBeforeJump = await page.evaluate(() => window.ashenholdGame.snapshot());
   await page.evaluate(() => window.__ASHENHOLD_TEST__.jump());
-  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.14));
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.08));
+  const airborneMomentumEarly = await page.evaluate(() => window.ashenholdGame.snapshot());
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.08));
   const airborneRise = await page.evaluate(() => window.ashenholdGame.snapshot());
-  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.72));
+  await page.evaluate(() => window.__ASHENHOLD_TEST__.step(.62));
   const airborneFall = await page.evaluate(() => window.ashenholdGame.snapshot());
   await page.keyboard.up("KeyW");
   await page.keyboard.up("Shift");
@@ -145,6 +149,18 @@ async function boot(page, biome = "jungle", seed = 424242) {
 
   const slideDistance = Math.hypot(acceleratedSlide.position.x - slideStart.x, acceleratedSlide.position.z - slideStart.z);
   const slideJumpDistance = Math.hypot(slideJump.position.x - preSlideJump.x, slideJump.position.z - preSlideJump.z);
+  const horizontalVector = (from, to) => ({ x: to.position.x - from.position.x, z: to.position.z - from.position.z });
+  const vectorLength = (vector) => Math.hypot(vector.x, vector.z);
+  const takeoffVector = horizontalVector(sprintMomentumStart, sprintBeforeJump);
+  const earlyAirVector = horizontalVector(sprintBeforeJump, airborneMomentumEarly);
+  const sustainedAirVector = horizontalVector(airborneMomentumEarly, airborneRise);
+  const takeoffSpeed = vectorLength(takeoffVector) / .08;
+  const earlyAirSpeed = vectorLength(earlyAirVector) / .08;
+  const sustainedAirSpeed = vectorLength(sustainedAirVector) / .08;
+  const takeoffDirectionAlignment = vectorLength(takeoffVector) > .001 && vectorLength(earlyAirVector) > .001
+    ? (takeoffVector.x * earlyAirVector.x + takeoffVector.z * earlyAirVector.z) / (vectorLength(takeoffVector) * vectorLength(earlyAirVector))
+    : 0;
+  const momentumHook = await page.evaluate(() => window.__ASHENHOLD_TEST__.jumpMomentumProbe?.() || null);
   const checks = {
     chestFrontLatchValid: chest.probe.available && chest.probe.valid && chest.probe.validDistance <= 3.5,
     chestFarRejected: chest.probe.farRejected,
@@ -159,7 +175,13 @@ async function boot(page, biome = "jungle", seed = 424242) {
     desktopSkillsHotkey: hotkeyOpenedSkills && desktopSkills.ariaShortcut === "K",
     desktopSkillTypography: desktopSkills.titleSize >= 12 && desktopSkills.descriptionSize >= 10 && desktopSkills.statusSize >= 8.5 && desktopSkills.nodeHeight >= 90,
     sprintBeforeJump: sprintBeforeJump.sprinting,
-    airborneStopsRunAnimation: !airborneRise.grounded && !airborneRise.sprinting && !airborneRise.superSprinting && airborneRise.combat.modelAnimation === "idle" && airborneRise.combat.sprintPose < .4,
+    sprintJumpRetainsTakeoffMomentum: takeoffSpeed >= 8 && earlyAirSpeed >= takeoffSpeed * .8 && takeoffDirectionAlignment >= .9,
+    sprintJumpSustainsAirMomentum: sustainedAirSpeed >= takeoffSpeed * .65,
+    jumpMomentumHookReportsRetention: Boolean(momentumHook && momentumHook.sprint?.takeoffSpeed >= 8
+      && momentumHook.sprint.airborneSpeed >= momentumHook.sprint.takeoffSpeed * .8
+      && momentumHook.sprint.directionAlignment >= .9),
+    airborneStopsRunAnimation: !airborneRise.grounded && !airborneRise.sprinting && !airborneRise.superSprinting
+      && !["run", "sprint", "superSprint"].includes(airborneRise.combat.modelAnimation) && airborneRise.combat.sprintPose < .4,
     airbornePhases: ["jump", "rise", "apex"].includes(airborneRise.airbornePhase) && ["apex", "fall"].includes(airborneFall.airbornePhase),
     landingCompletes: landed.grounded && landed.airbornePhase === "grounded" && landed.combat.modelAnimation !== "run",
     slideSurfacesFound: Boolean(surfaces.downhill && surfaces.flat && surfaces.uphill && surfaces.downhill.angle >= 8 && surfaces.uphill.angle <= -8),
@@ -198,7 +220,10 @@ async function boot(page, biome = "jungle", seed = 424242) {
     mobileSkills,
     surfaces,
     airborne: {
+      momentum: { takeoffSpeed, earlyAirSpeed, sustainedAirSpeed, takeoffDirectionAlignment, hook: momentumHook },
+      sprintMomentumStart: motionState(sprintMomentumStart),
       sprintBeforeJump: motionState(sprintBeforeJump),
+      momentumEarly: motionState(airborneMomentumEarly),
       rise: motionState(airborneRise),
       fall: motionState(airborneFall),
       landed: motionState(landed)

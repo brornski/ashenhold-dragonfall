@@ -34,10 +34,11 @@ function scriptsLoadInOrder(html, paths) {
 }
 
 (async () => {
-  const [root, app, monster, normal, manifest, ...moduleResponses] = await Promise.all([
+  const [root, app, monster, warden, normal, manifest, ...moduleResponses] = await Promise.all([
     request("/"),
     request("/app.js"),
     request("/assets/models/quaternius-monsters/tribal.gltf"),
+    request("/assets/models/quaternius-rpg-character/warden.gltf"),
     request("/assets/textures/biomes/jungle-normal.jpg"),
     request("/manifest.json"),
     ...multiplayerModules.map(([, path]) => request(path))
@@ -62,12 +63,16 @@ function scriptsLoadInOrder(html, paths) {
   const moduleScriptPaths = multiplayerModules.map(([, path]) => path.slice(1));
   const checks = {
     root200: root.status === 200 && /ASHENHOLD/i.test(root.body),
-    releaseMarker: app.status === 200 && /WORLD_LAYOUT_VERSION\s*=\s*7/.test(app.body) && /strongholdDebug/.test(app.body) && /skillNodes/.test(app.body)
-      && /createAncientForest/.test(app.body) && /MODEL_SCALE_TARGETS/.test(app.body) && /SKY_PROFILES/.test(app.body) && /multiplayerSnapshot/.test(app.body),
+    releaseMarker: app.status === 200 && /WORLD_LAYOUT_VERSION\s*=\s*8/.test(app.body)
+      && /WORLD_ID\s*=\s*["']ashenhold-continent-v1["']/.test(app.body) && /fixedWorldDebug/.test(app.body)
+      && /biomeZoneDebug/.test(app.body) && /jumpMomentumProbe/.test(app.body) && /strongholdDebug/.test(app.body)
+      && /skillNodes/.test(app.body) && /createAncientForest/.test(app.body) && /MODEL_SCALE_TARGETS/.test(app.body)
+      && /SKY_PROFILES/.test(app.body) && /multiplayerSnapshot/.test(app.body),
     multiplayerModules200: Object.values(moduleResults).every((result) => result.status === 200 && result.marker),
     multiplayerScriptsOrdered: scriptsLoadInOrder(root.body, [...moduleScriptPaths, "app.js"]),
     multiplayerEndpointDeclared: /<meta\s+name=["']ashenhold-multiplayer-url["']\s+content=["']wss:\/\/multiplayer-server-weld\.vercel\.app\/api\/ws["']/i.test(root.body),
     monster200: monster.status === 200 && /"animations"\s*:/.test(monster.body),
+    fullWardenModel200: warden.status === 200 && /"animations"\s*:/.test(warden.body),
     pbrNormal200: normal.status === 200 && Number(normal.headers["content-length"] || normal.body.length) > 100000,
     manifest200: manifest.status === 200 && /Ashenhold/.test(manifest.body),
     secureOrigin: baseUrl.protocol === "https:",
@@ -94,6 +99,7 @@ function scriptsLoadInOrder(html, paths) {
       root: root.status,
       app: app.status,
       monster: monster.status,
+      warden: warden.status,
       normal: normal.status,
       manifest: manifest.status,
       multiplayerModules: Object.fromEntries(Object.entries(moduleResults).map(([name, result]) => [name, result.status])),

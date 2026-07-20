@@ -6,22 +6,6 @@ const fs = require("fs");
 const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\/?$/, "/");
 const BIOMES = ["snowy", "jungle", "desert", "shore", "mountains", "moon"];
 
-function correlation(a, b) {
-  const meanA = a.reduce((sum, value) => sum + value, 0) / a.length;
-  const meanB = b.reduce((sum, value) => sum + value, 0) / b.length;
-  let numerator = 0;
-  let denominatorA = 0;
-  let denominatorB = 0;
-  a.forEach((value, index) => {
-    const da = value - meanA;
-    const db = b[index] - meanB;
-    numerator += da * db;
-    denominatorA += da * da;
-    denominatorB += db * db;
-  });
-  return numerator / Math.sqrt(denominatorA * denominatorB);
-}
-
 function instrument(page, label, diagnostics) {
   page.on("console", (message) => {
     if (message.type() === "error") diagnostics.errors.push(label + ": " + message.text());
@@ -32,11 +16,11 @@ function instrument(page, label, diagnostics) {
   page.on("response", (response) => { if (response.status() >= 400) diagnostics.http.push(label + ": " + response.status() + " " + response.url()); });
 }
 
-async function boot(context, biome, seed, diagnostics, suffix) {
+async function boot(context, diagnostics, suffix) {
   const page = await context.newPage();
-  const label = biome + "-" + seed + (suffix || "");
+  const label = "fixed-continent" + (suffix || "");
   instrument(page, label, diagnostics);
-  await page.goto(BASE + "?test&biome=" + biome + "&seed=" + seed, { waitUntil: "domcontentloaded", timeout: 90000 });
+  await page.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame && window.ashenholdGame.snapshot().state === "title", null, { timeout: 70000 });
   const snapshot = await page.evaluate(() => window.ashenholdGame.snapshot());
   const terrain = await page.evaluate(() => window.__ASHENHOLD_TEST__.terrainSignature());
@@ -47,66 +31,73 @@ async function boot(context, biome, seed, diagnostics, suffix) {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const diagnostics = { errors: [], warnings: [], http: [] };
-  const realmMatrix = [];
+  const zoneMatrix = [];
+  const first = await boot(context, diagnostics, "-primary");
+  const fixedWorld = await first.page.evaluate(() => window.__ASHENHOLD_TEST__.fixedWorldDebug?.() || null);
+  const zones = await first.page.evaluate(() => window.__ASHENHOLD_TEST__.biomeZoneDebug?.() || []);
+  await first.page.evaluate(() => window.__ASHENHOLD_TEST__.start());
 
-  for (let index = 0; index < BIOMES.length; index += 1) {
-    const biome = BIOMES[index];
-    const first = await boot(context, biome, 610001 + index * 101, diagnostics, "-primary");
+  for (const biome of BIOMES) {
+    const zone = (Array.isArray(zones) ? zones : zones.zones || []).find((entry) => String(entry.biome || entry.id || entry.name).toLowerCase() === biome);
+    const center = zone?.center || zone?.sample || zone?.spawn || zone?.position || zone;
+    await first.page.evaluate(({ x, z }) => {
+      window.__ASHENHOLD_TEST__.teleport(x, z);
+      window.__ASHENHOLD_TEST__.step(.35);
+    }, { x: Number(center?.x), z: Number(center?.z) });
+    const zoneSnapshot = await first.page.evaluate(() => window.ashenholdGame.snapshot());
     await first.page.screenshot({ path: "test-results/biome-" + biome + ".png", timeout: 90000 });
     const platform = await first.page.evaluate(() => window.__ASHENHOLD_TEST__.platformProbe());
-    await first.page.evaluate(() => {
-      window.__ASHENHOLD_TEST__.start();
-      window.__ASHENHOLD_TEST__.placeEnemy("biomeLight", 6, 100);
+    const placedName = await first.page.evaluate(({ x, z }) => {
+      window.__ASHENHOLD_TEST__.teleport(x, z);
+      window.__ASHENHOLD_TEST__.step(.08);
+      const name = window.__ASHENHOLD_TEST__.placeEnemy("biomeLight", 6, 100);
       window.__ASHENHOLD_TEST__.step(.12);
-    });
+      return name;
+    }, { x: Number(center?.x), z: Number(center?.z) });
     const enemies = await first.page.evaluate(() => window.__ASHENHOLD_TEST__.enemyDebug());
-    const enemy = enemies.filter((entry) => !entry.camp)[0] || enemies[0];
-    const alternate = await boot(context, biome, 910003 + index * 103, diagnostics, "-alternate");
-    const terrainCorrelation = correlation(first.terrain, alternate.terrain);
-    const layoutsDiffer = JSON.stringify(first.snapshot.world.layoutForts) !== JSON.stringify(alternate.snapshot.world.layoutForts);
-    realmMatrix.push({
+    const enemy = enemies.find((entry) => entry.name === placedName) || null;
+    zoneMatrix.push({
       biome,
-      geometry: first.snapshot.world.biomeGeometry,
-      enemyModels: first.snapshot.world.biomeEnemyModels,
-      sky: first.snapshot.world.skyProfile,
-      forest: first.snapshot.world.forest,
-      infrastructure: first.snapshot.world.infrastructure,
-      canonicalScale: first.snapshot.world.canonicalScale,
+      geometry: zoneSnapshot.world.biomeGeometry,
+      enemyModels: zoneSnapshot.world.biomeEnemyModels,
+      sky: zoneSnapshot.world.skyProfile,
+      forest: zoneSnapshot.world.forest,
+      infrastructure: zoneSnapshot.world.infrastructure,
+      canonicalScale: zoneSnapshot.world.canonicalScale,
       renderedEnemy: enemy ? { name: enemy.name, kind: enemy.kind, animation: enemy.animation } : null,
-      routes: first.snapshot.world.routeReports,
+      routes: zoneSnapshot.world.routeReports,
       platform,
-      terrainCorrelation,
-      layoutsDiffer,
+      zone,
+      activeBiome: zoneSnapshot.world.activeBiome,
       checks: {
-        pbr: first.snapshot.world.pbrBiomeMaterial,
-        titleVantageDry: first.snapshot.position.y > first.snapshot.world.waterLevel + 1,
-        activeModelsLoaded: first.snapshot.world.importedModels >= 17,
-        denseImportedWorld: first.snapshot.world.importedModelInstances >= 120,
-        canonicalMeters: first.snapshot.world.canonicalScale.unitMeters === 1 && first.snapshot.world.canonicalScale.wardenHeight === 1.9,
+        pbr: zoneSnapshot.world.pbrBiomeMaterial,
+        positionSelectsBiome: zoneSnapshot.world.activeBiome === biome,
+        fixedContinent: (zoneSnapshot.world.continent?.id || zoneSnapshot.world.continent?.worldId || zoneSnapshot.world.continent) === "ashenhold-continent-v1",
+        activeModelsLoaded: zoneSnapshot.world.importedModels >= 17,
+        denseImportedWorld: zoneSnapshot.world.importedModelInstances >= 120,
+        canonicalMeters: zoneSnapshot.world.canonicalScale.unitMeters === 1 && zoneSnapshot.world.canonicalScale.wardenHeight === 1.9,
         playerScaledBuildings: ["tavern", "homeA", "homeB", "ruinedHouse"].every((id) => {
-          const structure = first.snapshot.world.canonicalScale.structures[id];
+          const structure = zoneSnapshot.world.canonicalScale.structures[id];
           return structure && structure.height >= 8 && structure.height <= 12;
         }),
-        playerScaledCastle: first.snapshot.world.canonicalScale.structures.wall.height >= 9 && first.snapshot.world.canonicalScale.structures.wall.height <= 15
-          && first.snapshot.world.canonicalScale.structures.gate.height >= 7 && first.snapshot.world.canonicalScale.structures.gate.height <= 10
-          && first.snapshot.world.canonicalScale.structures.tower.height >= 18 && first.snapshot.world.canonicalScale.structures.tower.height <= 32,
-        ancientForestDensity: first.snapshot.world.forest.total >= 2000 && first.snapshot.world.forest.instancedMeshes === first.snapshot.world.forest.chunks * 3,
-        forestLodCulling: first.snapshot.world.forest.nearChunks > 0 && first.snapshot.world.forest.farChunks > 0
-          && first.snapshot.world.forest.culledChunks > 0 && first.snapshot.world.forest.visible < first.snapshot.world.forest.total,
-        infrastructureMicroLandmarks: first.snapshot.world.infrastructure.total >= 24 && Object.keys(first.snapshot.world.infrastructure.byKind).length >= 4,
-        biomeSkyTransition: first.snapshot.world.skyProfile.features.length >= 3 && first.snapshot.world.skyProfile.featureCount > 0
-          && first.snapshot.world.skyProfile.gradientStops >= 5 && first.snapshot.world.skyProfile.horizonBlend && first.snapshot.world.skyProfile.environmentMap,
-        biomeEnemyRendered: Boolean(enemy && first.snapshot.world.biomeEnemyNames.includes(enemy.name)),
-        locationGarrisons: first.snapshot.strongholds.total >= 12 && first.snapshot.strongholds.list.every((stronghold) => stronghold.alive >= 3),
-        expandedPois: first.snapshot.world.pois.length >= 8,
-        routesValid: first.snapshot.world.routeReports.length === 2 && first.snapshot.world.routeReports.every((route) => route.valid),
-        platformWalkable: Boolean(platform && platform.moved > .25 && Math.abs(platform.surface - platform.top) < .01 && platform.blocksBelow && !platform.blocksAbove),
-        differentSeedGeometry: layoutsDiffer && terrainCorrelation < .999
+        playerScaledCastle: zoneSnapshot.world.canonicalScale.structures.wall.height >= 9 && zoneSnapshot.world.canonicalScale.structures.wall.height <= 15
+          && zoneSnapshot.world.canonicalScale.structures.gate.height >= 7 && zoneSnapshot.world.canonicalScale.structures.gate.height <= 10
+          && zoneSnapshot.world.canonicalScale.structures.tower.height >= 18 && zoneSnapshot.world.canonicalScale.structures.tower.height <= 32,
+        ancientForestDensity: zoneSnapshot.world.forest.total >= 2000 && zoneSnapshot.world.forest.instancedMeshes === zoneSnapshot.world.forest.chunks * 3,
+        forestLodCulling: zoneSnapshot.world.forest.nearChunks > 0 && zoneSnapshot.world.forest.farChunks > 0
+          && zoneSnapshot.world.forest.culledChunks > 0 && zoneSnapshot.world.forest.visible < zoneSnapshot.world.forest.total,
+        infrastructureMicroLandmarks: zoneSnapshot.world.infrastructure.total >= 24 && Object.keys(zoneSnapshot.world.infrastructure.byKind).length >= 4,
+        biomeSkyTransition: zoneSnapshot.world.skyProfile.features.length >= 3 && zoneSnapshot.world.skyProfile.featureCount > 0
+          && zoneSnapshot.world.skyProfile.gradientStops >= 5 && zoneSnapshot.world.skyProfile.horizonBlend && zoneSnapshot.world.skyProfile.environmentMap,
+        biomeEnemyRendered: Boolean(enemy && zoneSnapshot.world.biomeEnemyNames.includes(enemy.name)),
+        locationGarrisons: zoneSnapshot.strongholds.total >= 12 && zoneSnapshot.strongholds.list.every((stronghold) => stronghold.alive >= 3),
+        expandedPois: zoneSnapshot.world.pois.length >= 8,
+        routesValid: zoneSnapshot.world.routeReports.length >= 2 && zoneSnapshot.world.routeReports.every((route) => route.valid),
+        platformWalkable: Boolean(platform && platform.moved > .25 && Math.abs(platform.surface - platform.top) < .01 && platform.blocksBelow && !platform.blocksAbove)
       }
     });
-    await first.page.close();
-    await alternate.page.close();
   }
+  await first.page.close();
 
   const progressionContext = await browser.newContext({ viewport: { width: 1365, height: 768 } });
   await progressionContext.addInitScript(() => {
@@ -120,7 +111,7 @@ async function boot(context, biome, seed, diagnostics, suffix) {
   });
   const progressionPage = await progressionContext.newPage();
   instrument(progressionPage, "progression", diagnostics);
-  const progressionUrl = BASE + "?test&test-save&biome=desert&seed=737373";
+  const progressionUrl = BASE + "?test&test-save";
   await progressionPage.goto(progressionUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
   await progressionPage.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   const migrated = await progressionPage.evaluate(() => window.ashenholdGame.snapshot());
@@ -169,12 +160,17 @@ async function boot(context, biome, seed, diagnostics, suffix) {
       rankedPurchases: ranked.snapshot.skillRanks.vitality === 3 && ranked.snapshot.runSkills.run_damage === 2,
       sprintTreePresent: migrated.skillBranches >= 12 && migrated.skillNodes >= 66,
       permanentChestPower: Object.values(ranked.snapshot.relicBonuses).some((value) => value > 0) && JSON.stringify(restored.relicBonuses) === JSON.stringify(ranked.snapshot.relicBonuses),
-      activeRunWritten: Boolean(ranked.saved && ranked.saved.status === "active" && ranked.saved.layoutVersion === 7 && Array.isArray(ranked.saved.world.strongholds)),
-      activeRunRestored: restored.realm.seed === 737373 && restored.runesCollected === ranked.snapshot.runesCollected && restored.chestsOpened === ranked.snapshot.chestsOpened && restored.runSkills.run_damage === 2 && Math.abs(restored.position.x - ranked.snapshot.position.x) < .1,
+      activeRunWritten: Boolean(ranked.saved && ranked.saved.status === "active" && Array.isArray(ranked.saved.world.strongholds)
+        && (ranked.saved.worldId === "ashenhold-continent-v1" || ranked.saved.world?.worldId === "ashenhold-continent-v1" || ranked.saved.world?.continentId === "ashenhold-continent-v1")
+        && !("realm" in ranked.saved) && !("seed" in ranked.saved)),
+      activeRunRestored: restored.runesCollected === ranked.snapshot.runesCollected && restored.chestsOpened === ranked.snapshot.chestsOpened
+        && restored.runSkills.run_damage === 2 && Math.abs(restored.position.x - ranked.snapshot.position.x) < .1,
       shrineFlagCaptured: Boolean(ranked.shrine && ranked.captureBefore && !ranked.captureBefore.visible && ranked.shrineCleared
-        && ranked.captureAfter && ranked.captureAfter.visible && ranked.captureAfter.raised === 1 && ranked.captureAfter.minimapMarker),
+        && ranked.captureAfter && ranked.captureAfter.visible && ranked.captureAfter.raised === 1
+        && ranked.captureAfter.height >= 10 && ranked.captureAfter.minimapMarker),
       shrineFlagPersisted: Boolean(ranked.shrine && ranked.saved.world.strongholds.includes(ranked.shrine.id)
-        && restoredCaptureFlags.some((flag) => flag.strongholdId === ranked.shrine.id && flag.visible && flag.raised === 1 && flag.minimapMarker)),
+        && restoredCaptureFlags.some((flag) => flag.strongholdId === ranked.shrine.id && flag.visible
+          && flag.raised === 1 && flag.height >= 10 && flag.minimapMarker)),
       continueAffordance: /CONTINUE/.test(continueLabel)
     }
   };
@@ -182,7 +178,7 @@ async function boot(context, biome, seed, diagnostics, suffix) {
 
   const combatPage = await context.newPage();
   instrument(combatPage, "combat", diagnostics);
-  await combatPage.goto(BASE + "?test&biome=moon&seed=818181", { waitUntil: "domcontentloaded", timeout: 90000 });
+  await combatPage.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await combatPage.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   const combat = await combatPage.evaluate(() => {
     const test = window.__ASHENHOLD_TEST__;
@@ -271,7 +267,7 @@ async function boot(context, biome, seed, diagnostics, suffix) {
 
   const strongholdsPage = await context.newPage();
   instrument(strongholdsPage, "strongholds", diagnostics);
-  await strongholdsPage.goto(BASE + "?test&biome=snowy&seed=929292", { waitUntil: "domcontentloaded", timeout: 90000 });
+  await strongholdsPage.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await strongholdsPage.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   const strongholds = await strongholdsPage.evaluate(() => {
     const test = window.__ASHENHOLD_TEST__;
@@ -337,7 +333,7 @@ async function boot(context, biome, seed, diagnostics, suffix) {
   const mobileContext = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
   const mobilePage = await mobileContext.newPage();
   instrument(mobilePage, "mobile-landscape", diagnostics);
-  await mobilePage.goto(BASE + "?test&biome=shore&seed=303030", { waitUntil: "domcontentloaded", timeout: 90000 });
+  await mobilePage.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await mobilePage.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   await mobilePage.evaluate(() => window.__ASHENHOLD_TEST__.start());
   const mobile = await mobilePage.evaluate(() => {
@@ -362,12 +358,14 @@ async function boot(context, biome, seed, diagnostics, suffix) {
   await mobileContext.close();
 
   const checks = {
-    realmMatrix: realmMatrix.every((realm) => Object.values(realm.checks).every(Boolean)),
-    uniqueBiomeGeometry: new Set(realmMatrix.map((realm) => realm.geometry)).size === 6,
-    uniqueEnemyRosters: new Set(realmMatrix.map((realm) => realm.enemyModels.join("/"))).size === 6,
-    uniqueBiomeSkies: new Set(realmMatrix.map((realm) => realm.sky.id)).size === 6
-      && new Set(realmMatrix.map((realm) => realm.sky.signature)).size === 6,
-    uniqueForestProfiles: new Set(realmMatrix.map((realm) => realm.forest.profile)).size === 6,
+    fixedContinent: Boolean(fixedWorld && (fixedWorld.worldId === "ashenhold-continent-v1" || fixedWorld.id === "ashenhold-continent-v1")),
+    sixGeographicZones: zoneMatrix.length === 6 && new Set(zoneMatrix.map((zone) => zone.biome)).size === 6,
+    zoneMatrix: zoneMatrix.every((zone) => Object.values(zone.checks).every(Boolean)),
+    uniqueBiomeGeometry: new Set(zoneMatrix.map((zone) => zone.geometry)).size === 6,
+    uniqueEnemyRosters: new Set(zoneMatrix.map((zone) => zone.enemyModels.join("/"))).size === 6,
+    uniqueBiomeSkies: new Set(zoneMatrix.map((zone) => zone.sky.id)).size === 6
+      && new Set(zoneMatrix.map((zone) => zone.sky.signature)).size === 6,
+    uniqueForestProfiles: new Set(zoneMatrix.map((zone) => zone.forest.profile)).size === 6,
     progression: Object.values(progression.checks).every(Boolean),
     combat: Object.values(combat.checks).every(Boolean),
     strongholds: Object.values(strongholds.checks).every(Boolean),
@@ -376,9 +374,9 @@ async function boot(context, biome, seed, diagnostics, suffix) {
     noConsoleWarnings: diagnostics.warnings.length === 0,
     noHttpFailures: diagnostics.http.length === 0
   };
-  const report = { generatedAt: new Date().toISOString(), checks, realmMatrix, progression, combat, strongholds, mobile, diagnostics };
+  const report = { generatedAt: new Date().toISOString(), checks, fixedWorld, zoneMatrix, progression, combat, strongholds, mobile, diagnostics };
   fs.writeFileSync("test-results/production-audit.json", JSON.stringify(report, null, 2));
-  console.log(JSON.stringify({ checks, realmChecks: realmMatrix.map((realm) => ({ biome: realm.biome, correlation: realm.terrainCorrelation, checks: realm.checks })), progression: progression.checks, combat: combat.checks, strongholds: strongholds.checks, mobile: mobile.checks, diagnostics }, null, 2));
+  console.log(JSON.stringify({ checks, zoneChecks: zoneMatrix.map((zone) => ({ biome: zone.biome, checks: zone.checks })), progression: progression.checks, combat: combat.checks, strongholds: strongholds.checks, mobile: mobile.checks, diagnostics }, null, 2));
   await context.close();
   await browser.close();
   if (Object.values(checks).some((value) => !value)) process.exit(1);

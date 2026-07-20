@@ -11,11 +11,12 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   page.on("requestfailed", (request) => diagnostics.failedRequests.push(`${request.method()} ${request.url()} :: ${request.failure()?.errorText}`));
   page.on("response", (response) => { if (response.status() >= 400) diagnostics.failedRequests.push(`${response.status()} ${response.url()}`); });
 
-  await page.goto(`${BASE}?test&biome=jungle&seed=424242`, { waitUntil: "networkidle", timeout: 90000 });
+  await page.goto(`${BASE}?test`, { waitUntil: "networkidle", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 60000 });
   const title = await page.evaluate(() => ({
     summary: window.ashenholdGame.snapshot().world.garrisonAI,
-    roster: window.__ASHENHOLD_TEST__.garrisonAIDebug()
+    roster: window.__ASHENHOLD_TEST__.garrisonAIDebug(),
+    strongholds: window.ashenholdGame.snapshot().strongholds.list
   }));
 
   await page.evaluate(() => window.__ASHENHOLD_TEST__.start(true));
@@ -37,18 +38,19 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   const patrols = settled.roster.filter((enemy) => enemy.state === "patrol");
   const patrolRoles = settled.roster.filter((enemy) => enemy.role === "patrol_guard" || enemy.role === "beast_patrol");
   const lookoutStrongholds = new Set(title.roster.filter((enemy) => enemy.role === "tower_lookout").map((enemy) => enemy.strongholdId));
+  const watchposts = title.strongholds.filter((stronghold) => stronghold.kind === "watchpost").map((stronghold) => stronghold.id);
   const stableRoster = (roster) => roster.map((enemy) => ({
     spawnKey: enemy.spawnKey, state: enemy.state, previousState: enemy.previousState, reason: enemy.reason,
     detection: enemy.detection, pathLength: enemy.pathLength, stuckCount: enemy.stuckCount,
     recoveries: enemy.recoveries, x: enemy.x, y: enemy.y, z: enemy.z
   }));
   const checks = {
-    seededRoster: titleKeys.map((entry) => entry.replace(/:guard$/, "")).join("|") === settledKeys.join("|"),
+    authoredRosterStable: titleKeys.map((entry) => entry.replace(/:guard$/, "")).join("|") === settledKeys.join("|"),
     allGarrisonsAssigned: title.summary.actors >= 50 && title.roster.length === title.summary.actors && title.roster.every((enemy) => enemy.spawnKey && enemy.role && enemy.post && enemy.postDistance < .01),
     spawnAtGuardPosts: title.summary.states.guard === title.summary.actors && title.summary.aware === 0,
     noSpawnRunning: title.roster.every((enemy) => enemy.animation === "idle" && enemy.state === "guard"),
     roleVariety: Object.keys(title.summary.roles).length >= 6 && (title.summary.roles.gate_sentry || 0) > 0 && (title.summary.roles.tower_lookout || 0) > 0,
-    watchpostLookouts: lookoutStrongholds.has("poi-2") && lookoutStrongholds.has("poi-3"),
+    watchpostLookouts: watchposts.length > 0 && watchposts.every((id) => lookoutStrongholds.has(id)),
     generatedNavGrids: title.summary.navGrids >= 12 && title.summary.navWalkableCells >= 2500,
     calmBehaviorOnly: Object.keys(settled.summary.states).every((state) => state === "guard" || state === "patrol") && settled.summary.aware === 0,
     patrolsWalk: patrols.length > 0 && patrols.every((enemy) => enemy.animation === "walk" || enemy.animation === "idle"),
@@ -66,7 +68,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   };
 
   const report = {
-    url: `${BASE}?test&biome=jungle&seed=424242`,
+    url: `${BASE}?test`,
     checks,
     title: title.summary,
     settled: settled.summary,

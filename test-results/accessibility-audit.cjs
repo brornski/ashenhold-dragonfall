@@ -25,7 +25,7 @@ async function scan(page, state) {
   const browser = await chromium.launch({ headless: true });
   const reports = [];
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  await page.goto(BASE + "?test&biome=jungle&seed=424242", { waitUntil: "domcontentloaded", timeout: 90000 });
+  await page.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   reports.push(await scan(page, "desktop-title"));
   await page.evaluate(() => window.__ASHENHOLD_TEST__.start());
@@ -36,7 +36,7 @@ async function scan(page, state) {
   await page.close();
 
   const mobile = await browser.newPage({ viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true });
-  await mobile.goto(BASE + "?test&biome=shore&seed=303030", { waitUntil: "domcontentloaded", timeout: 90000 });
+  await mobile.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await mobile.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   await mobile.evaluate(() => window.__ASHENHOLD_TEST__.start());
   reports.push(await scan(mobile, "mobile-playing"));

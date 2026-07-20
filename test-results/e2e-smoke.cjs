@@ -14,7 +14,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   page.on("requestfailed", (request) => failedRequests.push(`${request.method()} ${request.url()} :: ${request.failure()?.errorText}`));
   page.on("response", (response) => { if (response.status() >= 400) failedRequests.push(`${response.status()} ${response.url()}`); });
 
-  await page.goto(BASE + "?test&biome=jungle&seed=424242", { waitUntil: "networkidle", timeout: 90000 });
+  await page.goto(BASE + "?test", { waitUntil: "networkidle", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 60000 });
   const titleSnapshot = await page.evaluate(() => window.ashenholdGame.snapshot());
   await page.screenshot({ path: "test-results/title-latest.png", fullPage: true, timeout: 90000 });
@@ -222,7 +222,8 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   const intenseSprintDistance = Math.hypot(intenseSprint.position.x - intenseSprintStart.x, intenseSprint.position.z - intenseSprintStart.z);
   const checks = {
     booted: titleSnapshot.state === "title",
-    correctRealm: titleSnapshot.realm.biome === "jungle" && titleSnapshot.realm.seed === 424242,
+    fixedContinent: (titleSnapshot.world.continent?.id || titleSnapshot.world.continent?.worldId || titleSnapshot.world.continent) === "ashenhold-continent-v1"
+      && !("realm" in titleSnapshot),
     pbrBiomeMaterial: titleSnapshot.world.pbrBiomeMaterial,
     animatedWarden: titleSnapshot.world.animatedWarden,
     importedModels: titleSnapshot.world.importedModels >= 15,
@@ -290,7 +291,9 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     minimapLegend: legendCount >= 10,
     dragonFacesForward: finalPlaying.dragonForwardDot == null || finalPlaying.dragonForwardDot > 0.5,
     strongholdVictory: ended.state === "ended" && ended.questStage === 3 && ended.strongholds.cleared === ended.strongholds.total,
-    nextRealmPrepared: ended.state === "ended" && ended.realm.next && ended.realm.next.biome !== ended.realm.biome,
+    victoryKeepsFixedContinent: ended.state === "ended"
+      && (ended.world.continent?.id || ended.world.continent?.worldId || ended.world.continent) === "ashenhold-continent-v1"
+      && !("realm" in ended),
     noConsoleErrors: consoleErrors.length === 0,
     noConsoleWarnings: consoleWarnings.length === 0,
     noPageErrors: pageErrors.length === 0,

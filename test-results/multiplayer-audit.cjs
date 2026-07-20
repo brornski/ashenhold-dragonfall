@@ -9,8 +9,7 @@ const { chromium } = require("playwright");
 
 const ROOT = path.resolve(__dirname, "..");
 const REPORT_PATH = path.join(__dirname, "multiplayer-audit.json");
-const BIOME = "jungle";
-const SEED = 424242;
+const WORLD_ID = "ashenhold-continent-v1";
 const PROTOCOL_VERSION = 2;
 const TIMEOUT = Math.max(15000, Number(process.env.ASHENHOLD_MULTIPLAYER_TIMEOUT) || 70000);
 const SYNC_TIMEOUT = Math.max(20000, Number(process.env.ASHENHOLD_MULTIPLAYER_SYNC_TIMEOUT) || 0);
@@ -21,6 +20,7 @@ const PRODUCTION_MODULES = [
   ["runtime", "multiplayer-game.js", "AshenholdCoopRuntime"]
 ];
 const FIXTURE = Object.freeze({
+  worldId: WORLD_ID,
   navigation: { cellSize: 5, width: 24, height: 24, originX: -60, originZ: 160, blocked: [] },
   strongholds: [{ id: "audit-shrine", name: "Audit Shrine", kind: "shrine", x: 0, z: 207 }],
   enemies: [{
@@ -232,7 +232,7 @@ async function ensureProductionModules(page, base) {
     client.on("server_error", (error) => audit.serverErrors.push({ code: error.code, message: error.message }));
     client.on("game_event", (event) => audit.events.push({ ...event }));
     client.on("status", (status) => audit.statuses.push(status));
-    client.on("welcome", (message) => audit.welcomes.push({ playerId: message.playerId, roomCode: message.roomCode, realm: message.realm }));
+    client.on("welcome", (message) => audit.welcomes.push({ playerId: message.playerId, roomCode: message.roomCode, worldId: message.worldId, realm: message.realm }));
     client.on("snapshot", () => { audit.snapshots += 1; });
     window.__ASHENHOLD_MULTIPLAYER_AUDIT__ = audit;
   });
@@ -244,7 +244,7 @@ async function bootPage(context, base, label, backendUrl) {
   const page = await context.newPage();
   const diagnostics = instrument(page, label, backendUrl);
   const startedAt = Date.now();
-  await page.goto(`${base}?test&biome=${BIOME}&seed=${SEED}`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  await page.goto(`${base}?test`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot?.().state === "title", null, { timeout: TIMEOUT });
   const modules = await ensureProductionModules(page, base);
   return { page, diagnostics, modules, bootMs: Date.now() - startedAt };
@@ -255,7 +255,7 @@ async function clientState(page) {
     const client = window.AshenholdParty.client;
     return {
       status: client.status, clientId: client.clientId, playerId: client.playerId, roomCode: client.roomCode,
-      realm: client.realm, isHost: client.isHost, worldReady: client.worldReady, started: client.started,
+      worldId: client.worldId, realm: client.realm, isHost: client.isHost, worldReady: client.worldReady, started: client.started,
       snapshot: client.snapshot,
       sampledRemotePlayers: client.sampleRemotePlayers(performance.now() + 250),
       roster: [...document.querySelectorAll("#partyRoster span")].map((item) => item.textContent.trim()),
@@ -367,8 +367,16 @@ async function renderFallbackAvatar(page) {
     const players = window.AshenholdParty.client.sampleRemotePlayers(performance.now() + 500);
     const count = renderer.sync(players, 1 / 60);
     window.__ASHENHOLD_MULTIPLAYER_AUDIT__.renderer = renderer;
-    return { count, sceneChildren: scene.children.length, playerIds: players.map((player) => player.id) };
+    return { count, sceneChildren: scene.children.length, playerIds: players.map((player) => player.id), debug: renderer.debug?.() || null };
   });
+}
+
+async function waitForFullRemoteWarden(page) {
+  await page.waitForFunction(() => {
+    const debug = window.__ASHENHOLD_MULTIPLAYER_AUDIT__?.renderer?.debug?.();
+    return debug?.asset?.status === "ready" && debug.wardens?.length === 1 && debug.wardens.every((warden) => warden.fullModel);
+  }, null, { timeout: 30000 });
+  return page.evaluate(() => window.__ASHENHOLD_MULTIPLAYER_AUDIT__.renderer.debug());
 }
 
 async function readAdapter(page) {
@@ -447,7 +455,7 @@ async function closePageClient(page) {
       roomCode: joinedHost.roomCode,
       hostPlayerId: joinedHost.playerId,
       guestPlayerId: joinedGuest.playerId,
-      realms: [joinedHost.realm, joinedGuest.realm],
+      worldIds: [joinedHost.worldId, joinedGuest.worldId],
       rosters: [joinedHost.roster, joinedGuest.roster],
       modules: { host: host.modules, guest: guest.modules },
       bootMs: { host: host.bootMs, guest: guest.bootMs }
@@ -542,6 +550,7 @@ async function closePageClient(page) {
     const reconnected = await clientState(guest.page);
 
     const fallbackAvatars = await Promise.all([renderFallbackAvatar(host.page), renderFallbackAvatar(guest.page)]);
+    const fullWardenDebug = await Promise.all([waitForFullRemoteWarden(host.page), waitForFullRemoteWarden(guest.page)]);
     if (preloadedByApp) {
       await Promise.all([host.page, guest.page].map((page) => page.waitForFunction(() => {
         const adapter = window.__ASHENHOLD_MULTIPLAYER_AUDIT__.readAdapter();
@@ -569,22 +578,36 @@ async function closePageClient(page) {
       perPlayer: chestStates.map((state) => state.snapshot.chests.find((chest) => chest.id === "audit-chest")),
       guestErrors: chestStates[1].audit.serverErrors
     };
-    report.avatars = { fallback: fallbackAvatars, adapters };
+    report.avatars = { fallback: fallbackAvatars, fullWardenDebug, adapters };
     report.reconnect = { method: reconnectMethod, samePlayerId: reconnected.playerId === joinedGuest.playerId, statuses: reconnected.audit.statuses.slice(reconnectStatusIndex), roster: reconnected.roster };
     report.diagnostics = diagnostics;
 
     const allPreloaded = [host, guest].every((entry) => Object.values(entry.modules.preloaded).every(Boolean));
     const adapterAvatarCounts = adapters.map(remoteAvatarCount);
+    const joinedPlayers = joinedHost.snapshot?.players || [];
+    const joinedColors = Object.fromEntries(joinedPlayers.map((player) => [player.id, player.color]));
+    const reconnectedGuest = reconnected.snapshot?.players?.find((player) => player.id === joinedGuest.playerId);
+    const canonicalAnimations = ["idle", "walk", "run", "sprint", "superSprint", "jump", "fall", "land", "slide", "dodge", "attack", "death"];
+    const remoteWardens = fullWardenDebug.flatMap((debug) => debug.wardens || []);
     report.checks = {
       separateBrowserContexts: joinedHost.clientId !== joinedGuest.clientId && joinedHost.playerId !== joinedGuest.playerId,
       productionUiHostJoin: joinedHost.isHost && !joinedGuest.isHost && /^[A-Z2-9]{6}$/.test(joinedHost.roomCode) && joinedGuest.roomCode === joinedHost.roomCode,
-      deterministicRealmShared: [joinedHost, joinedGuest].every((state) => state.realm?.biome === BIOME && Number(state.realm?.seed) === SEED),
+      fixedContinentSharedWithoutSeed: [joinedHost, joinedGuest].every((state) => state.worldId === WORLD_ID && !state.realm)
+        && [joinedHost, joinedGuest].every((state) => state.snapshot?.worldId === WORLD_ID && !("realm" in state.snapshot)),
       twoPlayerRosterShared: [joinedHost, joinedGuest].every((state) => state.snapshot?.players?.filter((player) => player.connected).length === 2) && joinedHost.roster.length === 2 && joinedGuest.roster.length === 2,
       gameplayRequiresRealmStart: preStartRejected,
       movementPropagatesBothWays: report.movement.methods.every((method) => method === "game-teleport")
         && Math.abs(report.movement.hostSeenByGuest?.x - 1.25) < .35 && Math.abs(report.movement.guestSeenByHost?.x + 1.5) < .35,
       twoRemoteTracksShared: finalStates.every((state) => state.sampledRemotePlayers.length === 1),
       twoRemoteAvatarsConstructed: fallbackAvatars.every((entry) => entry.count === 1 && entry.sceneChildren === 1),
+      remoteUsesFullMainWardenModel: remoteWardens.length === 2 && remoteWardens.every((warden) => warden.fullModel
+        && warden.sourcePath === "assets/models/quaternius-rpg-character/warden.gltf" && warden.fallbackVisible === false),
+      remoteWardenMaterialsIsolated: remoteWardens.length === 2 && remoteWardens.every((warden) => warden.isolatedMaterials),
+      remoteWardenAnimationSetComplete: remoteWardens.length === 2 && remoteWardens.every((warden) => canonicalAnimations.every((state) => warden.animationSet?.includes(state))),
+      stableDistinctServerColors: Object.keys(joinedColors).length === 2 && new Set(Object.values(joinedColors)).size === 2
+        && remoteWardens.every((warden) => warden.colorSource === "server"
+          && String(warden.accentColor).toLowerCase() === String(joinedColors[warden.id]).toLowerCase())
+        && String(reconnectedGuest?.color).toLowerCase() === String(joinedColors[joinedGuest.playerId]).toLowerCase(),
       sharedEnemyDamage: report.combat.damagedHealth.every((health) => health === 30),
       sharedEnemyDeath: report.combat.finalEnemies.every((enemy) => enemy?.dead && enemy.health === 0),
       sharedStrongholdClear: report.combat.strongholds.every((stronghold) => stronghold?.cleared),

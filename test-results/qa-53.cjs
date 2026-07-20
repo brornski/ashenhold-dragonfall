@@ -7,7 +7,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
   page.on("pageerror", (error) => console.log("PAGEERROR", error.message.slice(0, 160)));
-  await page.goto(BASE + "?test&biome=jungle&seed=424242", { waitUntil: "domcontentloaded", timeout: 90000 });
+  await page.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   await page.evaluate(() => window.__ASHENHOLD_TEST__.start());
   await page.waitForTimeout(400);

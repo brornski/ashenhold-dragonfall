@@ -35,7 +35,7 @@ function isApprovedWssBackend(url) {
   page.on("pageerror", (error) => diagnostics.push("page: " + error.message));
   page.on("requestfailed", (request) => diagnostics.push("request: " + request.url()));
   const started = Date.now();
-  await page.goto(BASE + "?test&biome=jungle&seed=424242", { waitUntil: "domcontentloaded", timeout: 90000 });
+  await page.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   const bootMs = Date.now() - started;
   const result = await page.evaluate(() => {
