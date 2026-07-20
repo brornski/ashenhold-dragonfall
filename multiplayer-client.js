@@ -282,9 +282,12 @@
     registerEnemy(enemy) { return this.sendRaw({ type: "register_enemy", enemy }); }
     startRealm() { return this.sendRaw({ type: "start_realm" }); }
     sendHostEnemyState(enemies) { return this.sendRaw({ type: "host_enemy_state", enemies }); }
-    attack(targetId, weapon, damage, critical = false, actionId = "", effects = null) { return this.sendRaw({ type: "attack", targetId, weapon, damage, critical, actionId, effects }); }
+    attack(targetId, weapon, damage, critical = false, actionId = "", effects = null, primary = false) {
+      return this.sendRaw({ type: "attack", targetId, weapon, damage, critical, actionId, effects, primary: Boolean(primary) });
+    }
     openChest(chestId) { return this.sendRaw({ type: "open_chest", chestId }); }
     tame(enemyId) { return this.sendRaw({ type: "tame", enemyId }); }
+    maxHealthUpgrade(source, amount) { return this.sendRaw({ type: "max_health_upgrade", source, amount }); }
     acknowledgeHit(hitId, health, maxHealth) { return this.sendRaw({ type: "player_health_ack", hitId, health, maxHealth }); }
 
     ping() {

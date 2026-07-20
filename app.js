@@ -503,6 +503,21 @@
     };
   }
 
+  function registerNetworkMaxHealthUpgrade(source, count, totalAmount) {
+    if (!multiplayerActionReady() || !coopRuntime?.maxHealthUpgrade) return false;
+    let remainingAmount = Math.max(1, Math.round(Number(totalAmount) || 1));
+    let remainingCount = Math.max(1, Math.floor(Number(count) || 1));
+    let sent = false;
+    while (remainingCount > 0) {
+      const amount = Math.max(1, Math.round(remainingAmount / remainingCount));
+      sent = coopRuntime.maxHealthUpgrade(source, amount) || sent;
+      remainingAmount -= amount;
+      remainingCount -= 1;
+    }
+    if (sent) partyController()?.client?.sendPlayerState(serializeNetworkPlayer(), true);
+    return sent;
+  }
+
   function isOwnedCompanion(enemy) {
     return Boolean(enemy && enemy.tamed && !enemy.dead && !enemy.networkExcluded
       && (!multiplayerWorldActive() || enemy.networkTamedBy === partyController()?.client?.playerId));
@@ -701,14 +716,16 @@
         enemy.health = clamp(Number(event.health), 0, enemy.maxHealth);
         enemy.tameProgress = clamp(Number(event.tameProgress) || 0, 0, 100);
         applyNetworkStatusEffects(enemy, event, event.serverAt);
-        enemy.lastDamageSource = event.playerId === localPlayerId ? "weapon" : "network";
-        enemy.lastWeaponId = event.weapon;
+        enemy.lastDamageSource = event.playerId === localPlayerId && event.weaponCredit ? "weapon" : "network";
+        enemy.lastWeaponId = event.weaponCredit && WEAPONS[event.weapon] ? event.weapon : null;
         if (enemy.health > 0 && isTameableEnemy(enemy) && (enemy.tameProgress >= 100 || enemy.health / enemy.maxHealth <= .5)) setEnemyTameReady(enemy);
         if (event.playerId === localPlayerId) {
           showHit(false);
           audio.hit();
           spawnCombatText(enemy.root.position, String(event.amount), event.critical ? "crit" : "hit");
-          grantWeaponXp(Math.min(Number(event.amount) || 0, enemy.maxHealth), WEAPONS[event.weapon] ? event.weapon : player.activeWeapon);
+          if (event.masteryHit && WEAPONS[event.weapon]) {
+            grantWeaponXp(Math.min(Number(event.amount) || 0, enemy.maxHealth), event.weapon);
+          }
         }
         if (event.dead && !enemy.dead) {
           const rewarded = event.playerId === localPlayerId;
@@ -863,6 +880,7 @@
       },
       onDisconnect: () => {
         networkStats.disconnects += 1;
+        networkLocalTransformHydratedFor = null;
         remoteWardenRenderer?.clear();
       },
       onNetworkStatus: () => {},
@@ -1570,6 +1588,7 @@
   }
 
   function grantXp(amount) {
+    const oldMaximumHealth = maxHealth();
     player.xp += Math.max(0, Math.round(amount));
     let gained = 0;
     while (player.xp >= levelXpTarget(player.level)) {
@@ -1586,6 +1605,7 @@
     if (gained) {
       player.health = maxHealth();
       player.stamina = maxStamina();
+      registerNetworkMaxHealthUpgrade("level", gained, maxHealth() - oldMaximumHealth);
       showProgressionBanner("WARDEN ASCENDED", "LEVEL " + player.level, "+" + gained + " skill point" + (gained > 1 ? "s" : "") + " earned");
     }
     saveProgression();
@@ -1697,6 +1717,9 @@
     else player.skillPoints -= node.cost || 1;
     player.health = Math.min(maxHealth(), player.health + maxHealth() - oldMaxHealth);
     player.stamina = Math.min(maxStamina(), player.stamina + maxStamina() - oldMaxStamina);
+    if (["vitality", "bastion", "run_vigor"].includes(id) && maxHealth() > oldMaxHealth) {
+      registerNetworkMaxHealthUpgrade(id, 1, maxHealth() - oldMaxHealth);
+    }
     saveProgression();
     markRunDirty();
     updateProgressionUI();
@@ -8033,7 +8056,7 @@
         slowMs: weaponId === "staff" ? Math.round((.95 + skillRank("frost_nova") * .55) * 1000) : 0,
         bleedDamage: weaponId === "blade" && skillRank("bleeding_edge") ? Math.max(1, Math.round(finalAmount * .04 * skillRank("bleeding_edge"))) : 0
       } : null;
-      const sent = coopRuntime.attack(dragon.networkId, networkWeapon, finalAmount, criticalHit, networkActionId, networkEffects);
+      const sent = coopRuntime.attack(dragon.networkId, networkWeapon, finalAmount, criticalHit, networkActionId, networkEffects, damageSource === "weapon");
       if (sent) {
         networkStats.attacksSent += 1;
         nearestTarget = dragon;

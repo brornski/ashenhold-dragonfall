@@ -86,8 +86,8 @@
       return true;
     }
 
-    attack(targetId, weapon, damage, critical, actionId, effects) {
-      return this.party.multiplayer && this.client.attack(targetId, weapon, damage, critical, actionId, effects);
+    attack(targetId, weapon, damage, critical, actionId, effects, primary) {
+      return this.party.multiplayer && this.client.attack(targetId, weapon, damage, critical, actionId, effects, primary);
     }
 
     openChest(chestId) {
@@ -96,6 +96,10 @@
 
     tame(enemyId) {
       return this.party.multiplayer && this.client.tame(enemyId);
+    }
+
+    maxHealthUpgrade(source, amount) {
+      return this.party.multiplayer && this.client.maxHealthUpgrade(source, amount);
     }
 
     snapshot() {

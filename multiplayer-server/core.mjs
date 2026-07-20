@@ -8,12 +8,18 @@ const RECONNECT_GRACE_MS = 60 * 1000;
 const SNAPSHOT_INTERVAL_MS = 50;
 const AI_STEP_MS = 100;
 const WEAPON_RULES = {
-  blade: { cooldown: 260, range: 7.5, maxDamage: 180, maxHits: 6 },
-  bow: { cooldown: 380, range: 155, maxDamage: 190, maxHits: 4 },
-  axe: { cooldown: 520, range: 72, maxDamage: 260, maxHits: 10 },
-  staff: { cooldown: 300, range: 125, maxDamage: 210, maxHits: 12 },
+  blade: { cooldown: 220, range: 7.5, maxDamage: 180, maxHits: 6 },
+  bow: { cooldown: 295, range: 162, maxDamage: 190, maxHits: 4 },
+  axe: { cooldown: 405, range: 72, maxDamage: 260, maxHits: 10 },
+  staff: { cooldown: 155, range: 162, maxDamage: 210, maxHits: 12 },
   shout: { cooldown: 1800, range: 56, maxDamage: 180, maxHits: 24 },
   companion: { cooldown: 520, range: 6, maxDamage: 90, maxHits: 1 }
+};
+const MAX_HEALTH_UPGRADES = {
+  level: { amount: 4, uses: 49 },
+  vitality: { amount: 12, uses: 3 },
+  bastion: { amount: 10, uses: 2 },
+  run_vigor: { amount: 15, uses: 3 }
 };
 
 function clamp(value, minimum, maximum) {
@@ -228,6 +234,7 @@ export class RealmServer {
     if (event.type === "register_enemy") return this.registerEnemy(room, player, event);
     if (event.type === "player_health_ack") return this.playerHealthAck(room, player, event);
     if (player.health <= 0) return this.reject(socket, "PLAYER_DEAD", "A fallen Warden cannot change the shared realm.");
+    if (event.type === "max_health_upgrade") return this.maxHealthUpgrade(room, player, event);
     if (event.type === "host_enemy_state") return this.hostEnemyState(room, player, event);
     if (event.type === "attack") return this.attack(room, player, event);
     if (event.type === "open_chest") return this.openChest(room, player, event);
@@ -263,6 +270,7 @@ export class RealmServer {
         joinedAt: now, lastSeenAt: now, lastStateAt: 0, healthInitialized: false,
         lastAttackAt: Object.create(null), attackBatches: new Map(), pendingHits: new Map(),
         healthTokens: 25, lastHealthTokenAt: now, maxHealthAllowance: 0,
+        maxHealthUpgradeUses: Object.create(null),
         reconnectToken: reconnectToken(), socket
       };
       room.players.set(playerId, player);
@@ -348,6 +356,9 @@ export class RealmServer {
 
   playerState(room, player, event) {
     const now = this.now();
+    if (player.healthInitialized && player.health <= 0) {
+      return this.reject(player.socket, "PLAYER_DEAD", "A fallen Warden cannot update movement or combat state.");
+    }
     if (now - player.lastStateAt < 35) return false;
     const incoming = event.state || {};
     const next = {
@@ -454,6 +465,19 @@ export class RealmServer {
       rawDamage: pending.rawDamage, amount: Math.max(0, pending.healthBefore - resolvedHealth),
       avoided: resolvedHealth >= pending.healthBefore, health: player.health
     });
+    return true;
+  }
+
+  maxHealthUpgrade(room, player, event) {
+    const source = cleanId(event.source, "").toLowerCase();
+    const rule = MAX_HEALTH_UPGRADES[source];
+    if (!rule) return this.reject(player.socket, "HEALTH_UPGRADE", "Unknown maximum-health progression source.");
+    const used = Math.floor(player.maxHealthUpgradeUses[source] || 0);
+    if (used >= rule.uses) return this.reject(player.socket, "HEALTH_UPGRADE", "That maximum-health progression source is exhausted.");
+    const amount = Math.floor(clamp(event.amount || rule.amount, 1, rule.amount * 6));
+    player.maxHealthUpgradeUses[source] = used + 1;
+    player.maxHealthAllowance = Math.min(512, (player.maxHealthAllowance || 0) + amount);
+    safeSend(player.socket, { type: "max_health_upgrade", accepted: true, source, amount });
     return true;
   }
 
@@ -575,6 +599,7 @@ export class RealmServer {
     room.revision += 1;
     this.queueEvent(room, "enemy_damage", {
       enemyId: enemy.id, playerId: player.id, weapon, amount, critical: Boolean(event.critical),
+      masteryHit: Boolean(event.primary), weaponCredit: Boolean(event.primary),
       health: enemy.health, dead: enemy.dead, tameProgress: enemy.tameProgress,
       slowUntil: enemy.slowUntil || 0, bleedUntil: enemy.bleedUntil || 0, playerHealth: player.health
     });
@@ -606,6 +631,8 @@ export class RealmServer {
     if (distance2D(player, enemy) > 4.2 || Math.abs(player.y - enemy.y) > 14 || !lineClear(room.navigation, player, enemy)) return this.reject(player.socket, "TAME_RANGE", "Move closer to the creature.");
     if (enemy.tameProgress < 100 && enemy.health > enemy.maxHealth * .5) return this.reject(player.socket, "TAME_NOT_READY", "The creature's will is not broken.");
     enemy.tamedBy = player.id; enemy.handled = true; enemy.state = "bonded"; enemy.targetId = null;
+    enemy.slowUntil = 0; enemy.bleedUntil = 0; enemy.bleedDamage = 0;
+    enemy.bleedOwnerId = null; enemy.nextBleedAt = 0;
     player.companionCount += 1; room.revision += 1;
     this.queueEvent(room, "enemy_tamed", { enemyId: enemy.id, playerId: player.id });
     if (enemy.strongholdId) this.checkStronghold(room, enemy.strongholdId);
@@ -710,7 +737,8 @@ export class RealmServer {
         }
         this.queueEvent(room, "enemy_damage", {
           enemyId: enemy.id, playerId: owner?.id || null, weapon: "blade", source: "bleed",
-          amount, critical: false, health: enemy.health, dead: enemy.dead,
+          amount, critical: false, masteryHit: false, weaponCredit: true,
+          health: enemy.health, dead: enemy.dead,
           tameProgress: enemy.tameProgress, slowUntil: enemy.slowUntil || 0,
           bleedUntil: enemy.bleedUntil || 0, playerHealth: owner?.health
         });
@@ -758,7 +786,8 @@ export class RealmServer {
           }
           this.queueEvent(room, "enemy_damage", {
             enemyId: hostile.id, playerId: owner.id, companionId: enemy.id, weapon: "companion",
-            amount, critical: false, health: hostile.health, dead: hostile.dead,
+            amount, critical: false, masteryHit: false, weaponCredit: false,
+            health: hostile.health, dead: hostile.dead,
             tameProgress: hostile.tameProgress, playerHealth: owner.health
           });
           if (hostile.strongholdId) this.checkStronghold(room, hostile.strongholdId);

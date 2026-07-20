@@ -368,6 +368,20 @@ test("max health growth is allowance-bound and a fallen host yields boss authori
   }
   assert.equal(hostPlayer.maxHealth, 105, "rapid max-health reports cannot ratchet the cap upward");
 
+  for (const [source, amount] of [["level", 4], ["vitality", 12], ["bastion", 10], ["run_vigor", 15]]) {
+    memorySend(realm, host, { type: "max_health_upgrade", source });
+    now += 40;
+    memorySend(realm, host, {
+      type: "player_state",
+      state: { x: 0, y: 0, z: 210, health: hostPlayer.maxHealth + amount, maxHealth: hostPlayer.maxHealth + amount }
+    });
+  }
+  assert.equal(hostPlayer.maxHealth, 146, "level and all three health nodes receive bounded progression growth");
+  memorySend(realm, host, { type: "max_health_upgrade", source: "level", amount: 24 });
+  now += 40;
+  memorySend(realm, host, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 170, maxHealth: 170 } });
+  assert.equal(hostPlayer.maxHealth, 170, "health progression preserves the supported relic multiplier");
+
   now += 40;
   memorySend(realm, host, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 0, maxHealth: 5000 } });
   assert.equal(room.hostId, guestWelcome.playerId, "an alive connected Warden succeeds a fallen host");
@@ -392,7 +406,7 @@ test("authoritative status effects are bounded, tick, slow movement, and expire"
       navigation: { cellSize: 5, width: 20, height: 20, originX: -40, originZ: 170, blockedRuns: [] },
       strongholds: [], chests: [],
       enemies: [{ id: "status-guard", kind: "biomeLight", name: "Status Guard", x: 0, y: 0, z: 210,
-        health: 100, maxHealth: 100, speed: 10, range: 1, damage: 2, sight: 100, state: "combat", tameable: true }]
+        health: 100, maxHealth: 100, speed: 10, range: 1, damage: 2, sight: 100, state: "combat", tameable: true, tameProgress: 70 }]
     }
   });
   memorySend(realm, host, { type: "start_realm" });
@@ -404,7 +418,7 @@ test("authoritative status effects are bounded, tick, slow movement, and expire"
     type: "attack", actionId: "staff-one", targetId: enemy.id, weapon: "staff", damage: 1,
     critical: false, effects: { tameProgress: 9999, slowMs: 999999 }
   });
-  assert.equal(enemy.tameProgress, 30);
+  assert.equal(enemy.tameProgress, 100);
   assert.equal(enemy.slowUntil, now + 2050);
   const beforeSlowMove = enemy.x;
   now += 100;
@@ -431,6 +445,10 @@ test("authoritative status effects are bounded, tick, slow movement, and expire"
     effects: { tameProgress: 0, slowMs: 0 }
   });
   assert.equal(enemy.health, beforeReusedAction - 1, "an expired pre-reconnect action id cannot poison a new page session");
+  memorySend(realm, host, { type: "tame", enemyId: enemy.id });
+  assert.equal(enemy.tamedBy, welcome.playerId);
+  assert.deepEqual({ slowUntil: enemy.slowUntil, bleedUntil: enemy.bleedUntil, bleedDamage: enemy.bleedDamage },
+    { slowUntil: 0, bleedUntil: 0, bleedDamage: 0 }, "bonding clears hostile status effects before the next tick");
 });
 
 test("player hit acknowledgements preserve avoidance and timeout unacknowledged damage", () => {
@@ -467,4 +485,43 @@ test("player hit acknowledgements preserve avoidance and timeout unacknowledged 
   const timedOut = host.find((message) => eventNamed("player_damage")(message) && message.event.hitId === secondHit.event.hitId);
   assert.equal(timedOut.event.timedOut, true);
   assert.equal(realm.rooms.get(welcome.roomCode).players.get(welcome.playerId).health, 90);
+});
+
+test("weapon cadence and projectile envelopes accept legitimate capstone attacks", () => {
+  let now = 1000;
+  const realm = new RealmServer({ now: () => now, randomCode: () => "CADENCE" });
+  const host = new MemorySocket();
+  const welcome = memoryHello(realm, host, { create: true });
+  const weapons = [["blade", 220], ["bow", 295], ["axe", 405], ["staff", 155]];
+  memorySend(realm, host, {
+    type: "register_world",
+    world: {
+      navigation: null, strongholds: [], chests: [],
+      enemies: [
+        ...weapons.map(([weapon], index) => ({ id: `cadence-${weapon}`, kind: "biomeHeavy", x: 1 + index, y: 0, z: 210, health: 1000, maxHealth: 1000 })),
+        { id: "staff-range-valid", kind: "biomeHeavy", x: 160, y: 0, z: 210, health: 100, maxHealth: 100 },
+        { id: "staff-range-invalid", kind: "biomeHeavy", x: 165, y: 0, z: 210, health: 100, maxHealth: 100 }
+      ]
+    }
+  });
+  memorySend(realm, host, { type: "start_realm" });
+  now += 40;
+  memorySend(realm, host, { type: "player_state", state: { x: 0, y: 0, z: 210, health: 100, maxHealth: 100 } });
+  const room = realm.rooms.get(welcome.roomCode);
+  for (const [weapon, cooldown] of weapons) {
+    const enemy = room.enemies.get(`cadence-${weapon}`);
+    memorySend(realm, host, { type: "attack", actionId: `${weapon}-a`, targetId: enemy.id, weapon, damage: 1 });
+    now += cooldown;
+    memorySend(realm, host, { type: "attack", actionId: `${weapon}-b`, targetId: enemy.id, weapon, damage: 1 });
+    assert.equal(enemy.health, 998, `${weapon} accepts its earned minimum cadence`);
+  }
+  now += 155;
+  const valid = room.enemies.get("staff-range-valid");
+  memorySend(realm, host, { type: "attack", actionId: "staff-range-a", targetId: valid.id, weapon: "staff", damage: 1 });
+  assert.equal(valid.health, 99, "staff accepts a visible impact at 160 metres");
+  now += 155;
+  const invalid = room.enemies.get("staff-range-invalid");
+  memorySend(realm, host, { type: "attack", actionId: "staff-range-b", targetId: invalid.id, weapon: "staff", damage: 1 });
+  assert.equal(invalid.health, 100, "staff rejects an impact beyond its projectile envelope");
+  assert.equal(host.find((message) => message.type === "error" && message.code === "ATTACK_RANGE")?.code, "ATTACK_RANGE");
 });
