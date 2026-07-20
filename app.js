@@ -109,6 +109,9 @@
   const MOON_SKYBOX_PATH = "assets/textures/skyboxes/moonfall-moonsky-2k.png";
   const SHORE_SKYBOX_PATH = "assets/textures/skyboxes/drowned-coast-skybox-2k.png";
   const SNOWY_SKYBOX_PATH = "assets/textures/skyboxes/frostbound-skyline-2k.png";
+  const WARDEN_MODEL_PATH = "assets/models/hooded-shadow-assassin/scene.gltf";
+  const WARDEN_MODEL_SCALE = 1.68;
+  const WARDEN_MODEL_Y_OFFSET = 1.6;
   const BIOMES = {
     snowy: { name: "FROSTBOUND WILDS", textureId: "snow", relief: 1.05, base: 2.6, fog: 0x869ca6, fogDensity: .00195, ground: 0x718087, cliff: 0x7d898d, grass: 0x50625c, grassStrength: .42, frost: 0xc9d4d5, frostStart: 16, water: 0x315663, waterLevel: -3.2, waterOpacity: .62, sky: 0xb2c5ce, sun: 0xffead2, sunIntensity: 1.22, hemi: 0xa9bdc4, exposure: 1.1, skyZenith: 0x6b87a0, skyHorizon: 0xdfe9ec, skyGlow: 0xdceef4, stoneTint: 0xcfdde2, particleSize: 1.4, particleOpacity: .5, particleFall: .55, particleCount: 1 },
     jungle: { name: "VERDANT RUINS", textureId: "jungle", relief: .72, base: 3.2, fog: 0x1b352c, fogDensity: .00305, ground: 0x344a32, cliff: 0x465448, grass: 0x284b2d, grassStrength: 1.0, frost: 0x7a8a76, frostStart: 125, water: 0x1e514c, waterLevel: -2.4, waterOpacity: .72, sky: 0x71968d, sun: 0xffd5a7, sunIntensity: 1.12, hemi: 0x759a82, exposure: 1.02, skyZenith: 0x1d3a33, skyHorizon: 0x7fae8f, skyGlow: 0xe8c87a, stoneTint: 0x718a64, particleSize: 1.05, particleOpacity: .38, particleFall: .7, particleCount: .9 },
@@ -1267,6 +1270,7 @@
     relicBonuses: freshRelicBonuses(),
     modelRoot: null,
     modelMixer: null,
+    modelHasClips: false,
     modelActions: {},
     modelState: "",
     modelSword: null,
@@ -2259,7 +2263,7 @@
     nearestTarget = null;
     restoreSprintPoseBones();
     player.sprintPoseWeight = 0;
-    if (player.modelRoot) player.modelRoot.position.y = 0;
+    if (player.modelRoot) player.modelRoot.position.y = player.modelHasClips ? 0 : WARDEN_MODEL_Y_OFFSET;
     setPlayerModelAction("idle", true);
     cameraTrauma = 0;
     camera.fov = 62;
@@ -4032,7 +4036,7 @@
       tree: "assets/models/kenney-castle/tree-large.glb",
       rock: "assets/models/kenney-castle/rocks-large.glb",
       warg: "assets/models/creatures/frost-warg.glb",
-      warden: "assets/models/quaternius-rpg-character/warden.gltf"
+      warden: WARDEN_MODEL_PATH
     };
     BIOME_IDS.forEach((id) => {
       modelPaths["biomeLight_" + id] = "assets/models/quaternius-monsters/" + WORLD_PROFILES[id].lightEnemy[0] + ".gltf";
@@ -7562,8 +7566,9 @@
     const source = visualAssets.models && visualAssets.models.warden;
     if (source) {
       modelRoot = THREE.SkeletonUtils ? THREE.SkeletonUtils.clone(source.scene) : source.scene.clone(true);
-      modelRoot.name = "Quaternius Warden";
-      modelRoot.scale.setScalar(1.02);
+      modelRoot.name = "Hooded Shadow Assassin Warden";
+      modelRoot.scale.setScalar(WARDEN_MODEL_SCALE);
+      modelRoot.position.y = source.animations && source.animations.length ? 0 : WARDEN_MODEL_Y_OFFSET;
       modelRoot.rotation.y = Math.PI;
       modelSword = modelRoot.getObjectByName("Warrior_Sword");
       if (modelSword) modelSword.visible = false;
@@ -7616,6 +7621,7 @@
     player.cape = cape;
     player.modelRoot = modelRoot;
     player.modelMixer = modelMixer;
+    player.modelHasClips = Boolean(source && source.animations && source.animations.length);
     player.modelActions = modelActions;
     player.modelState = "";
     player.modelSword = modelSword;
@@ -7648,7 +7654,11 @@
   }
 
   function setPlayerModelAction(nextState, force) {
-    if (!player.modelMixer || !player.modelActions[nextState]) return;
+    if (!player.modelMixer) return;
+    if (!player.modelActions[nextState]) {
+      player.modelState = nextState;
+      return;
+    }
     if (!force && player.modelState === nextState) return;
     const previous = player.modelActions[player.modelState];
     const next = player.modelActions[nextState];
@@ -9560,7 +9570,7 @@
     player.airbornePhase = "grounded";
     player.landingTime = 0;
     player.landingImpact = 0;
-    if (player.modelRoot) player.modelRoot.position.y = 0;
+    if (player.modelRoot) player.modelRoot.position.y = player.modelHasClips ? 0 : WARDEN_MODEL_Y_OFFSET;
   }
 
   function startGame(forceFresh, networkReason) {
@@ -10216,7 +10226,8 @@
     const slideWeight = player.sliding ? 1 : 0;
     const airborneWeight = !player.grounded ? 1 : 0;
     const landingWeight = player.grounded && player.landingTime > 0 ? clamp(player.landingTime / .22, 0, 1) : 0;
-    const targetOffset = slideWeight ? -.56 : landingWeight ? -.12 * landingWeight : 0;
+    const modelBaseY = player.modelHasClips ? 0 : WARDEN_MODEL_Y_OFFSET;
+    const targetOffset = modelBaseY + (slideWeight ? -.56 : landingWeight ? -.12 * landingWeight : 0);
     player.modelRoot.position.y = lerp(player.modelRoot.position.y, targetOffset, 1 - Math.pow(.0005, dt));
     if (!player.sprintBones || (!slideWeight && !airborneWeight && !landingWeight)) return;
     capturePlayerPoseBones();
@@ -10249,6 +10260,28 @@
       addBoneWorldAxisRotation(bones.lowerLegL, _sprintRight, -.48 * landingWeight);
       addBoneWorldAxisRotation(bones.lowerLegR, _sprintRight, -.48 * landingWeight);
     }
+  }
+
+  function updateStaticWardenPose(dt, groundLocomotion) {
+    if (!player.modelRoot || player.modelHasClips) return;
+    const settle = 1 - Math.pow(.0008, dt);
+    const sprintWeight = player.superSprinting ? 1 : player.sprinting ? .65 : 0;
+    const bob = groundLocomotion ? Math.abs(Math.sin(player.walkCycle * 2)) * (.045 + sprintWeight * .07) : 0;
+    const landing = player.grounded && player.landingTime > 0 ? clamp(player.landingTime / .22, 0, 1) : 0;
+    let targetY = WARDEN_MODEL_Y_OFFSET + (player.sliding ? -.56 : -.12 * landing);
+    let targetX = player.sliding ? -.54 : !player.grounded ? (player.velocityY > 0 ? -.12 : .1) : -.18 * sprintWeight;
+    let targetZ = groundLocomotion ? Math.sin(player.walkCycle) * (.025 + sprintWeight * .035) : 0;
+    let targetYaw = Math.PI;
+    if (player.attackTime > 0) {
+      const progress = 1 - player.attackTime / player.attackDuration;
+      targetYaw += Math.sin(progress * Math.PI) * (player.attackVariant % 2 ? -.36 : .36);
+      targetX -= Math.sin(progress * Math.PI) * .12;
+    }
+    if (player.hitReaction > 0) targetZ += Math.sin(clamp(player.hitReaction / .24, 0, 1) * Math.PI) * .16;
+    player.modelRoot.position.y = lerp(player.modelRoot.position.y, targetY + bob, settle);
+    player.modelRoot.rotation.x = lerp(player.modelRoot.rotation.x, targetX, settle);
+    player.modelRoot.rotation.y = lerp(player.modelRoot.rotation.y, targetYaw, settle);
+    player.modelRoot.rotation.z = lerp(player.modelRoot.rotation.z, targetZ, settle);
   }
 
   function animatePlayer(dt, moving) {
@@ -10339,6 +10372,7 @@
       player.modelMixer.update(dt);
       updateSprintPose(dt);
       updateAirborneAndSlideModelPose(dt);
+      updateStaticWardenPose(dt, groundLocomotion);
     }
   }
 

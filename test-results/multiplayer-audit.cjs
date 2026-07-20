@@ -605,7 +605,7 @@ async function closePageClient(page) {
       twoRemoteTracksShared: finalStates.every((state) => state.sampledRemotePlayers.length === 1),
       twoRemoteAvatarsConstructed: fallbackAvatars.every((entry) => entry.count === 1 && entry.sceneChildren === 1),
       remoteUsesFullMainWardenModel: remoteWardens.length === 2 && remoteWardens.every((warden) => warden.fullModel
-        && warden.sourcePath === "assets/models/quaternius-rpg-character/warden.gltf" && warden.fallbackVisible === false),
+        && warden.sourcePath === "assets/models/hooded-shadow-assassin/scene.gltf" && warden.fallbackVisible === false),
       remoteWardenMaterialsIsolated: remoteWardens.length === 2 && remoteWardens.every((warden) => warden.isolatedMaterials),
       remoteWardenAnimationSetComplete: remoteWardens.length === 2 && remoteWardens.every((warden) => canonicalAnimations.every((state) => warden.animationSet?.includes(state))),
       stableDistinctServerColors: Object.keys(joinedColors).length === 2 && new Set(Object.values(joinedColors)).size === 2

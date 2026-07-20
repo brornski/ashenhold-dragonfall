@@ -33,13 +33,15 @@
 - Full notice: `assets/models/creatures/LICENSE-FROST-WARG.md`.
 - The in-game name, material tint, scale, and role are project adaptations.
 
-## Animated Warden
+## Hooded Shadow Assassin Warden
 
-- Runtime file: `assets/models/quaternius-rpg-character/warden.gltf`.
-- Source: Quaternius RPG Character Pack, https://quaternius.com/packs/rpgcharacters.html
-- The pack provides six rigged, animated, textured fantasy characters under CC0 for personal and commercial use.
-- The Warrior character supplies the Warden's blended idle, walk, run, attack, hit, roll, and death animations.
-- Local notice: `assets/models/quaternius-rpg-character/LICENSE-QUATERNIUS-CC0.txt`.
+- Runtime files: `assets/models/hooded-shadow-assassin/scene.gltf`, its buffer, and accompanying textures.
+- Source: Hooded Shadow Assassin, https://sketchfab.com/3d-models/hooded-shadow-assassin-d3d3c1efefa34f95a0b0ebc0dbae620d
+- Author: iRahulRajput, https://sketchfab.com/rt699448
+- License: Creative Commons Attribution 4.0, https://creativecommons.org/licenses/by/4.0/
+- The supplied model is used for both the local Warden and color-distinguished remote party Wardens. The included `license.txt` preserves the original attribution notice.
+
+The previous Quaternius Warrior asset remains preserved in the repository under CC0; its local notice is `assets/models/quaternius-rpg-character/LICENSE-QUATERNIUS-CC0.txt`.
 
 ## Biome monster roster
 

@@ -1,8 +1,9 @@
 (() => {
   "use strict";
 
-  const WARDEN_MODEL_PATH = "assets/models/quaternius-rpg-character/warden.gltf";
-  const WARDEN_SCALE = 1.02;
+  const WARDEN_MODEL_PATH = "assets/models/hooded-shadow-assassin/scene.gltf";
+  const WARDEN_SCALE = 1.68;
+  const WARDEN_Y_OFFSET = 1.6;
   const FALLBACK_PALETTE = ["#69d5e6", "#e79a62", "#8bd58c", "#c695ef"];
   const ACTIVE_RENDERERS = new Set();
   const AXIS_X = new THREE.Vector3(1, 0, 0);
@@ -269,6 +270,7 @@
         modelMaterials: new Set(),
         modelRoot: null,
         modelMixer: null,
+        modelHasClips: false,
         modelActions: {},
         animationSet: [],
         animationState: "idle",
@@ -376,8 +378,9 @@
         warden.modelError = String(error?.message || error);
         return false;
       }
-      modelRoot.name = "Quaternius Warden (remote)";
+      modelRoot.name = "Hooded Shadow Assassin Warden (remote)";
       modelRoot.scale.setScalar(WARDEN_SCALE);
+      modelRoot.position.y = WARDEN_Y_OFFSET;
       modelRoot.rotation.y = Math.PI;
       const accent = new THREE.Color(warden.accentColor);
       const sourceMaterials = new Set();
@@ -390,7 +393,7 @@
         if (!object.isMesh && !object.isSkinnedMesh) return;
         object.castShadow = true;
         object.receiveShadow = true;
-        const accentTarget = /shoulderpad|cape|cloth|trim|hood|emblem/i.test(`${object.name} ${Array.isArray(object.material) ? object.material.map((item) => item?.name || "").join(" ") : object.material?.name || ""}`);
+        const accentTarget = true;
         const cloneMaterial = (material) => {
           if (!material) return material;
           const clone = material.clone();
@@ -409,6 +412,7 @@
       warden.root.add(modelRoot);
       warden.modelRoot = modelRoot;
       warden.modelMixer = new THREE.AnimationMixer(modelRoot);
+      warden.modelHasClips = Boolean(source.animations.length);
       const clip = (pattern, fallback) => source.animations.find((item) => pattern.test(item.name)) || fallback;
       const idle = clip(/^Idle_Weapon$/i, clip(/^Idle$/i, source.animations[0]));
       const walk = clip(/^Walk$/i, idle);
@@ -474,7 +478,11 @@
       let actionKey = state;
       if (state === "attack") actionKey = warden.attackVariant % 2 ? "attack1" : "attack2";
       const next = warden.modelActions[actionKey] || warden.modelActions.idle;
-      if (!next) return;
+      if (!next) {
+        warden.animationState = state;
+        warden.actionKey = actionKey;
+        return;
+      }
       const sameSemanticState = warden.animationState === state;
       if (!force && sameSemanticState && warden.actionKey === actionKey) return;
       const previous = warden.modelActions[warden.actionKey];
@@ -516,8 +524,18 @@
     applyFullModelPose(warden, state, dt) {
       if (!warden.modelRoot) return;
       const bones = warden.poseBones || {};
-      const targetY = state === "slide" ? -.56 : state === "land" ? -.1 : 0;
+      const moving = ["walk", "run", "sprint", "superSprint"].includes(state);
+      const staticBob = !warden.modelHasClips && moving ? Math.abs(Math.sin(warden.phase * 2)) * (state === "superSprint" ? .11 : state === "sprint" ? .085 : .05) : 0;
+      const targetY = WARDEN_Y_OFFSET + (state === "slide" ? -.56 : state === "land" ? -.1 : 0) + staticBob;
       warden.modelRoot.position.y += (targetY - warden.modelRoot.position.y) * (1 - Math.pow(.0005, dt));
+      if (!warden.modelHasClips) {
+        const sprintWeight = state === "superSprint" ? 1 : state === "sprint" ? .68 : 0;
+        const targetX = state === "slide" ? -.54 : state === "jump" ? -.12 : state === "fall" ? .1 : -.18 * sprintWeight;
+        const targetZ = moving ? Math.sin(warden.phase) * (.025 + sprintWeight * .035) : 0;
+        warden.modelRoot.rotation.x += (targetX - warden.modelRoot.rotation.x) * (1 - Math.pow(.0008, dt));
+        warden.modelRoot.rotation.y += (Math.PI - warden.modelRoot.rotation.y) * (1 - Math.pow(.0008, dt));
+        warden.modelRoot.rotation.z += (targetZ - warden.modelRoot.rotation.z) * (1 - Math.pow(.0008, dt));
+      }
       if (state === "sprint" || state === "superSprint") {
         const weight = state === "superSprint" ? 1 : .68;
         applyLocalRotation(bones.torso, AXIS_X, -.34 * weight);
