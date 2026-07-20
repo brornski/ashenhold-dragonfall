@@ -625,7 +625,19 @@
       }
     }
   },
-  "biomes": {},
+  "biomes": {
+    "moon": {
+      "ground": "#444550",
+      "cliff": "#5c5d6b",
+      "grass": "#4c5260",
+      "fog": "#1a1633",
+      "fogDensity": 0.0021,
+      "exposure": 0.9,
+      "treeDensity": 0.2,
+      "propDensity": 1,
+      "grassDensity": 1
+    }
+  },
   "enemies": {
     "global": {},
     "byKind": {}
