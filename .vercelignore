@@ -4,6 +4,9 @@ AGENTS.md
 GAME-DEVELOPER-GUIDE.md
 README.md
 open-dragon-browser.cmd
+open-admin-editor.cmd
+admin-editor.js
+admin-editor.css
 test-results/
 tools/
 *.log

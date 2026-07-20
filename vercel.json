@@ -22,7 +22,7 @@
       ]
     },
     {
-      "source": "/(app.js|styles.css|manifest.json|multiplayer-client.js|multiplayer-avatars.js|multiplayer-game.js|multiplayer-ui.js)",
+      "source": "/(app.js|styles.css|world-overrides.js|manifest.json|multiplayer-client.js|multiplayer-avatars.js|multiplayer-game.js|multiplayer-ui.js)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=3600, stale-while-revalidate=86400" }
       ]

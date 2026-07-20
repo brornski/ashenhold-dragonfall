@@ -76,12 +76,31 @@ The start screen is a responsive command deck with an animated continent sigil, 
 
 Landscape touch layouts include movement, look, attack, jump, downhill slide/super sprint, dodge, lock, shout/interact, weapon switching, and direct skill access.
 
+## Ashenhold Forge local editor
+
+Ashenhold Forge is a local-only world sandbox for changing the authored continent while viewing the result in the game. On Windows, run `open-admin-editor.cmd` from the repository root. The launcher starts a loopback bridge on the first available editor port (`4174`, `4184`, or `4194`) and opens `http://127.0.0.1:<port>/?admin` in an app window when Edge or Chrome is available. Admin mode is accepted only on `localhost`, `127.x.x.x`, or `[::1]`; adding `?admin` to the public game URL does not enable it. The game enters the editable world directly with simulation paused, and normal gameplay saves are disabled for that session.
+
+Forge supports these core workflows:
+
+- click a world object or choose it from the searchable, category-filtered Scene tree; use the axis gizmo or inspector for snapped move (`G`), rotate (`R`), and scale (`S`) edits
+- frame, duplicate, hide, disable collision on, or delete the selection; drop it to terrain, reset its transform, tint its material, replace a same-origin `assets/` texture, or replace model-slot geometry while retaining its fitted transform
+- add catalog models at the camera and tune each biome's ground, cliff, grass, fog, exposure, vegetation, and prop density; Ember Dunes intentionally keeps tree density at zero
+- tune global or per-enemy-kind health, damage, speed, attack range, sight, tracking, and attack rate, or set exact values on the selected enemy
+- press `F` for freecam (`WASD`, `Q`/`E`, Shift boost, drag to look, wheel for speed), `N` for Warden noclip, and `V` to return to selection; use `Ctrl+Z` / `Ctrl+Y` for history and backtick to collapse the panel
+
+The Publish tab validates the document and can copy/download JSON, import JSON, or export a ready-to-use `world-overrides.js` source file. Browser edits also maintain a local draft. **Save Repo** uses the authenticated loopback bridge to atomically replace only the repository-root `world-overrides.js`; a regular static server can run the editor in export-only mode but cannot save to the repository. Some density increases beyond the currently allocated instance capacity require Save Repo followed by a reload.
+
+**Publish Live** is intentionally guarded. It is available only when the bridge was started with publishing enabled, the checkout is on the configured `main` branch, no unrelated tracked file is modified, the GitHub `origin` is valid, and local `HEAD` exactly matches `origin/main` before Forge creates its one override commit. After confirmation it validates and saves the override, stages only `world-overrides.js`, creates a commit when needed, and pushes `HEAD:main`. Git credentials stay in the local Git configuration and are never sent to the browser.
+
+`world-overrides.js` is the editor's only production artifact. It contains data under `window.AshenholdWorldOverrides`, is loaded before `app.js`, and is schema-, signature-, path-, count-, and bounds-validated before the runtime applies it. The editor UI, local bridge, session token, mutation API, tools, tests, secrets, and workstation paths are never part of the deployed site. An ordinary game URL neither requests the editor assets nor exposes `window.__ASHENHOLD_ADMIN__`.
+
 ## Technical overview
 
 The game client has no runtime package manager or build step. It is static HTML/CSS/JavaScript using a locally vendored Three.js r128 stack and same-origin models, textures, fonts, and licenses. Co-op is backed by a separate Node WebSocket room service.
 
 - `index.html` - semantic shell, HUD, menus, title deck, touch controls
 - `styles.css` - responsive interface, animation, accessibility, biome grading
+- `world-overrides.js` - validated, data-only Forge output applied by the normal runtime
 - `app.js` - renderer, authored continent, collision, AI, combat, progression, saves, audio, debug API
 - `multiplayer-client.js` - protocol 2 client, private session reconnect credentials, interpolation, and server URL selection
 - `multiplayer-avatars.js` - animated remote-Warden presentation
@@ -91,8 +110,9 @@ The game client has no runtime package manager or build step. It is static HTML/
 - `assets/` - local runtime libraries, CC0 models, textures, fonts, and license notices
 - `.github/workflows/pages.yml` - runtime-only GitHub Pages deployment
 - `test-results/` - Playwright smoke, production, accessibility, payload, and live-deployment audits
+- `admin-editor.js`, `admin-editor.css`, `tools/ashenhold-admin-server.mjs` - local-only Forge UI and loopback bridge; excluded from production
 
-GitHub Pages receives the four base runtime files, four multiplayer browser modules, and `assets/`; the Node server, tests, handoff documents, tools, and workstation metadata are excluded from the deployment artifact.
+GitHub Pages receives the base runtime files (including `world-overrides.js`), four multiplayer browser modules, and `assets/`; the Forge UI/bridge, Node room server, tests, handoff documents, tools, and workstation metadata are excluded from the deployment artifact.
 
 ### Co-op service and security
 
@@ -148,10 +168,11 @@ npm run audit
 npm run a11y
 npm run payload
 npm run motion
+npm run admin
 npm run live
 ```
 
-Release 5.6 is gated by fixed-continent, deterministic gameplay, garrison-AI, and traversal-motion regressions; a six-zone production audit; desktop/mobile WCAG scans; a cold-start payload budget under 18 MB; Node room-service tests; a two-browser production-adapter audit; a two-client remote protocol 2 socket smoke; and a live GitHub Pages audit. The service suite covers fixed-world validation, private reconnect credential rejection, immediate host succession, reserved reconnect slots, authoritative world/enemy/chest/stronghold state, bounded health and status effects, hit acknowledgements with timeout fallback, and supported weapon cadence/range envelopes. The complete contracts and extension notes are in [GAME-DEVELOPER-GUIDE.md](GAME-DEVELOPER-GUIDE.md).
+Release 5.6 is gated by fixed-continent, deterministic gameplay, garrison-AI, traversal-motion, and Forge admin regressions; a six-zone production audit; desktop/mobile WCAG scans; a cold-start payload budget under 18 MB; Node room-service tests; a two-browser production-adapter audit; a two-client remote protocol 2 socket smoke; and a live GitHub Pages audit. `npm run admin` verifies loopback authorization, override validation, editing/history, biome and enemy tuning, data-only export, and the absence of editor assets or mutation APIs on an ordinary URL. The service suite covers fixed-world validation, private reconnect credential rejection, immediate host succession, reserved reconnect slots, authoritative world/enemy/chest/stronghold state, bounded health and status effects, hit acknowledgements with timeout fallback, and supported weapon cadence/range envelopes. The complete contracts and extension notes are in [GAME-DEVELOPER-GUIDE.md](GAME-DEVELOPER-GUIDE.md).
 
 ## Assets and saves
 

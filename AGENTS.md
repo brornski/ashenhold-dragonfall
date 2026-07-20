@@ -9,7 +9,8 @@ This file applies to the entire repository. Read `GAME-DEVELOPER-GUIDE.md` and `
 - Source: https://github.com/brornski/ashenhold-dragonfall
 - Runtime: dependency-free static HTML/CSS/JavaScript client with Three.js r128 and loaders vendored under `assets/vendor/`; optional co-op uses the separate Node service under `multiplayer-server/`.
 - Main gameplay source: `app.js`. Multiplayer boundaries are `multiplayer-client.js`, `multiplayer-avatars.js`, `multiplayer-game.js`, and `multiplayer-ui.js`. There is no client build step; dev packages live only under `test-results/` and `multiplayer-server/`.
-- World: 1,800 metres, one unit per metre, layout version 7, six generated sky/ecology families, 24-32 infrastructure sites, thousands of instanced trees, two walkable ascent structures, three forts, a keep, and 8-11 seeded settlement POIs per realm.
+- Forge: `open-admin-editor.cmd` opens the local-only `?admin` sandbox through `tools/ashenhold-admin-server.mjs`. `admin-editor.js`/`.css` and the bridge are development assets; `world-overrides.js` is the editor's only production artifact.
+- World: 1,800 metres, one unit per metre, layout version 8, six authored biome/sky/ecology families, 48 infrastructure sites, thousands of instanced trees, six walkable ascent structures, six forts, a keep, and connected settlement POIs on one fixed continent.
 - POIs: hamlets, watchposts, shrines/graveyards, raider camps, and ruin clusters assembled from vendored CC0 models. Location guards and stronghold garrisons leash to their home areas.
 - Combat: blade, bow, axe, staff; animation-timed release, dodge/i-frames, target lock, telegraphs, hit-stop, shake, knockback, dragons, and tameable creatures.
 - Conquest: no wave mode remains. Every generated location is a stronghold with a level-scaled garrison. Forts/keep can gain golems at higher levels. Clearing grants a kind-specific bonus.
@@ -27,7 +28,7 @@ This file applies to the entire repository. Read `GAME-DEVELOPER-GUIDE.md` and `
 ## Non-negotiable implementation rules
 
 1. Preserve deterministic query overrides: `?test&biome=jungle&seed=424242`.
-2. Keep mutating gameplay helpers behind `?test`; the normal `window.ashenholdGame` surface exposes only read-only `snapshot()` and `modelCatalog()`. Multiplayer module globals are protocol/presentation boundaries, not test backdoors.
+2. Keep mutating gameplay helpers behind `?test`; the normal `window.ashenholdGame` surface exposes only read-only `snapshot()`, `modelCatalog()`, and `multiplayerSnapshot()`. Multiplayer module globals are protocol/presentation boundaries, not test backdoors.
 3. Keep test saves isolated unless the URL also contains `test-save`.
 4. Bump `WORLD_LAYOUT_VERSION` when generated geometry, POI placement, or collider topology changes incompatibly. Reject stale active runs; never wipe permanent progress.
 5. Migrate old boolean skill maps, legacy single-weapon mastery, and progression payloads without silently dropping user data. Refuse unknown future payload versions.
@@ -36,12 +37,16 @@ This file applies to the entire repository. Read `GAME-DEVELOPER-GUIDE.md` and `
 8. Keep all models, textures, scripts, fonts, PBR maps, and non-party requests same-origin. The only approved cross-origin runtime request is the opt-in secure party socket declared by `<meta name="ashenhold-multiplayer-url">`: `wss://multiplayer-server-weld.vercel.app/api/ws`. Any other external request is a release blocker.
 9. Preserve adaptive pixel ratio, far-garrison visibility culling, reduced-motion behavior, keyboard focus, touch controls, and 844x390 landscape support.
 10. Attribute every third-party asset in `ATTRIBUTIONS.md` and retain its local license notice.
-11. GitHub Pages must deploy a runtime-only artifact. Do not publish tests, handoff documents, tools, workstation paths, credentials, or reference art.
+11. GitHub Pages must deploy a runtime-only artifact. Among Forge files, publish only the data-only `world-overrides.js`; do not publish the editor UI, launcher, bridge, admin audit, tests, handoff documents, tools, workstation paths, credentials, or reference art.
 12. A displayed skill node must have a gameplay effect and save contract. A location that appears in the stronghold total must be clearable without a soft lock.
 13. Do not claim a release from visual inspection alone. Run every gate below.
 14. Keep the four multiplayer browser scripts in dependency order before `app.js`: client, avatars, game coordinator, UI. GitHub Pages must publish all four, but must never publish `multiplayer-server/`.
 15. Room codes are discoverable invitations, not authentication. Never put credentials or privileged secrets in browser code, socket URLs, room payloads, logs, screenshots, or docs. Production transport must be `wss://`; plain `ws://` is local-development only.
 16. Preserve honest co-op limits: memory-only rooms, 30-minute idle expiry, 60-second reconnect grace, local/browser progression, no accounts, matchmaking, cloud save, chat, durable recovery, or anti-cheat guarantee.
+17. Admin mode must remain loopback-only (`localhost`, `127.x.x.x`, or `[::1]`), disable gameplay persistence, and dynamically load its UI only after the hostname gate. An ordinary or deployed URL must not expose `window.__ASHENHOLD_ADMIN__`, render the panel, or request editor assets.
+18. Keep `world-overrides.js` declarative under `window.AshenholdWorldOverrides`. Require schema version 1 and the exact authored-world signature, then sanitize all IDs, counts, transforms, asset paths, biome fields, and enemy values before application. Never add executable admin behavior to the override.
+19. The Forge bridge must bind to loopback, validate Host and Origin, require its random session token for every mutation, and keep repository writes confined to `world-overrides.js`. Never send Git credentials or privileged secrets to browser code.
+20. Publish Live must remain opt-in and guarded by the configured publish branch, a GitHub `origin`, exact local-HEAD equality with the fetched remote branch before the Forge commit, a clean unrelated tracked worktree, and `git diff --check`; stage and push only `world-overrides.js`. Forge never mutates the deployed site directly.
 
 ## Required edit and release loop
 
@@ -57,15 +62,18 @@ From the repository root:
    node --check multiplayer-avatars.js
    node --check multiplayer-game.js
    node --check multiplayer-ui.js
+   node --check admin-editor.js
+   node --check tools/ashenhold-admin-server.mjs
    node --check test-results/e2e-smoke.cjs
    node --check test-results/ai-garrison-audit.cjs
    node --check test-results/motion-regression.cjs
    node --check test-results/production-audit.cjs
    node --check test-results/live-deployment-audit.cjs
+   node --check test-results/admin-editor-audit.cjs
    ```
 
 4. Serve the repository over HTTP. Port 4173 is conventional; set `ASHENHOLD_BASE` if another port is used.
-5. Run the deterministic smoke, AI audit, motion regression, production audit, accessibility audit, payload audit, and multiplayer-server test suite.
+5. Run the deterministic smoke, AI audit, motion regression, Forge admin audit, production audit, accessibility audit, payload audit, and multiplayer-server test suite.
 6. Inspect every top-level check and generated screenshot. Any false gate, serious/critical accessibility violation, external request, or startup transfer above 18 MB blocks release.
 7. Merge to `main` only after the local gates pass. `.github/workflows/pages.yml` publishes the runtime-only artifact.
 8. Configure the Pages source as GitHub Actions if it is not already configured, wait for the deployment workflow, then run the live HTTP audit and browser smoke against the stable Pages URL.
@@ -83,6 +91,7 @@ npm run audit
 npm run a11y
 npm run payload
 npm run motion
+npm run admin
 ```
 
 The room service has its own reproducible gate:
@@ -111,6 +120,7 @@ node test-results\e2e-smoke.cjs
 - Co-op: verify two clients align realm/seed, only the host registers/starts the world, remote Wardens interpolate, authoritative enemy/chest/tame/stronghold events converge, reconnect and host succession work, and Solo creates no socket.
 - Saves: verify progression migration, permanent relic restoration, stronghold cleared IDs, handled garrison members, companions, and next-realm cleanup.
 - Assets: verify active biome actors animate, dense model instances render, catalog paths exist, and every request is same-origin except the approved opt-in secure party WebSocket.
-- Deployment: verify layout marker 7, manifest scope under the repository path, core GLTF/PBR assets, all four multiplayer modules, runtime-only exclusions, the exact public socket meta value, and a clean live browser boot.
+- Forge: launch through the localhost bridge; verify selection/gizmo transforms, freecam/noclip, collision linkage, model/biome/enemy tuning, undo/redo, valid JSON/source export, atomic Save Repo confinement, guarded publishing, and a normal URL with no admin runtime or editor asset requests. Ember Dunes must remain treeless.
+- Deployment: verify layout marker 8, manifest scope under the repository path, core GLTF/PBR assets, all four multiplayer modules, runtime-only exclusions, the exact public socket meta value, and a clean live browser boot.
 
 The full architecture, balance tables, save envelopes, debug hooks, audit coverage, and honest limitations are in `GAME-DEVELOPER-GUIDE.md`.

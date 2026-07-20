@@ -55,7 +55,11 @@
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const launchParams = new URLSearchParams(window.location.search);
   const testMode = launchParams.has("test");
-  const persistenceDisabled = testMode && !launchParams.has("test-save");
+  const loopbackAdminHost = /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(window.location.hostname);
+  const adminRequested = launchParams.has("admin");
+  const adminMode = adminRequested && loopbackAdminHost;
+  const persistenceDisabled = (testMode && !launchParams.has("test-save")) || adminMode;
+  if (adminRequested && !adminMode) console.warn("Ashenhold admin mode is available only on a loopback URL.");
   const RUN_SAVE_KEY = "ashenhold-active-run-v1";
   const WORLD_ID = "ashenhold-continent-v1";
   const WORLD_LAYOUT_SIGNATURE = "ashenhold-authored-continent-8";
@@ -109,7 +113,166 @@
     mountains: { name: "SKY-SUNDER PEAKS", textureId: "mountains", relief: 1.38, base: 2.1, fog: 0x465961, fogDensity: .00185, ground: 0x465054, cliff: 0x586267, grass: 0x3f5044, grassStrength: .38, frost: 0xd8dedd, frostStart: 28, water: 0x243f4a, waterLevel: -5.6, waterOpacity: .58, sky: 0x879ba6, sun: 0xffe6ca, sunIntensity: 1.3, hemi: 0x879ba4, exposure: 1.0, skyZenith: 0x4a5568, skyHorizon: 0xb8c4cc, skyGlow: 0xffd9a8, stoneTint: 0x868e94, particleSize: .9, particleOpacity: .26, particleFall: 1.1, particleCount: .8 },
     moon: { name: "MOONFALL EXPANSE", textureId: "moon", relief: .84, base: 2.8, fog: 0x1a1633, fogDensity: .00205, ground: 0x444550, cliff: 0x5c5d6b, grass: 0x4c5260, grassStrength: 0, frost: 0xa4a7ba, frostStart: 34, water: 0x111522, waterLevel: -9, waterOpacity: .18, sky: 0x30344d, sun: 0xc3ccff, sunIntensity: 1.05, hemi: 0x606986, exposure: .88, skyZenith: 0x101426, skyHorizon: 0x4a4e78, skyGlow: 0xb8c4ff, stoneTint: 0x9a9ec0, particleSize: .85, particleOpacity: .24, particleFall: .4, particleCount: .55 }
   };
+  const BASE_BIOME_SETTINGS = Object.freeze(Object.keys(BIOMES).reduce((output, id) => {
+    const source = BIOMES[id];
+    output[id] = Object.freeze({
+      ground: source.ground, cliff: source.cliff, grass: source.grass, fog: source.fog,
+      frost: source.frost, sky: source.sky, sun: source.sun,
+      fogDensity: source.fogDensity, exposure: source.exposure,
+      treeDensity: id === "desert" ? 0 : 1, propDensity: 1, grassDensity: 1
+    });
+    return output;
+  }, {}));
   const BIOME_IDS = Object.keys(BIOMES);
+  const WORLD_OVERRIDE_SCHEMA_VERSION = 1;
+  const EMPTY_WORLD_OVERRIDES = Object.freeze({
+    schemaVersion: WORLD_OVERRIDE_SCHEMA_VERSION,
+    worldSignature: WORLD_LAYOUT_SIGNATURE,
+    entities: Object.freeze({}),
+    biomes: Object.freeze({}),
+    enemies: Object.freeze({ global: Object.freeze({}), byKind: Object.freeze({}) })
+  });
+
+  function overrideRecord(value) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  }
+
+  function overrideNumber(value, minimum, maximum, fallback) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
+  }
+
+  function overrideColor(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, Math.min(0xffffff, Math.round(value)));
+    if (typeof value !== "string" || !/^#?[0-9a-f]{6}$/i.test(value.trim())) return null;
+    return parseInt(value.trim().replace(/^#/, ""), 16);
+  }
+
+  function overrideTexturePath(value) {
+    if (typeof value !== "string" || value.length > 220 || !/^assets\/[a-z0-9_./-]+$/i.test(value)) return null;
+    const segments = value.split("/");
+    if (segments[0] !== "assets" || segments.some((segment) => !segment || segment === "." || segment === "..")) return null;
+    return /\.(?:png|jpe?g|webp)$/i.test(value) ? value : null;
+  }
+
+  function validateAdminDocumentInput(value, depth) {
+    const level = depth || 0;
+    if (level > 10) throw new Error("Editor document nesting is too deep.");
+    if (!value || typeof value !== "object") return;
+    Object.keys(value).forEach((key) => {
+      if (["__proto__", "prototype", "constructor"].includes(key)) throw new Error("Editor document contains a forbidden property name.");
+      validateAdminDocumentInput(value[key], level + 1);
+    });
+    if (level === 0) {
+      if (value.schemaVersion !== WORLD_OVERRIDE_SCHEMA_VERSION || value.worldSignature !== WORLD_LAYOUT_SIGNATURE) throw new Error("Editor document schema or world signature does not match this build.");
+      const entities = overrideRecord(value.entities) || {};
+      Object.keys(entities).forEach((id) => {
+        const entry = overrideRecord(entities[id]);
+        if (entry && entry.texture !== undefined && !overrideTexturePath(entry.texture)) throw new Error("Invalid texture path for " + id + ". Use a PNG, JPEG, or WebP under assets/.");
+      });
+    }
+  }
+
+  function sanitizeWorldOverrides(source) {
+    const raw = overrideRecord(source);
+    if (!raw || raw.schemaVersion !== WORLD_OVERRIDE_SCHEMA_VERSION || raw.worldSignature !== WORLD_LAYOUT_SIGNATURE) {
+      return JSON.parse(JSON.stringify(EMPTY_WORLD_OVERRIDES));
+    }
+    const output = {
+      schemaVersion: WORLD_OVERRIDE_SCHEMA_VERSION,
+      worldSignature: WORLD_LAYOUT_SIGNATURE,
+      entities: {}, biomes: {}, enemies: { global: {}, byKind: {} }
+    };
+    const entities = overrideRecord(raw.entities) || {};
+    Object.keys(entities).slice(0, 2400).forEach((id) => {
+      if (["__proto__", "prototype", "constructor"].includes(id) || !/^[a-z0-9:_-]{1,120}$/i.test(id)) return;
+      const entry = overrideRecord(entities[id]);
+      if (!entry) return;
+      const clean = {};
+      if (typeof entry.type === "string" && /^[a-z-]{1,30}$/i.test(entry.type)) clean.type = entry.type;
+      if (typeof entry.label === "string") clean.label = entry.label.slice(0, 100);
+      if (typeof entry.modelSlot === "string" && /^[a-z0-9_-]{1,64}$/i.test(entry.modelSlot)) clean.modelSlot = entry.modelSlot;
+      const position = overrideRecord(entry.position);
+      if (position) clean.position = {
+        x: overrideNumber(position.x, -HALF_WORLD, HALF_WORLD, 0),
+        y: overrideNumber(position.y, -200, 600, 0),
+        z: overrideNumber(position.z, -HALF_WORLD, HALF_WORLD, 0)
+      };
+      if (entry.rotationY !== undefined) clean.rotationY = overrideNumber(entry.rotationY, -Math.PI * 8, Math.PI * 8, 0);
+      const scale = overrideRecord(entry.scale);
+      if (scale) clean.scale = {
+        x: overrideNumber(scale.x, .02, 25, 1),
+        y: overrideNumber(scale.y, .02, 25, 1),
+        z: overrideNumber(scale.z, .02, 25, 1)
+      };
+      const color = overrideColor(entry.color);
+      if (color != null) clean.color = "#" + color.toString(16).padStart(6, "0");
+      const texture = overrideTexturePath(entry.texture);
+      if (texture) clean.texture = texture;
+      if (typeof entry.visible === "boolean") clean.visible = entry.visible;
+      if (typeof entry.deleted === "boolean") clean.deleted = entry.deleted;
+      if (typeof entry.collision === "boolean") clean.collision = entry.collision;
+      const enemy = overrideRecord(entry.enemy);
+      if (enemy) clean.enemy = {
+        health: overrideNumber(enemy.health, 1, 100000, undefined),
+        maxHealth: overrideNumber(enemy.maxHealth, 1, 100000, undefined),
+        damage: overrideNumber(enemy.damage, 0, 10000, undefined),
+        speed: overrideNumber(enemy.speed, 0, 250, undefined),
+        attackRange: overrideNumber(enemy.attackRange, .1, 250, undefined),
+        attackInterval: overrideNumber(enemy.attackInterval, .05, 60, undefined),
+        sightRange: overrideNumber(enemy.sightRange, .1, 500, undefined),
+        tracking: overrideNumber(enemy.tracking, .05, 10, undefined)
+      };
+      output.entities[id] = clean;
+    });
+    const biomeFields = ["ground", "cliff", "grass", "fog", "frost", "sky", "sun"];
+    const biomes = overrideRecord(raw.biomes) || {};
+    BIOME_IDS.forEach((id) => {
+      const entry = overrideRecord(biomes[id]);
+      if (!entry) return;
+      const clean = {};
+      biomeFields.forEach((field) => {
+        const color = overrideColor(entry[field]);
+        if (color != null) clean[field] = "#" + color.toString(16).padStart(6, "0");
+      });
+      clean.fogDensity = overrideNumber(entry.fogDensity, 0, .025, undefined);
+      clean.exposure = overrideNumber(entry.exposure, .15, 4, undefined);
+      clean.treeDensity = overrideNumber(entry.treeDensity, 0, 3, undefined);
+      clean.propDensity = overrideNumber(entry.propDensity, 0, 3, undefined);
+      clean.grassDensity = overrideNumber(entry.grassDensity, 0, 3, undefined);
+      Object.keys(clean).forEach((field) => { if (clean[field] === undefined) delete clean[field]; });
+      output.biomes[id] = clean;
+    });
+    const multiplierFields = ["health", "damage", "speed", "attackRange", "sightRange", "tracking", "attackRate"];
+    const cleanMultipliers = (entry) => {
+      const clean = {};
+      const record = overrideRecord(entry) || {};
+      multiplierFields.forEach((field) => {
+        const value = overrideNumber(record[field], .05, 10, undefined);
+        if (value !== undefined) clean[field] = value;
+      });
+      return clean;
+    };
+    const enemies = overrideRecord(raw.enemies) || {};
+    output.enemies.global = cleanMultipliers(enemies.global);
+    const byKind = overrideRecord(enemies.byKind) || {};
+    Object.keys(byKind).slice(0, 32).forEach((kind) => {
+      if (!["__proto__", "prototype", "constructor"].includes(kind) && /^[a-z0-9_-]{1,40}$/i.test(kind)) output.enemies.byKind[kind] = cleanMultipliers(byKind[kind]);
+    });
+    return output;
+  }
+
+  let editorDocument = sanitizeWorldOverrides(window.AshenholdWorldOverrides || EMPTY_WORLD_OVERRIDES);
+  Object.keys(editorDocument.biomes).forEach((id) => {
+    const target = BIOMES[id];
+    const source = editorDocument.biomes[id];
+    if (!target || !source) return;
+    ["ground", "cliff", "grass", "fog", "frost", "sky", "sun"].forEach((field) => {
+      if (source[field]) target[field] = parseInt(source[field].slice(1), 16);
+    });
+    if (source.fogDensity !== undefined) target.fogDensity = source.fogDensity;
+    if (source.exposure !== undefined) target.exposure = source.exposure;
+  });
   const CONTINENT_ZONES = Object.freeze([
     Object.freeze({ id: "shore", name: BIOMES.shore.name, center: Object.freeze({ x: -590, z: 360 }), bounds: Object.freeze({ minX: -900, maxX: -300, minZ: -40, maxZ: 900 }), skybox: SKY_PROFILES.shore.id }),
     Object.freeze({ id: "jungle", name: BIOMES.jungle.name, center: Object.freeze({ x: 0, z: 255 }), bounds: Object.freeze({ minX: -300, maxX: 300, minZ: -120, maxZ: 900 }), skybox: SKY_PROFILES.jungle.id }),
@@ -256,6 +419,8 @@
   let worldFoliageMaterial;
   let worldAsh;
   let grassField;
+  let grassBaseCount = 0;
+  let grassBaseDensity = 1;
   let state = "loading";
   let lastTime = performance.now();
   let elapsed = 0;
@@ -298,6 +463,7 @@
   let modelScaleRegistry = {};
   let skyReport = { id: "unbuilt", signature: "", features: [], featureCount: 0, gradientStops: 0, horizonBlend: false };
   let forestChunks = [];
+  let biomePropMeshes = [];
   let forestVisibilityTimer = 0;
   let forestReport = {
     profile: "none", total: 0, heroes: 0, chunks: 0, visible: 0,
@@ -347,6 +513,22 @@
   const tempV2 = new THREE.Vector3();
   const tempQ = new THREE.Quaternion();
   const raycaster = new THREE.Raycaster();
+  const adminEntities = new Map();
+  const adminModelCounters = new Map();
+  let adminPlacementContext = null;
+  const adminHistory = [];
+  let adminHistoryIndex = -1;
+  let adminSelectedId = null;
+  let adminSelectionHelper = null;
+  let adminGizmo = null;
+  let adminDrag = null;
+  let adminRevision = 0;
+  let adminUiLoaded = false;
+  const adminControls = {
+    mode: "select", transformMode: "translate", simulationPaused: true,
+    input: new Set(), snap: { translate: 1, rotate: 15, scale: .1 },
+    freecamYaw: 0, freecamPitch: 0, speed: 34, noclipReturn: null
+  };
 
   const encounterRng = { state: (AUTHORED_WORLD_VARIATION ^ 0x6d2b79f5) >>> 0 };
   const slideTestSurfaceCache = {};
@@ -1094,6 +1276,1355 @@
     const amount = clamp((value - minimum) / Math.max(.0001, maximum - minimum), 0, 1);
     return amount * amount * (3 - 2 * amount);
   }
+
+  function nextAdminModelId(modelSlot) {
+    const slot = String(modelSlot || "object").replace(/[^a-z0-9_-]/gi, "_");
+    const index = adminModelCounters.get(slot) || 0;
+    adminModelCounters.set(slot, index + 1);
+    return "model:" + slot + ":" + String(index).padStart(3, "0");
+  }
+
+  function placedAdminModelId(modelSlot, x, z, rotation, verticalKey, scaleKey) {
+    const slot = String(modelSlot || "object").replace(/[^a-z0-9_-]/gi, "_");
+    if (adminPlacementContext) {
+      const index = adminPlacementContext.indices.get(slot) || 0;
+      adminPlacementContext.indices.set(slot, index + 1);
+      return ["model", slot, adminPlacementContext.id, String(index).padStart(3, "0")].join(":");
+    }
+    return [
+      "model", slot, Math.round((Number(x) || 0) * 100), Math.round((Number(z) || 0) * 100),
+      Math.round((Number(rotation) || 0) * 1000), Math.round((Number(verticalKey) || 0) * 100),
+      Math.round((Number(scaleKey) || 0) * 1000)
+    ].join(":");
+  }
+
+  function beginAdminPlacementContext(id) {
+    const previous = adminPlacementContext;
+    adminPlacementContext = { id: String(id || "world").replace(/[^a-z0-9_-]/gi, "_"), indices: new Map() };
+    return previous;
+  }
+
+  function endAdminPlacementContext(previous) {
+    adminPlacementContext = previous || null;
+  }
+
+  function adminVector(value, fallback) {
+    const source = value || fallback || { x: 0, y: 0, z: 0 };
+    return {
+      x: overrideNumber(source.x, -HALF_WORLD, HALF_WORLD, fallback ? fallback.x : 0),
+      y: overrideNumber(source.y, -200, 600, fallback ? fallback.y : 0),
+      z: overrideNumber(source.z, -HALF_WORLD, HALF_WORLD, fallback ? fallback.z : 0)
+    };
+  }
+
+  function adminScale(value, fallback) {
+    const source = value || fallback || { x: 1, y: 1, z: 1 };
+    return {
+      x: overrideNumber(source.x, .02, 25, fallback ? fallback.x : 1),
+      y: overrideNumber(source.y, .02, 25, fallback ? fallback.y : 1),
+      z: overrideNumber(source.z, .02, 25, fallback ? fallback.z : 1)
+    };
+  }
+
+  function cloneAdminTransform(transform) {
+    return {
+      position: adminVector(transform.position),
+      rotationY: overrideNumber(transform.rotationY, -Math.PI * 8, Math.PI * 8, 0),
+      scale: adminScale(transform.scale)
+    };
+  }
+
+  function adminDocumentSnapshot() {
+    return JSON.parse(JSON.stringify(editorDocument));
+  }
+
+  function hasAdminEntityOverride(id) {
+    return Boolean(id && Object.prototype.hasOwnProperty.call(editorDocument.entities, id));
+  }
+
+  function announceAdminChange(reason, id) {
+    adminRevision += 1;
+    window.dispatchEvent(new CustomEvent("ashenhold:admin-change", { detail: { reason: reason || "change", id: id || null, revision: adminRevision } }));
+  }
+
+  function commitAdminHistory(reason) {
+    if (!adminMode) return false;
+    const serialized = JSON.stringify(editorDocument);
+    if (adminHistoryIndex >= 0 && adminHistory[adminHistoryIndex].serialized === serialized) return false;
+    adminHistory.splice(adminHistoryIndex + 1);
+    adminHistory.push({ reason: reason || "Edit", serialized });
+    if (adminHistory.length > 60) adminHistory.shift();
+    adminHistoryIndex = adminHistory.length - 1;
+    announceAdminChange(reason || "edit", adminSelectedId);
+    return true;
+  }
+
+  function tagAdminEntityRoot(record) {
+    if (!record || !record.root) return;
+    record.root.traverse((object) => {
+      object.userData = object.userData || {};
+      if (object === record.root || !object.userData.adminEntityId) object.userData.adminEntityId = record.id;
+    });
+  }
+
+  function adminEntityTransform(record) {
+    if (!record) return null;
+    if (record.pivot) return cloneAdminTransform(record.transform);
+    record.root.updateWorldMatrix(true, false);
+    const worldPosition = new THREE.Vector3();
+    const worldQuaternion = new THREE.Quaternion();
+    const worldScale = new THREE.Vector3();
+    record.root.matrixWorld.decompose(worldPosition, worldQuaternion, worldScale);
+    const worldRotation = new THREE.Euler().setFromQuaternion(worldQuaternion, "YXZ");
+    return {
+      position: { x: worldPosition.x, y: worldPosition.y, z: worldPosition.z },
+      rotationY: worldRotation.y,
+      scale: { x: worldScale.x, y: worldScale.y, z: worldScale.z }
+    };
+  }
+
+  function transformAdminPoint(point, anchor, transform) {
+    const dx = (point.x - anchor.x) * transform.scale.x;
+    const dy = (point.y - anchor.y) * transform.scale.y;
+    const dz = (point.z - anchor.z) * transform.scale.z;
+    const cosine = Math.cos(transform.rotationY);
+    const sine = Math.sin(transform.rotationY);
+    return {
+      x: transform.position.x + dx * cosine + dz * sine,
+      y: transform.position.y + dy,
+      z: transform.position.z - dx * sine + dz * cosine
+    };
+  }
+
+  function updateAdminLinkedGeometry(record, transform) {
+    const baseline = record.defaultTransform || { position: record.baseAnchor, rotationY: 0, scale: { x: 1, y: 1, z: 1 } };
+    const relative = {
+      position: transform.position,
+      rotationY: transform.rotationY - baseline.rotationY,
+      scale: {
+        x: transform.scale.x / Math.max(.001, Math.abs(baseline.scale.x)),
+        y: transform.scale.y / Math.max(.001, Math.abs(baseline.scale.y)),
+        z: transform.scale.z / Math.max(.001, Math.abs(baseline.scale.z))
+      }
+    };
+    (record.colliderLinks || []).forEach((link) => {
+      const next = transformAdminPoint({ x: link.base.x, y: link.base.minY, z: link.base.z }, baseline.position, relative);
+      const nextTop = transformAdminPoint({ x: link.base.x, y: link.base.maxY, z: link.base.z }, baseline.position, relative);
+      link.target.x = next.x;
+      link.target.z = next.z;
+      link.target.hx = Math.max(.05, link.base.hx * Math.abs(relative.scale.x));
+      link.target.hz = Math.max(.05, link.base.hz * Math.abs(relative.scale.z));
+      link.target.rotation = link.base.rotation + relative.rotationY;
+      link.target.minY = Math.min(next.y, nextTop.y);
+      link.target.maxY = Math.max(next.y, nextTop.y);
+    });
+    (record.platformLinks || []).forEach((link) => {
+      const next = transformAdminPoint({ x: link.base.x, y: link.base.y, z: link.base.z }, baseline.position, relative);
+      link.target.x = next.x;
+      link.target.y = next.y;
+      link.target.z = next.z;
+      link.target.hx = Math.max(.05, link.base.hx * Math.abs(relative.scale.x));
+      link.target.hz = Math.max(.05, link.base.hz * Math.abs(relative.scale.z));
+      link.target.rotation = (link.base.rotation || 0) + relative.rotationY;
+    });
+  }
+
+  function rotateAdminXZ(x, z, angle) {
+    const cosine = Math.cos(angle);
+    const sine = Math.sin(angle);
+    return { x: x * cosine + z * sine, z: -x * sine + z * cosine };
+  }
+
+  function updateAdminLocationLogic(record, previous, next) {
+    if (!record || record.type !== "location") return;
+    const sourceId = record.sourceId || record.id.replace(/^location:/, "");
+    const deltaRotation = next.rotationY - previous.rotationY;
+    const scaleX = next.scale.x / Math.max(.001, previous.scale.x);
+    const scaleZ = next.scale.z / Math.max(.001, previous.scale.z);
+    const movePoint = (point) => {
+      const relative = rotateAdminXZ((point.x - previous.position.x) * scaleX, (point.z - previous.position.z) * scaleZ, deltaRotation);
+      point.x = next.position.x + relative.x;
+      point.z = next.position.z + relative.z;
+      if (Number.isFinite(point.y)) point.y = next.position.y + (point.y - previous.position.y) * (next.scale.y / Math.max(.001, previous.scale.y));
+    };
+    const linkedStrongholdId = /^route-\d+$/.test(sourceId) ? "ascent-" + sourceId.slice(6) : sourceId;
+    const stronghold = strongholds.find((item) => item.id === linkedStrongholdId);
+    if (stronghold) {
+      stronghold.spots.forEach(movePoint);
+      stronghold.members.forEach((enemy) => {
+        movePoint(enemy.root.position);
+        if (enemy.ai) {
+          movePoint(enemy.ai.home);
+          movePoint(enemy.ai.lastKnown);
+          enemy.ai.patrol.forEach(movePoint);
+          enemy.ai.guardYaw += deltaRotation;
+          enemy.ai.path = [];
+          enemy.ai.repathTimer = 0;
+        }
+        if (enemy.camp) { enemy.camp.x = next.position.x; enemy.camp.z = next.position.z; }
+      });
+      stronghold.x = next.position.x;
+      stronghold.z = next.position.z;
+      stronghold.biomeId = biomeIdAt(stronghold.x, stronghold.z);
+      stronghold.navGrid = null;
+      if (stronghold.marker) movePoint(stronghold.marker.position);
+      if (stronghold.captureFlag && stronghold.captureFlag.root) {
+        movePoint(stronghold.captureFlag.root.position);
+        stronghold.captureFlag.baseY = stronghold.captureFlag.root.position.y;
+      }
+    }
+    poiChestSpots.filter((spot) => spot.sourceId === sourceId).forEach((spot) => {
+      movePoint(spot);
+      spot.rotation = (spot.rotation || 0) + deltaRotation;
+    });
+    experienceRunes.filter((rune) => rune.sourceId === sourceId).forEach((rune) => movePoint(rune.root.position));
+    chests.filter((chest) => chest.sourceId === sourceId).forEach((chest) => {
+      movePoint(chest.root.position);
+      chest.root.rotation.y += deltaRotation;
+    });
+    const landmark = landmarks.find((item) => item.id === sourceId);
+    if (landmark) movePoint(landmark.position);
+    const foundation = foundationZones.find((item) => item.id === sourceId);
+    if (foundation) { movePoint(foundation); foundationTargets.delete(foundation.id); }
+    let source = null;
+    if (sourceId === "keep") movePoint(RUINS);
+    else if (/^fort-\d+$/.test(sourceId)) source = worldLayout.forts[Number(sourceId.slice(5))];
+    else if (/^route-\d+$/.test(sourceId)) source = worldLayout.routes[Number(sourceId.slice(6))];
+    else if (/^poi-\d+$/.test(sourceId)) source = worldLayout.pois[Number(sourceId.slice(4))];
+    else source = worldLayout.infrastructure.find((item) => item.id === sourceId);
+    if (Array.isArray(source)) { source[0] = next.position.x; source[1] = next.position.z; }
+    else if (source) { source.x = next.position.x; source.z = next.position.z; }
+    networkNavigationCache = null;
+    minimapRefreshTimer = 0;
+  }
+
+  function applyAdminTransform(record, transform, persist) {
+    if (!record || !record.root) return false;
+    const previous = adminEntityTransform(record);
+    const next = cloneAdminTransform(transform);
+    if (record.pivot) {
+      record.transform = next;
+      record.root.scale.set(next.scale.x, next.scale.y, next.scale.z);
+      record.root.rotation.y = next.rotationY;
+      const transformedAnchor = new THREE.Vector3(record.baseAnchor.x, record.baseAnchor.y, record.baseAnchor.z)
+        .multiply(new THREE.Vector3(next.scale.x, next.scale.y, next.scale.z))
+        .applyAxisAngle(new THREE.Vector3(0, 1, 0), next.rotationY);
+      record.root.position.set(
+        next.position.x - transformedAnchor.x,
+        next.position.y - transformedAnchor.y,
+        next.position.z - transformedAnchor.z
+      );
+    } else {
+      const worldPosition = new THREE.Vector3(next.position.x, next.position.y, next.position.z);
+      const worldQuaternion = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), next.rotationY);
+      if (record.root.parent) {
+        record.root.parent.updateWorldMatrix(true, false);
+        const parentPosition = new THREE.Vector3();
+        const parentQuaternion = new THREE.Quaternion();
+        const parentScale = new THREE.Vector3();
+        record.root.parent.matrixWorld.decompose(parentPosition, parentQuaternion, parentScale);
+        record.root.position.copy(record.root.parent.worldToLocal(worldPosition.clone()));
+        record.root.quaternion.copy(parentQuaternion.clone().invert().multiply(worldQuaternion));
+        record.root.scale.set(
+          next.scale.x / Math.max(.0001, Math.abs(parentScale.x)),
+          next.scale.y / Math.max(.0001, Math.abs(parentScale.y)),
+          next.scale.z / Math.max(.0001, Math.abs(parentScale.z))
+        );
+      } else {
+        record.root.position.copy(worldPosition);
+        record.root.quaternion.copy(worldQuaternion);
+        record.root.scale.set(next.scale.x, next.scale.y, next.scale.z);
+      }
+    }
+    updateAdminLinkedGeometry(record, next);
+    updateAdminLocationLogic(record, previous, next);
+    if (persist !== false) {
+      const entry = editorDocument.entities[record.id] || {};
+      entry.type = record.type;
+      if (record.modelSlot) entry.modelSlot = record.modelSlot;
+      entry.position = adminVector(next.position);
+      entry.rotationY = next.rotationY;
+      entry.scale = adminScale(next.scale);
+      editorDocument.entities[record.id] = entry;
+    }
+    return true;
+  }
+
+  function cloneAdminMaterial(material) {
+    if (!material || !material.clone) return material;
+    if (material.userData && material.userData.adminEditable) return material;
+    const cloned = material.clone();
+    cloned.userData = Object.assign({}, cloned.userData, { adminEditable: true });
+    return cloned;
+  }
+
+  function captureAdminAppearance(root) {
+    const snapshots = [];
+    root.traverse((object) => {
+      if (!object.isMesh && !object.isSkinnedMesh && !object.isPoints && !object.isLine) return;
+      const materials = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
+      snapshots.push(materials.map((material) => ({
+        color: material && material.color ? material.color.getHex() : null,
+        map: material ? material.map || null : null
+      })));
+    });
+    return snapshots;
+  }
+
+  function restoreAdminAppearance(record) {
+    if (!record || !record.appearance) return;
+    record.textureRequest = (record.textureRequest || 0) + 1;
+    let meshIndex = 0;
+    record.root.traverse((object) => {
+      if (!object.isMesh && !object.isSkinnedMesh && !object.isPoints && !object.isLine) return;
+      if (Array.isArray(object.material)) object.material = object.material.map(cloneAdminMaterial);
+      else object.material = cloneAdminMaterial(object.material);
+      const materials = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
+      const snapshots = record.appearance[meshIndex] || [];
+      materials.forEach((material, index) => {
+        const snapshot = snapshots[index];
+        if (!material || !snapshot) return;
+        if (material.color && snapshot.color != null) material.color.setHex(snapshot.color);
+        material.map = snapshot.map;
+        material.needsUpdate = true;
+      });
+      meshIndex += 1;
+    });
+    record.color = null;
+    record.texture = null;
+  }
+
+  function applyAdminColor(record, colorValue, persist) {
+    const color = overrideColor(colorValue);
+    if (!record || color == null) return false;
+    record.root.traverse((object) => {
+      if (!object.isMesh && !object.isSkinnedMesh && !object.isPoints && !object.isLine) return;
+      if (Array.isArray(object.material)) object.material = object.material.map(cloneAdminMaterial);
+      else object.material = cloneAdminMaterial(object.material);
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => { if (material && material.color) { material.color.setHex(color); material.needsUpdate = true; } });
+    });
+    record.color = "#" + color.toString(16).padStart(6, "0");
+    if (persist !== false) {
+      const entry = editorDocument.entities[record.id] || { type: record.type };
+      entry.color = record.color;
+      editorDocument.entities[record.id] = entry;
+    }
+    return true;
+  }
+
+  function setAdminEntityVisibility(record, visible, persist) {
+    if (!record || !record.root) return false;
+    record.root.visible = Boolean(visible);
+    const stored = editorDocument.entities[record.id];
+    const collisionEnabled = record.root.visible && (!stored || stored.collision !== false);
+    (record.colliderLinks || []).forEach((link) => { link.target.disabled = !collisionEnabled; });
+    (record.platformLinks || []).forEach((link) => { link.target.disabled = !collisionEnabled; });
+    if (persist !== false) {
+      const entry = editorDocument.entities[record.id] || { type: record.type };
+      entry.visible = record.root.visible;
+      if (record.root.visible) delete entry.deleted;
+      editorDocument.entities[record.id] = entry;
+    }
+    return true;
+  }
+
+  async function applyAdminTexture(record, path, persist) {
+    path = overrideTexturePath(path);
+    if (!record || !path) return false;
+    const url = new URL(path, window.location.href);
+    if (url.origin !== window.location.origin || !url.pathname.replace(/^\/+/, "").startsWith("assets/")) return false;
+    const requestId = (record.textureRequest || 0) + 1;
+    record.textureRequest = requestId;
+    const texture = configureTexture(await textureFrom(path), 1, 1);
+    if (record.textureRequest !== requestId) { if (texture && texture.dispose) texture.dispose(); return false; }
+    record.root.traverse((object) => {
+      if (!object.isMesh && !object.isSkinnedMesh) return;
+      if (Array.isArray(object.material)) object.material = object.material.map(cloneAdminMaterial);
+      else object.material = cloneAdminMaterial(object.material);
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => { if (material) { material.map = texture; material.needsUpdate = true; } });
+    });
+    record.texture = path;
+    if (persist !== false) {
+      const entry = editorDocument.entities[record.id] || { type: record.type };
+      entry.texture = path;
+      editorDocument.entities[record.id] = entry;
+    }
+    return true;
+  }
+
+  function applyAdminEnemyValues(record, values, persist) {
+    const enemy = record && record.enemy;
+    if (!enemy || !values) return false;
+    const maxHealth = overrideNumber(values.maxHealth, 1, 100000, enemy.maxHealth);
+    enemy.maxHealth = maxHealth;
+    enemy.health = overrideNumber(values.health, 0, maxHealth, Math.min(enemy.health, maxHealth));
+    if (enemy.kind === "dragon" && Number.isFinite(enemy.damageScale)) {
+      const currentDamage = Math.round((enemy.boss ? 30 : 22) * enemy.damageScale);
+      const targetDamage = overrideNumber(values.damage, 0, 10000, currentDamage);
+      enemy.damageScale = targetDamage / (enemy.boss ? 30 : 22);
+    } else enemy.damage = overrideNumber(values.damage, 0, 10000, enemy.damage);
+    enemy.speed = overrideNumber(values.speed, 0, 250, enemy.speed);
+    enemy.attackRange = overrideNumber(values.attackRange, .1, 250, enemy.attackRange);
+    enemy.attackInterval = overrideNumber(values.attackInterval, .05, 60, enemy.attackInterval);
+    enemy.adminSightRange = overrideNumber(values.sightRange, .1, 500, enemy.adminSightRange || undefined);
+    enemy.adminTracking = overrideNumber(values.tracking, .05, 10, enemy.adminTracking || 1);
+    if (persist !== false) {
+      const entry = editorDocument.entities[record.id] || { type: record.type };
+      entry.enemy = {
+        health: enemy.health, maxHealth: enemy.maxHealth,
+        damage: enemy.kind === "dragon" ? Math.round((enemy.boss ? 30 : 22) * (enemy.damageScale || 1)) : enemy.damage,
+        speed: enemy.speed,
+        attackRange: enemy.attackRange, attackInterval: enemy.attackInterval,
+        sightRange: enemy.adminSightRange, tracking: enemy.adminTracking
+      };
+      editorDocument.entities[record.id] = entry;
+    }
+    return true;
+  }
+
+  function applyAdminEntityOverride(record) {
+    const entry = editorDocument.entities[record.id];
+    if (!entry) return;
+    if (record.modelSlot) {
+      const targetSlot = entry.modelSlot || record.originalModelSlot;
+      if (visualAssets.models && visualAssets.models[targetSlot]) applyAdminModelSlot(record, targetSlot, false);
+      else ensureAdminModelAsset(targetSlot).then((asset) => {
+        const currentEntry = editorDocument.entities[record.id];
+        if (asset && currentEntry && (currentEntry.modelSlot || record.originalModelSlot) === targetSlot) {
+          applyAdminModelSlot(record, targetSlot, false);
+          if (adminMode) announceAdminChange("model-loaded", record.id);
+        }
+      });
+    }
+    const current = adminEntityTransform(record);
+    applyAdminTransform(record, {
+      position: entry.position || current.position,
+      rotationY: entry.rotationY !== undefined ? entry.rotationY : current.rotationY,
+      scale: entry.scale || current.scale
+    }, false);
+    if (entry.color) applyAdminColor(record, entry.color, false);
+    if (entry.texture) applyAdminTexture(record, entry.texture, false).catch((error) => console.warn("Admin texture could not be loaded:", entry.texture, error));
+    if (entry.enemy) applyAdminEnemyValues(record, entry.enemy, false);
+    setAdminEntityVisibility(record, !entry.deleted && entry.visible !== false, false);
+    if (entry.collision !== undefined) setAdminEntityCollision(record.id, entry.collision, false);
+  }
+
+  function registerAdminEntity(root, options) {
+    if (!root) return null;
+    const config = options || {};
+    const id = config.id || nextAdminModelId(config.modelSlot || config.type || "object");
+    if (!adminMode && !hasAdminEntityOverride(id)) return null;
+    const anchorSource = config.anchor || root.position;
+    const baseAnchor = { x: Number(anchorSource.x) || 0, y: Number(anchorSource.y) || 0, z: Number(anchorSource.z) || 0 };
+    const record = {
+      id, root,
+      label: String(config.label || root.name || id).slice(0, 100),
+      type: config.type || "object",
+      category: config.category || config.type || "object",
+      sourceId: config.sourceId || null,
+      modelSlot: config.modelSlot || null,
+      originalModelSlot: config.modelSlot || null,
+      pivot: Boolean(config.pivot), baseAnchor,
+      colliderLinks: (config.colliders || []).filter(Boolean).map((target) => ({ target, base: Object.assign({}, target) })),
+      platformLinks: (config.platforms || []).filter(Boolean).map((target) => ({ target, base: Object.assign({}, target) })),
+      enemy: config.enemy || null,
+      protected: Boolean(config.protected)
+    };
+    record.transform = record.pivot ? {
+      position: Object.assign({}, baseAnchor), rotationY: 0, scale: { x: 1, y: 1, z: 1 }
+    } : adminEntityTransform(record);
+    record.defaultTransform = cloneAdminTransform(record.transform);
+    record.defaultVisible = root.visible;
+    record.appearance = captureAdminAppearance(root);
+    record.defaultEnemy = record.enemy ? {
+      health: record.enemy.health, maxHealth: record.enemy.maxHealth,
+      damage: record.enemy.kind === "dragon" ? Math.round((record.enemy.boss ? 30 : 22) * (record.enemy.damageScale || 1)) : record.enemy.damage,
+      speed: record.enemy.speed, attackRange: record.enemy.attackRange, attackInterval: record.enemy.attackInterval,
+      sightRange: record.enemy.adminSightRange, tracking: record.enemy.adminTracking || 1
+    } : null;
+    adminEntities.set(id, record);
+    tagAdminEntityRoot(record);
+    applyAdminEntityOverride(record);
+    return record;
+  }
+
+  function unregisterAdminEntity(id) {
+    const record = adminEntities.get(id);
+    if (!record) return false;
+    if (adminSelectedId === id) selectAdminEntity(null);
+    adminEntities.delete(id);
+    return true;
+  }
+
+  const ADMIN_ENEMY_TUNING_FIELDS = ["health", "damage", "speed", "attackRange", "sightRange", "tracking", "attackRate"];
+
+  function adminEnemyTuning(kind) {
+    const global = editorDocument.enemies.global || {};
+    const specific = editorDocument.enemies.byKind[kind] || {};
+    return ADMIN_ENEMY_TUNING_FIELDS.reduce((result, field) => {
+      result[field] = clamp((global[field] || 1) * (specific[field] || 1), .05, 10);
+      return result;
+    }, {});
+  }
+
+  function applyAdminEnemyTuning(enemy, resetBaseline) {
+    if (!enemy) return false;
+    const next = adminEnemyTuning(enemy.kind || (enemy.boss ? "dragon" : "enemy"));
+    const previous = resetBaseline || !enemy.adminTuning ? ADMIN_ENEMY_TUNING_FIELDS.reduce((result, field) => { result[field] = 1; return result; }, {}) : enemy.adminTuning;
+    const healthRatio = next.health / Math.max(.001, previous.health);
+    const currentHealthRatio = enemy.maxHealth > 0 ? enemy.health / enemy.maxHealth : 1;
+    enemy.maxHealth = Math.max(1, Math.round(enemy.maxHealth * healthRatio));
+    enemy.health = clamp(Math.round(enemy.maxHealth * currentHealthRatio), 0, enemy.maxHealth);
+    if (Number.isFinite(enemy.damage)) enemy.damage = Math.max(0, enemy.damage * next.damage / Math.max(.001, previous.damage));
+    if (Number.isFinite(enemy.damageScale)) enemy.damageScale *= next.damage / Math.max(.001, previous.damage);
+    enemy.speed = Math.max(0, enemy.speed * next.speed / Math.max(.001, previous.speed));
+    if (Number.isFinite(enemy.attackRange)) enemy.attackRange = Math.max(.1, enemy.attackRange * next.attackRange / Math.max(.001, previous.attackRange));
+    if (Number.isFinite(enemy.attackInterval)) enemy.attackInterval = Math.max(.05, enemy.attackInterval * previous.attackRate / Math.max(.001, next.attackRate));
+    enemy.adminSightMultiplier = next.sightRange;
+    enemy.adminTracking = next.tracking;
+    enemy.adminTuning = next;
+    return true;
+  }
+
+  function refreshAdminActorEntities() {
+    const hasActorOverrides = Object.keys(editorDocument.entities).some((id) => id.startsWith("enemy:"));
+    if (!adminMode && !hasActorOverrides) return;
+    Array.from(adminEntities.values()).forEach((record) => {
+      if (record.type === "enemy" || record.type === "dragon") unregisterAdminEntity(record.id);
+    });
+    ensureStableNetworkIds();
+    dragons.forEach((dragon, index) => {
+      registerAdminEntity(dragon.root, {
+        id: "enemy:" + (dragon.networkId || "dragon-" + index), label: dragon.name,
+        type: "dragon", category: "Enemies", enemy: dragon
+      });
+    });
+    groundEnemies.forEach((enemy, index) => {
+      registerAdminEntity(enemy.root, {
+        id: "enemy:" + (enemy.networkId || enemy.spawnKey || enemy.kind + "-" + index), label: enemy.name,
+        type: "enemy", category: "Enemies", enemy
+      });
+    });
+  }
+
+  function adminMaterialDetails(root) {
+    let first = null;
+    let meshCount = 0;
+    const texturePaths = new Set();
+    root.traverse((object) => {
+      if (!object.isMesh && !object.isSkinnedMesh && !object.isPoints && !object.isLine) return;
+      meshCount += 1;
+      const materials = Array.isArray(object.material) ? object.material : object.material ? [object.material] : [];
+      materials.forEach((material) => {
+        if (!first && material) first = material;
+        const source = material && material.map && material.map.image && (material.map.image.currentSrc || material.map.image.src);
+        if (source) {
+          try { texturePaths.add(new URL(source, window.location.href).pathname.replace(/^\//, "")); }
+          catch (_) { texturePaths.add(String(source).slice(0, 180)); }
+        }
+      });
+    });
+    return {
+      meshCount,
+      color: first && first.color ? "#" + first.color.getHexString() : null,
+      textures: Array.from(texturePaths).slice(0, 12),
+      material: first ? first.type || "Material" : "None"
+    };
+  }
+
+  function adminEntitySummary(record) {
+    if (!record || !record.root) return null;
+    const transform = adminEntityTransform(record);
+    const material = adminMaterialDetails(record.root);
+    let size = { x: 0, y: 0, z: 0 };
+    if (record.root.visible) {
+      const measured = new THREE.Vector3();
+      new THREE.Box3().setFromObject(record.root).getSize(measured);
+      size = { x: measured.x, y: measured.y, z: measured.z };
+    }
+    const output = {
+      id: record.id, label: record.label, type: record.type, category: record.category,
+      sourceId: record.sourceId, modelSlot: record.modelSlot, transform,
+      visible: record.root.visible, protected: record.protected, size,
+      collision: record.colliderLinks.concat(record.platformLinks).length > 0 && record.colliderLinks.concat(record.platformLinks).some((link) => !link.target.disabled),
+      meshCount: material.meshCount, color: record.color || material.color,
+      texture: record.texture || material.textures[0] || "", textures: material.textures,
+      material: material.material
+    };
+    if (record.enemy) output.enemy = {
+      kind: record.enemy.kind || (record.enemy.boss ? "dragon" : "enemy"),
+      health: record.enemy.health, maxHealth: record.enemy.maxHealth,
+      damage: record.enemy.damage, speed: record.enemy.speed,
+      attackRange: record.enemy.attackRange, attackInterval: record.enemy.attackInterval,
+      sightRange: record.enemy.adminSightRange || (record.enemy.kind === "dragon" ? 100 : roleSightProfile(record.enemy).range),
+      tracking: record.enemy.adminTracking || 1,
+      state: record.enemy.ai ? record.enemy.ai.state : record.enemy.dead ? "dead" : "active"
+    };
+    return output;
+  }
+
+  function createAdminGizmo() {
+    if (!adminMode || !scene || adminGizmo) return adminGizmo;
+    adminGizmo = new THREE.Group();
+    adminGizmo.name = "Ashenhold Admin Transform Gizmo";
+    const axes = [
+      { id: "x", color: 0xff5a66, direction: new THREE.Vector3(1, 0, 0) },
+      { id: "y", color: 0x63df87, direction: new THREE.Vector3(0, 1, 0) },
+      { id: "z", color: 0x55a9ff, direction: new THREE.Vector3(0, 0, 1) }
+    ];
+    axes.forEach((axis) => {
+      const material = new THREE.MeshBasicMaterial({ color: axis.color, depthTest: false, transparent: true, opacity: .94 });
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, 2.45, 8), material);
+      const head = new THREE.Mesh(new THREE.ConeGeometry(.15, .5, 10), material);
+      shaft.position.copy(axis.direction).multiplyScalar(1.225);
+      head.position.copy(axis.direction).multiplyScalar(2.7);
+      shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.direction);
+      head.quaternion.copy(shaft.quaternion);
+      shaft.userData.adminAxis = axis.id;
+      head.userData.adminAxis = axis.id;
+      shaft.renderOrder = 10000;
+      head.renderOrder = 10000;
+      adminGizmo.add(shaft, head);
+    });
+    adminGizmo.visible = false;
+    scene.add(adminGizmo);
+    return adminGizmo;
+  }
+
+  function selectAdminEntity(id) {
+    const record = id ? adminEntities.get(id) : null;
+    adminSelectedId = record ? record.id : null;
+    if (adminSelectionHelper) {
+      scene.remove(adminSelectionHelper);
+      if (adminSelectionHelper.geometry) adminSelectionHelper.geometry.dispose();
+      if (adminSelectionHelper.material) adminSelectionHelper.material.dispose();
+      adminSelectionHelper = null;
+    }
+    createAdminGizmo();
+    if (record && record.root.visible) {
+      adminSelectionHelper = new THREE.BoxHelper(record.root, 0x70e5ff);
+      adminSelectionHelper.name = "Ashenhold Admin Selection";
+      adminSelectionHelper.material.depthTest = false;
+      adminSelectionHelper.material.transparent = true;
+      adminSelectionHelper.material.opacity = .86;
+      adminSelectionHelper.renderOrder = 9999;
+      scene.add(adminSelectionHelper);
+      adminGizmo.visible = true;
+    } else if (adminGizmo) adminGizmo.visible = false;
+    window.dispatchEvent(new CustomEvent("ashenhold:admin-selection", { detail: { id: adminSelectedId } }));
+    return record ? adminEntitySummary(record) : null;
+  }
+
+  function updateAdminSelectionVisual() {
+    const record = adminSelectedId ? adminEntities.get(adminSelectedId) : null;
+    if (!record || !record.root.visible) {
+      if (adminGizmo) adminGizmo.visible = false;
+      return;
+    }
+    if (adminSelectionHelper) adminSelectionHelper.setFromObject(record.root);
+    const transform = adminEntityTransform(record);
+    if (adminGizmo && camera) {
+      adminGizmo.visible = true;
+      adminGizmo.position.set(transform.position.x, transform.position.y, transform.position.z);
+      const distance = Math.max(3, camera.position.distanceTo(adminGizmo.position));
+      adminGizmo.scale.setScalar(clamp(distance * .018, .65, 5.5));
+    }
+  }
+
+  function setAdminRay(clientX, clientY) {
+    if (!renderer || !camera) return false;
+    const bounds = renderer.domElement.getBoundingClientRect();
+    const x = ((clientX - bounds.left) / Math.max(1, bounds.width)) * 2 - 1;
+    const y = -((clientY - bounds.top) / Math.max(1, bounds.height)) * 2 + 1;
+    raycaster.setFromCamera(new THREE.Vector2(x, y), camera);
+    return true;
+  }
+
+  function pickAdminGizmo(clientX, clientY) {
+    if (!adminGizmo || !adminGizmo.visible || !setAdminRay(clientX, clientY)) return null;
+    const hit = raycaster.intersectObjects(adminGizmo.children, true)[0];
+    return hit && hit.object.userData.adminAxis || null;
+  }
+
+  function pickAdminEntity(clientX, clientY) {
+    if (!setAdminRay(clientX, clientY)) return null;
+    const roots = [];
+    adminEntities.forEach((record) => { if (record.root && record.root.visible) roots.push(record.root); });
+    const hits = raycaster.intersectObjects(roots, true);
+    for (let index = 0; index < hits.length; index += 1) {
+      let object = hits[index].object;
+      while (object) {
+        if (object.userData && adminEntities.has(object.userData.adminEntityId)) return selectAdminEntity(object.userData.adminEntityId);
+        object = object.parent;
+      }
+    }
+    return selectAdminEntity(null);
+  }
+
+  function adminProjectedAxis(record, axis) {
+    const transform = adminEntityTransform(record);
+    const origin = new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z);
+    const direction = axis === "x" ? new THREE.Vector3(1, 0, 0) : axis === "y" ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+    const projectedOrigin = origin.clone().project(camera);
+    const projectedEnd = origin.clone().add(direction).project(camera);
+    const bounds = renderer.domElement.getBoundingClientRect();
+    const dx = (projectedEnd.x - projectedOrigin.x) * bounds.width * .5;
+    const dy = -(projectedEnd.y - projectedOrigin.y) * bounds.height * .5;
+    const length = Math.hypot(dx, dy) || 1;
+    return { x: dx / length, y: dy / length, worldPerPixel: 2 * camera.position.distanceTo(origin) * Math.tan(camera.fov * Math.PI / 360) / Math.max(1, bounds.height) };
+  }
+
+  function beginAdminDrag(mode, axis, clientX, clientY) {
+    const record = adminSelectedId ? adminEntities.get(adminSelectedId) : null;
+    if (!record || !camera || !renderer) return false;
+    adminDrag = {
+      id: record.id, mode: mode || adminControls.transformMode, axis: axis || "y",
+      startX: clientX, startY: clientY, start: adminEntityTransform(record),
+      projected: adminProjectedAxis(record, axis || "y")
+    };
+    return true;
+  }
+
+  function snappedAdminValue(value, step) {
+    return step > 0 ? Math.round(value / step) * step : value;
+  }
+
+  function dragAdminTransform(clientX, clientY) {
+    if (!adminDrag) return false;
+    const record = adminEntities.get(adminDrag.id);
+    if (!record) return false;
+    const dx = clientX - adminDrag.startX;
+    const dy = clientY - adminDrag.startY;
+    const next = cloneAdminTransform(adminDrag.start);
+    if (adminDrag.mode === "translate") {
+      const projectedDistance = dx * adminDrag.projected.x + dy * adminDrag.projected.y;
+      const distance = snappedAdminValue(projectedDistance * adminDrag.projected.worldPerPixel, adminControls.snap.translate);
+      next.position[adminDrag.axis] = adminDrag.start.position[adminDrag.axis] + distance;
+    } else if (adminDrag.mode === "rotate") {
+      const step = adminControls.snap.rotate * Math.PI / 180;
+      next.rotationY = snappedAdminValue(adminDrag.start.rotationY + dx * .01, step);
+    } else if (adminDrag.mode === "scale") {
+      const delta = snappedAdminValue((dx - dy) * .006, adminControls.snap.scale);
+      if (adminDrag.axis === "x" || adminDrag.axis === "y" || adminDrag.axis === "z") next.scale[adminDrag.axis] = clamp(adminDrag.start.scale[adminDrag.axis] + delta, .02, 25);
+      else next.scale = adminScale({ x: adminDrag.start.scale.x + delta, y: adminDrag.start.scale.y + delta, z: adminDrag.start.scale.z + delta });
+    }
+    applyAdminTransform(record, next, true);
+    announceAdminChange("transform-preview", record.id);
+    return adminEntitySummary(record);
+  }
+
+  function endAdminDrag() {
+    if (!adminDrag) return false;
+    const id = adminDrag.id;
+    adminDrag = null;
+    commitAdminHistory("Transform " + id);
+    return true;
+  }
+
+  function setAdminMode(mode) {
+    if (!["select", "freecam", "noclip"].includes(mode)) return adminControls.mode;
+    const previousMode = adminControls.mode;
+    if (previousMode === "noclip" && mode !== "noclip") exitAdminNoclip();
+    if (mode === "noclip" && previousMode !== "noclip" && player.root) {
+      const current = player.root.position;
+      const blocked = hitsCollider(current.x, current.z, .68, current.y, current.y + 2.1);
+      adminControls.noclipReturn = (blocked ? player.lastSafePosition : current).clone();
+    }
+    adminControls.mode = mode;
+    adminControls.input.clear();
+    if (camera) {
+      const direction = new THREE.Vector3();
+      camera.getWorldDirection(direction);
+      adminControls.freecamYaw = Math.atan2(-direction.x, -direction.z);
+      adminControls.freecamPitch = -Math.asin(clamp(direction.y, -1, 1));
+    }
+    if (document.pointerLockElement) document.exitPointerLock();
+    window.dispatchEvent(new CustomEvent("ashenhold:admin-mode", { detail: { mode } }));
+    return mode;
+  }
+
+  function exitAdminNoclip() {
+    if (!player.root) return false;
+    const height = 2.1;
+    const current = player.root.position;
+    if (hitsCollider(current.x, current.z, .68, current.y, current.y + height)) {
+      let recovered = false;
+      for (let ring = 1; ring <= 20 && !recovered; ring += 1) {
+        const radius = ring * .75;
+        for (let index = 0; index < 24; index += 1) {
+          const angle = index / 24 * Math.PI * 2;
+          const x = clamp(current.x + Math.cos(angle) * radius, -HALF_WORLD, HALF_WORLD);
+          const z = clamp(current.z + Math.sin(angle) * radius, -HALF_WORLD, HALF_WORLD);
+          if (hitsCollider(x, z, .68, current.y, current.y + height)) continue;
+          current.x = x;
+          current.z = z;
+          recovered = true;
+          break;
+        }
+      }
+      if (!recovered && adminControls.noclipReturn) current.copy(adminControls.noclipReturn);
+    }
+    if (!hitsCollider(current.x, current.z, .68, current.y, current.y + height)) player.lastSafePosition.copy(current);
+    player.velocityY = 0;
+    player.grounded = false;
+    adminControls.noclipReturn = null;
+    return true;
+  }
+
+  function applyAdminLook(deltaX, deltaY) {
+    if (adminControls.mode === "freecam") {
+      adminControls.freecamYaw -= deltaX * .0025;
+      adminControls.freecamPitch = clamp(adminControls.freecamPitch + deltaY * .0022, -1.48, 1.48);
+    } else {
+      applyLookDelta(deltaX, deltaY, .0025, .0019);
+    }
+  }
+
+  function updateAdminControls(dt) {
+    if (!adminMode || !camera || !player.root) return;
+    const input = adminControls.input;
+    const boost = input.has("shift") ? 3.2 : 1;
+    if (adminControls.mode === "freecam") {
+      const forward = new THREE.Vector3(
+        -Math.sin(adminControls.freecamYaw) * Math.cos(adminControls.freecamPitch),
+        -Math.sin(adminControls.freecamPitch),
+        -Math.cos(adminControls.freecamYaw) * Math.cos(adminControls.freecamPitch)
+      ).normalize();
+      const right = new THREE.Vector3(Math.cos(adminControls.freecamYaw), 0, -Math.sin(adminControls.freecamYaw));
+      const movement = new THREE.Vector3();
+      if (input.has("w")) movement.add(forward);
+      if (input.has("s")) movement.sub(forward);
+      if (input.has("d")) movement.add(right);
+      if (input.has("a")) movement.sub(right);
+      if (input.has("e")) movement.y += 1;
+      if (input.has("q")) movement.y -= 1;
+      if (movement.lengthSq()) camera.position.addScaledVector(movement.normalize(), adminControls.speed * boost * dt);
+      camera.lookAt(camera.position.clone().addScaledVector(forward, 100));
+      if (sky) sky.position.copy(camera.position);
+    } else if (adminControls.mode === "noclip") {
+      const forward = new THREE.Vector3(-Math.sin(cameraYaw), 0, -Math.cos(cameraYaw));
+      const right = new THREE.Vector3(Math.cos(cameraYaw), 0, -Math.sin(cameraYaw));
+      const movement = new THREE.Vector3();
+      if (input.has("w")) movement.add(forward);
+      if (input.has("s")) movement.sub(forward);
+      if (input.has("d")) movement.add(right);
+      if (input.has("a")) movement.sub(right);
+      if (input.has("e")) movement.y += 1;
+      if (input.has("q")) movement.y -= 1;
+      if (movement.lengthSq()) {
+        player.root.position.addScaledVector(movement.normalize(), adminControls.speed * boost * dt);
+        player.velocityY = 0;
+        player.grounded = false;
+      }
+    }
+    updateAdminSelectionVisual();
+  }
+
+  function adminTextureCatalog() {
+    const paths = new Set([
+      "assets/textures/storm-sky-panorama.jpg", "assets/textures/ashen-ground.jpg",
+      "assets/textures/ancient-stone.jpg", "assets/textures/alpine-cliff.jpg", "assets/textures/tundra-grass-v1.jpg"
+    ]);
+    Object.keys(visualAssets.biomeMaterialCatalog || {}).forEach((id) => {
+      const entry = visualAssets.biomeMaterialCatalog[id];
+      paths.add(entry.base + "-color" + entry.extension);
+      paths.add(entry.base + "-normal" + entry.extension);
+      paths.add(entry.base + "-roughness" + entry.extension);
+    });
+    return Array.from(paths).sort();
+  }
+
+  const adminModelAssetPromises = new Map();
+  function ensureAdminModelAsset(modelSlot) {
+    if (visualAssets.models && visualAssets.models[modelSlot]) return Promise.resolve(visualAssets.models[modelSlot]);
+    const path = visualAssets.modelPaths && visualAssets.modelPaths[modelSlot];
+    if (!path || !visualAssets.modelLoader) return Promise.resolve(null);
+    if (!adminModelAssetPromises.has(modelSlot)) {
+      adminModelAssetPromises.set(modelSlot, visualAssets.modelLoader.loadAsync(path).then((asset) => {
+        visualAssets.models[modelSlot] = asset;
+        measureLoadedModelRegistry();
+        return asset;
+      }).catch((error) => {
+        adminModelAssetPromises.delete(modelSlot);
+        console.warn("Editor model failed to load:", modelSlot, error);
+        return null;
+      }));
+    }
+    return adminModelAssetPromises.get(modelSlot);
+  }
+
+  async function preloadAdminOverrideModels() {
+    const slots = Array.from(new Set(Object.keys(editorDocument.entities)
+      .map((id) => editorDocument.entities[id] && editorDocument.entities[id].modelSlot)
+      .filter(Boolean)));
+    await Promise.all(slots.map((slot) => ensureAdminModelAsset(slot)));
+  }
+
+  function createAdminCustomModel(id, entry) {
+    if (!entry || entry.deleted || adminEntities.has(id)) return adminEntities.get(id) || null;
+    const slot = entry.modelSlot;
+    const asset = visualAssets.models && visualAssets.models[slot];
+    if (!asset || !asset.scene) return null;
+    const root = THREE.SkeletonUtils ? THREE.SkeletonUtils.clone(asset.scene) : asset.scene.clone(true);
+    root.name = entry.label || "Custom " + slot;
+    const fallbackPosition = player.root ? player.root.position.clone() : START.clone();
+    const position = entry.position || { x: fallbackPosition.x, y: terrainHeight(fallbackPosition.x, fallbackPosition.z), z: fallbackPosition.z };
+    const scale = entry.scale || {
+      x: canonicalModelScale(slot), y: modelVerticalScale(slot, canonicalModelScale(slot)), z: canonicalModelScale(slot)
+    };
+    root.position.set(position.x, position.y, position.z);
+    root.rotation.y = entry.rotationY || 0;
+    root.scale.set(scale.x, scale.y, scale.z);
+    root.traverse((object) => {
+      if (!object.isMesh && !object.isSkinnedMesh) return;
+      object.castShadow = !isCoarse;
+      object.receiveShadow = true;
+      if (object.material) object.material = Array.isArray(object.material) ? object.material.map((material) => material.clone()) : object.material.clone();
+    });
+    scene.add(root);
+    let collider = null;
+    if (entry.collision !== false) {
+      root.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(root);
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      box.getSize(size);
+      box.getCenter(center);
+      collider = addCollider(center.x, center.z, Math.max(.15, size.x / 2), Math.max(.15, size.z / 2), root.rotation.y, box.min.y, box.max.y);
+    }
+    return registerAdminEntity(root, {
+      id, label: root.name, type: "custom-model", category: "Custom Objects", modelSlot: slot,
+      colliders: collider ? [collider] : []
+    });
+  }
+
+  async function loadAdminCustomModels() {
+    let loaded = 0;
+    const entries = Object.keys(editorDocument.entities).map((id) => [id, editorDocument.entities[id]])
+      .filter(([, entry]) => entry.type === "custom-model" && !entry.deleted);
+    await Promise.all(entries.map(async ([id, entry]) => {
+      if (!visualAssets.models[entry.modelSlot]) await ensureAdminModelAsset(entry.modelSlot);
+      if (createAdminCustomModel(id, entry)) loaded += 1;
+    }));
+    return loaded;
+  }
+
+  function addAdminCustomModel(modelSlot) {
+    if (!adminMode || !visualAssets.models || !visualAssets.models[modelSlot] || !camera) return null;
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    const position = camera.position.clone().addScaledVector(forward, 12);
+    position.x = clamp(position.x, -HALF_WORLD, HALF_WORLD);
+    position.z = clamp(position.z, -HALF_WORLD, HALF_WORLD);
+    position.y = Math.max(terrainHeight(position.x, position.z), position.y);
+    const horizontal = canonicalModelScale(modelSlot);
+    const id = "custom:" + Date.now().toString(36) + ":" + Math.random().toString(36).slice(2, 7);
+    editorDocument.entities[id] = {
+      type: "custom-model", label: "Custom " + modelSlot, modelSlot,
+      position: { x: position.x, y: position.y, z: position.z }, rotationY: 0,
+      scale: { x: horizontal, y: modelVerticalScale(modelSlot, horizontal), z: horizontal },
+      visible: true, collision: true
+    };
+    const record = createAdminCustomModel(id, editorDocument.entities[id]);
+    if (!record) { delete editorDocument.entities[id]; return null; }
+    selectAdminEntity(id);
+    commitAdminHistory("Add " + modelSlot);
+    return adminEntitySummary(record);
+  }
+
+  function duplicateAdminEntity(id) {
+    const source = adminEntities.get(id);
+    if (!source || !source.modelSlot) return null;
+    const transform = adminEntityTransform(source);
+    const created = addAdminCustomModel(source.modelSlot);
+    if (!created) return null;
+    const record = adminEntities.get(created.id);
+    transform.position.x += 2;
+    transform.position.z += 2;
+    applyAdminTransform(record, transform, true);
+    if (source.color) applyAdminColor(record, source.color, true);
+    if (source.texture) applyAdminTexture(record, source.texture, true).catch(() => {});
+    commitAdminHistory("Duplicate " + source.label);
+    return adminEntitySummary(record);
+  }
+
+  function deleteAdminEntity(id) {
+    const record = adminEntities.get(id);
+    if (!record || record.protected) return false;
+    const entry = editorDocument.entities[id] || { type: record.type };
+    entry.deleted = true;
+    entry.visible = false;
+    editorDocument.entities[id] = entry;
+    setAdminEntityVisibility(record, false, false);
+    if (record.type === "custom-model") {
+      if (record.root.parent) record.root.parent.remove(record.root);
+      unregisterAdminEntity(id);
+    }
+    commitAdminHistory("Delete " + record.label);
+    return true;
+  }
+
+  function applyAdminModelSlot(record, modelSlot, persist) {
+    const asset = visualAssets.models && visualAssets.models[modelSlot];
+    if (!record || !record.modelSlot || !asset || !asset.scene) return false;
+    if (record.modelSlot === modelSlot) return true;
+    const oldSize = new THREE.Vector3();
+    new THREE.Box3().setFromObject(record.root).getSize(oldSize);
+    const replacement = THREE.SkeletonUtils ? THREE.SkeletonUtils.clone(asset.scene) : asset.scene.clone(true);
+    replacement.updateMatrixWorld(true);
+    const newSize = new THREE.Vector3();
+    new THREE.Box3().setFromObject(replacement).getSize(newSize);
+    const oldSpan = Math.max(.01, oldSize.x, oldSize.y, oldSize.z);
+    const newSpan = Math.max(.01, newSize.x, newSize.y, newSize.z);
+    replacement.scale.setScalar(oldSpan / newSpan / Math.max(.001, Math.max(record.root.scale.x, record.root.scale.y, record.root.scale.z)));
+    record.root.clear();
+    record.root.add(replacement);
+    record.modelSlot = modelSlot;
+    record.label = "Imported " + modelSlot;
+    record.appearance = captureAdminAppearance(record.root);
+    tagAdminEntityRoot(record);
+    if (persist !== false) {
+      const entry = editorDocument.entities[record.id] || { type: record.type };
+      entry.modelSlot = modelSlot;
+      editorDocument.entities[record.id] = entry;
+    }
+    return true;
+  }
+
+  function replaceAdminEntityModel(id, modelSlot) {
+    const record = adminEntities.get(id);
+    if (!applyAdminModelSlot(record, modelSlot, true)) return false;
+    commitAdminHistory("Replace model with " + modelSlot);
+    selectAdminEntity(id);
+    return true;
+  }
+
+  function recolorAdminTerrain() {
+    if (!terrain || !terrain.geometry || !terrain.geometry.attributes.position || !terrain.geometry.attributes.color) return false;
+    const position = terrain.geometry.attributes.position;
+    const colors = terrain.geometry.attributes.color;
+    const textured = Boolean(visualAssets.biomeGround || visualAssets.ground);
+    const color = new THREE.Color();
+    for (let index = 0; index < position.count; index += 1) {
+      const x = position.getX(index);
+      const z = position.getZ(index);
+      const y = position.getY(index);
+      const definition = BIOMES[biomeIdAt(x, z)];
+      const low = new THREE.Color(definition.ground).multiplyScalar(textured ? 1.15 : .72);
+      const rock = new THREE.Color(definition.cliff);
+      const high = new THREE.Color(definition.frost).lerp(new THREE.Color(definition.cliff), .5);
+      const snow = new THREE.Color(definition.frost);
+      if (y < 12) color.copy(low).lerp(rock, clamp((y - 1) / 18, 0, 1));
+      else if (y < 48) color.copy(rock).lerp(high, (y - 12) / 36);
+      else color.copy(high).lerp(snow, clamp((y - 48) / 52, 0, 1));
+      const variation = .91 + seeded(index + 91) * .12;
+      colors.setXYZ(index, color.r * variation, color.g * variation, color.b * variation);
+    }
+    colors.needsUpdate = true;
+    return true;
+  }
+
+  function applyAdminBiomeSettings(id, values, persist) {
+    const definition = BIOMES[id];
+    if (!definition || !values) return false;
+    const stored = Object.assign({}, editorDocument.biomes[id] || {});
+    ["ground", "cliff", "grass", "fog", "frost", "sky", "sun"].forEach((field) => {
+      const color = overrideColor(values[field]);
+      if (color == null) return;
+      definition[field] = color;
+      stored[field] = "#" + color.toString(16).padStart(6, "0");
+    });
+    ["fogDensity", "exposure", "treeDensity", "propDensity", "grassDensity"].forEach((field) => {
+      if (values[field] === undefined) return;
+      const limits = field === "fogDensity" ? [0, .025] : field === "exposure" ? [.15, 4] : [0, 3];
+      const value = overrideNumber(values[field], limits[0], limits[1], stored[field] === undefined ? 1 : stored[field]);
+      stored[field] = value;
+      if (field === "fogDensity" || field === "exposure") definition[field] = value;
+    });
+    if (TREELESS_BIOME_IDS.has(id)) stored.treeDensity = 0;
+    if (persist !== false) editorDocument.biomes[id] = stored;
+    forestChunks.filter((chunk) => chunk.biomeId === id).forEach((chunk) => {
+      const density = stored.treeDensity === undefined ? 1 : stored.treeDensity;
+      const count = Math.min(chunk.baseCount, Math.max(0, Math.round(chunk.baseCount * density / chunk.baseDensity)));
+      chunk.count = count;
+      chunk.nearMeshes.forEach((mesh) => { if (mesh.isInstancedMesh) mesh.count = count; });
+      if (chunk.farMesh) chunk.farMesh.count = count;
+    });
+    biomePropMeshes.filter((entry) => entry.biomeId === id).forEach((entry) => {
+      const density = stored.propDensity === undefined ? 1 : stored.propDensity;
+      entry.mesh.count = Math.min(entry.capacity, Math.max(0, Math.round(entry.baseCount * density / entry.baseDensity)));
+    });
+    if (grassField) {
+      const grassAverage = BIOME_IDS.reduce((sum, biomeId) => sum + (editorDocument.biomes[biomeId] && editorDocument.biomes[biomeId].grassDensity !== undefined ? editorDocument.biomes[biomeId].grassDensity : 1), 0) / BIOME_IDS.length;
+      grassField.count = Math.min(grassField.instanceMatrix.count, Math.max(0, Math.round(grassBaseCount * grassAverage / grassBaseDensity)));
+    }
+    if (visualAssets.skyboxes) {
+      const previousSkybox = visualAssets.skyboxes[id];
+      visualAssets.skyboxes[id] = createBiomeSkyTexture(id);
+      if (id === currentBiomeId && sky && sky.material) { sky.material.map = visualAssets.skyboxes[id]; sky.material.needsUpdate = true; }
+      if (previousSkybox && previousSkybox.dispose) previousSkybox.dispose();
+    }
+    recolorAdminTerrain();
+    updateActiveBiomePresentation(true);
+    if (persist !== false) commitAdminHistory("Tune " + BIOMES[id].name);
+    return Object.assign({}, stored);
+  }
+
+  function setAdminEnemyProfile(kind, values) {
+    if (!kind || kind === "global") editorDocument.enemies.global = Object.assign({}, editorDocument.enemies.global || {}, values || {});
+    else editorDocument.enemies.byKind[kind] = Object.assign({}, editorDocument.enemies.byKind[kind] || {}, values || {});
+    editorDocument = sanitizeWorldOverrides(editorDocument);
+    dragons.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
+    groundEnemies.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
+    commitAdminHistory("Tune " + (kind || "global") + " enemies");
+    return adminEnemyTuning(kind && kind !== "global" ? kind : "enemy");
+  }
+
+  function adminValidationReport() {
+    const issues = [];
+    let customObjects = 0;
+    Object.keys(editorDocument.entities).forEach((id) => {
+      const entry = editorDocument.entities[id];
+      if (entry.type === "custom-model") customObjects += 1;
+      if (entry.modelSlot && !visualAssets.modelPaths[entry.modelSlot]) issues.push({ severity: "error", id, message: "Unknown model slot: " + entry.modelSlot });
+      if (entry.position && (Math.abs(entry.position.x) > HALF_WORLD || Math.abs(entry.position.z) > HALF_WORLD)) issues.push({ severity: "error", id, message: "Position is outside the authored continent." });
+      if (entry.position && terrain && entry.position.y < waterLevelAt(entry.position.x, entry.position.z) - 8) issues.push({ severity: "warning", id, message: "Object is far below the biome waterline." });
+      if (entry.scale && Math.max(entry.scale.x, entry.scale.y, entry.scale.z) / Math.max(.02, Math.min(entry.scale.x, entry.scale.y, entry.scale.z)) > 12) issues.push({ severity: "warning", id, message: "Extreme non-uniform scale may distort collisions." });
+    });
+    return {
+      valid: !issues.some((issue) => issue.severity === "error"), issues,
+      entities: adminEntities.size, overrides: Object.keys(editorDocument.entities).length,
+      customObjects, colliders: colliders.filter((item) => !item.disabled).length,
+      worldSignature: WORLD_LAYOUT_SIGNATURE, schemaVersion: WORLD_OVERRIDE_SCHEMA_VERSION
+    };
+  }
+
+  function adminSourceFile(documentValue) {
+    const clean = sanitizeWorldOverrides(documentValue || editorDocument);
+    return "(function () {\n  \"use strict\";\n  window.AshenholdWorldOverrides = " + JSON.stringify(clean, null, 2) + ";\n})();\n";
+  }
+
+  function reapplyRegisteredEntityOverrides() {
+    Array.from(adminEntities.values())
+      .sort((a, b) => Number(b.type === "location") - Number(a.type === "location"))
+      .forEach(applyAdminEntityOverride);
+  }
+
+  function applyAdminDocument(value, historyReason) {
+    if (historyReason) validateAdminDocumentInput(value);
+    const next = sanitizeWorldOverrides(value);
+    editorDocument = next;
+    BIOME_IDS.forEach((id) => applyAdminBiomeSettings(id, Object.assign({}, BASE_BIOME_SETTINGS[id], next.biomes[id] || {}), false));
+    const records = Array.from(adminEntities.values());
+    records.forEach((record) => {
+      if (record.originalModelSlot) applyAdminModelSlot(record, record.originalModelSlot, false);
+      restoreAdminAppearance(record);
+      applyAdminTransform(record, record.defaultTransform, false);
+      setAdminEntityVisibility(record, record.defaultVisible, false);
+      if (record.defaultEnemy) applyAdminEnemyValues(record, record.defaultEnemy, false);
+    });
+    records.slice().sort((a, b) => Number(b.type === "location") - Number(a.type === "location")).forEach(applyAdminEntityOverride);
+    records.forEach((record) => {
+      if (record.type === "custom-model" && !next.entities[record.id]) {
+        if (record.root.parent) record.root.parent.remove(record.root);
+        unregisterAdminEntity(record.id);
+      }
+    });
+    loadAdminCustomModels().then(() => announceAdminChange("custom-models-loaded", null)).catch(() => {});
+    dragons.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
+    groundEnemies.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
+    if (historyReason) commitAdminHistory(historyReason);
+    announceAdminChange("document-applied", null);
+    return adminDocumentSnapshot();
+  }
+
+  function stepAdminHistory(direction) {
+    const nextIndex = adminHistoryIndex + direction;
+    if (nextIndex < 0 || nextIndex >= adminHistory.length) return false;
+    adminHistoryIndex = nextIndex;
+    applyAdminDocument(JSON.parse(adminHistory[adminHistoryIndex].serialized), null);
+    return true;
+  }
+
+  function setAdminEntityTransform(id, patch, checkpoint) {
+    const record = adminEntities.get(id);
+    if (!record) return null;
+    const current = adminEntityTransform(record);
+    const source = patch || {};
+    const next = {
+      position: Object.assign({}, current.position, source.position || {}),
+      rotationY: source.rotationY !== undefined ? Number(source.rotationY) : current.rotationY,
+      scale: Object.assign({}, current.scale, source.scale || {})
+    };
+    applyAdminTransform(record, next, true);
+    if (checkpoint !== false) commitAdminHistory("Transform " + record.label);
+    else announceAdminChange("transform-preview", id);
+    return adminEntitySummary(record);
+  }
+
+  function setAdminEntityCollision(id, enabled, persist) {
+    const record = adminEntities.get(id);
+    if (!record) return false;
+    if (!record.colliderLinks.length && enabled) {
+      record.root.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(record.root);
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      box.getSize(size);
+      box.getCenter(center);
+      const collider = addCollider(center.x, center.z, Math.max(.15, size.x / 2), Math.max(.15, size.z / 2), adminEntityTransform(record).rotationY, box.min.y, box.max.y);
+      record.colliderLinks.push({ target: collider, base: Object.assign({}, collider) });
+    }
+    const active = Boolean(enabled) && record.root.visible;
+    record.colliderLinks.forEach((link) => { link.target.disabled = !active; });
+    record.platformLinks.forEach((link) => { link.target.disabled = !active; });
+    if (persist !== false) {
+      const entry = editorDocument.entities[id] || { type: record.type };
+      entry.collision = Boolean(enabled);
+      editorDocument.entities[id] = entry;
+      commitAdminHistory((enabled ? "Enable" : "Disable") + " collision for " + record.label);
+    }
+    return true;
+  }
+
+  function focusAdminEntity(id) {
+    const record = adminEntities.get(id);
+    if (!record || !camera) return false;
+    const transform = adminEntityTransform(record);
+    const center = new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z);
+    const size = new THREE.Vector3();
+    new THREE.Box3().setFromObject(record.root).getSize(size);
+    const distance = clamp(Math.max(size.x, size.y, size.z) * 1.45, 7, 120);
+    setAdminMode("freecam");
+    camera.position.copy(center).add(new THREE.Vector3(distance * .62, distance * .42, distance));
+    const direction = center.clone().sub(camera.position).normalize();
+    adminControls.freecamYaw = Math.atan2(-direction.x, -direction.z);
+    adminControls.freecamPitch = -Math.asin(clamp(direction.y, -1, 1));
+    camera.lookAt(center);
+    return true;
+  }
+
+  function initializeAdminMode() {
+    if (!adminMode || window.__ASHENHOLD_ADMIN__) return false;
+    const runtime = {
+      version: 1,
+      isLocal: true,
+      info: () => ({
+        ready: state !== "loading", mode: adminControls.mode, transformMode: adminControls.transformMode,
+        simulationPaused: adminControls.simulationPaused, selectedId: adminSelectedId,
+        entities: adminEntities.size, revision: adminRevision,
+        history: { index: adminHistoryIndex, length: adminHistory.length },
+        worldSignature: WORLD_LAYOUT_SIGNATURE
+      }),
+      listEntities: () => Array.from(adminEntities.values()).map((record) => ({
+        id: record.id, label: record.label, type: record.type, category: record.category,
+        modelSlot: record.modelSlot, visible: Boolean(record.root && record.root.visible), protected: record.protected
+      })).sort((a, b) => a.category.localeCompare(b.category) || a.label.localeCompare(b.label)),
+      getEntity: (id) => adminEntitySummary(adminEntities.get(id)),
+      select: selectAdminEntity,
+      pick: pickAdminEntity,
+      pickGizmo: pickAdminGizmo,
+      focus: focusAdminEntity,
+      setTransformMode: (mode) => {
+        if (["translate", "rotate", "scale"].includes(mode)) adminControls.transformMode = mode;
+        return adminControls.transformMode;
+      },
+      beginDrag: beginAdminDrag,
+      drag: dragAdminTransform,
+      endDrag: endAdminDrag,
+      setTransform: setAdminEntityTransform,
+      setColor: (id, color) => {
+        const record = adminEntities.get(id);
+        if (!applyAdminColor(record, color, true)) return false;
+        commitAdminHistory("Color " + record.label);
+        return adminEntitySummary(record);
+      },
+      setTexture: async (id, path) => {
+        const record = adminEntities.get(id);
+        if (!await applyAdminTexture(record, path, true)) return false;
+        commitAdminHistory("Texture " + record.label);
+        return adminEntitySummary(record);
+      },
+      setVisible: (id, visible) => {
+        const record = adminEntities.get(id);
+        if (!setAdminEntityVisibility(record, visible, true)) return false;
+        commitAdminHistory((visible ? "Show " : "Hide ") + record.label);
+        return adminEntitySummary(record);
+      },
+      setCollision: setAdminEntityCollision,
+      setEnemy: (id, values) => {
+        const record = adminEntities.get(id);
+        if (!applyAdminEnemyValues(record, values, true)) return false;
+        commitAdminHistory("Tune " + record.label);
+        return adminEntitySummary(record);
+      },
+      ground: (id) => {
+        const record = adminEntities.get(id);
+        if (!record) return false;
+        const transform = adminEntityTransform(record);
+        transform.position.y = terrainHeight(transform.position.x, transform.position.z);
+        return setAdminEntityTransform(id, transform, true);
+      },
+      addModel: addAdminCustomModel,
+      duplicate: duplicateAdminEntity,
+      remove: deleteAdminEntity,
+      replaceModel: replaceAdminEntityModel,
+      modelCatalog: () => Object.keys(visualAssets.modelPaths || {}).sort().map((id) => ({
+        id, path: visualAssets.modelPaths[id], metric: modelScaleRegistry[id] ? Object.assign({}, modelScaleRegistry[id]) : null
+      })),
+      textureCatalog: adminTextureCatalog,
+      biomes: () => BIOME_IDS.map((id) => Object.assign({ id, name: BIOMES[id].name, treeless: TREELESS_BIOME_IDS.has(id) }, editorDocument.biomes[id] || {}, {
+        ground: (editorDocument.biomes[id] && editorDocument.biomes[id].ground) || "#" + BIOMES[id].ground.toString(16).padStart(6, "0"),
+        cliff: (editorDocument.biomes[id] && editorDocument.biomes[id].cliff) || "#" + BIOMES[id].cliff.toString(16).padStart(6, "0"),
+        grass: (editorDocument.biomes[id] && editorDocument.biomes[id].grass) || "#" + BIOMES[id].grass.toString(16).padStart(6, "0"),
+        fog: (editorDocument.biomes[id] && editorDocument.biomes[id].fog) || "#" + BIOMES[id].fog.toString(16).padStart(6, "0"),
+        fogDensity: editorDocument.biomes[id] && editorDocument.biomes[id].fogDensity !== undefined ? editorDocument.biomes[id].fogDensity : BIOMES[id].fogDensity,
+        exposure: editorDocument.biomes[id] && editorDocument.biomes[id].exposure !== undefined ? editorDocument.biomes[id].exposure : BIOMES[id].exposure,
+        treeDensity: TREELESS_BIOME_IDS.has(id) ? 0 : editorDocument.biomes[id] && editorDocument.biomes[id].treeDensity !== undefined ? editorDocument.biomes[id].treeDensity : 1,
+        propDensity: editorDocument.biomes[id] && editorDocument.biomes[id].propDensity !== undefined ? editorDocument.biomes[id].propDensity : 1,
+        grassDensity: editorDocument.biomes[id] && editorDocument.biomes[id].grassDensity !== undefined ? editorDocument.biomes[id].grassDensity : 1
+      })),
+      setBiome: applyAdminBiomeSettings,
+      enemyProfiles: () => ({ document: JSON.parse(JSON.stringify(editorDocument.enemies)), effective: ["biomeLight", "biomeHeavy", "warg", "golem", "dragon"].reduce((output, kind) => { output[kind] = adminEnemyTuning(kind); return output; }, {}) }),
+      setEnemyProfile: setAdminEnemyProfile,
+      getDocument: adminDocumentSnapshot,
+      setDocument: (value) => applyAdminDocument(value, "Import editor document"),
+      sourceFile: adminSourceFile,
+      validate: adminValidationReport,
+      undo: () => stepAdminHistory(-1),
+      redo: () => stepAdminHistory(1),
+      canUndo: () => adminHistoryIndex > 0,
+      canRedo: () => adminHistoryIndex >= 0 && adminHistoryIndex < adminHistory.length - 1,
+      controls: {
+        setMode: setAdminMode,
+        setInput: (key, active) => { const normalized = String(key || "").toLowerCase(); if (active) adminControls.input.add(normalized); else adminControls.input.delete(normalized); },
+        clearInput: () => adminControls.input.clear(),
+        look: applyAdminLook,
+        setPaused: (paused) => { adminControls.simulationPaused = Boolean(paused); return adminControls.simulationPaused; },
+        setSpeed: (speed) => { adminControls.speed = clamp(Number(speed) || 34, 2, 250); return adminControls.speed; },
+        setSnap: (values) => { adminControls.snap = Object.assign({}, adminControls.snap, values || {}); return Object.assign({}, adminControls.snap); }
+      }
+    };
+    Object.freeze(runtime.controls);
+    Object.freeze(runtime);
+    Object.defineProperty(window, "__ASHENHOLD_ADMIN__", { value: runtime, configurable: true, enumerable: false, writable: false });
+    commitAdminHistory("Open editor");
+    const stylesheet = document.createElement("link");
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = "admin-editor.css";
+    stylesheet.dataset.ashenholdAdminAsset = "true";
+    const script = document.createElement("script");
+    script.src = "admin-editor.js";
+    script.defer = true;
+    script.dataset.ashenholdAdminAsset = "true";
+    script.addEventListener("load", () => { adminUiLoaded = true; window.dispatchEvent(new CustomEvent("ashenhold:admin-ready")); });
+    script.addEventListener("error", () => console.error("The local Ashenhold admin UI could not be loaded."));
+    document.head.appendChild(stylesheet);
+    document.body.appendChild(script);
+    return true;
+  }
   function generateWorldLayout() {
     // These anchors are intentionally authored and immutable. Every player enters
     // the same continent and can walk between its six biomes without a reload.
@@ -1114,6 +2645,19 @@
       [710, -660, -5.0, 4.6, 10, "CRATER CAUSEWAY", "moon"]
     ];
     return { id: WORLD_ID, signature: WORLD_LAYOUT_SIGNATURE, version: WORLD_LAYOUT_VERSION, forts, routes, roadPhase: -.42, salt: 24000 };
+  }
+
+  function applyAuthoredAnchorOverride(id, target, arrayTarget) {
+    const override = editorDocument.entities["location:" + id];
+    if (!override || !override.position) return target;
+    if (arrayTarget) {
+      target[0] = override.position.x;
+      target[1] = override.position.z;
+    } else {
+      target.x = override.position.x;
+      target.z = override.position.z;
+    }
+    return target;
   }
   const POI_NAMES = {
     snowy: { hamlet: ["RIMEFALL HAMLET", "FROSTHEARTH"], watchpost: ["PALEWATCH POST", "GLACIER LOOKOUT"], shrine: ["SHRINE OF THE HOAR", "FROSTBOUND SHRINE"], camp: ["WOLFSDRIFT CAMP", "RAZORICE CAMP"], ruin: ["RUINS OF ICEMERE", "SHATTERED VIGIL"] },
@@ -1141,6 +2685,9 @@
     ];
   }
   const worldLayout = generateWorldLayout();
+  applyAuthoredAnchorOverride("keep", RUINS, false);
+  worldLayout.forts.forEach((fort, index) => applyAuthoredAnchorOverride("fort-" + index, fort, true));
+  worldLayout.routes.forEach((route, index) => applyAuthoredAnchorOverride("route-" + index, route, true));
   function buildTerrainFeatures() {
     return [
       { x: -730, z: 180, radius: 128, height: 26, biomeId: "shore" }, { x: -445, z: 665, radius: 95, height: 20, biomeId: "shore" },
@@ -1154,6 +2701,7 @@
   const terrainFeatures = buildTerrainFeatures();
   const terrainFeaturesByBiome = new Map(BIOME_IDS.map((id) => [id, terrainFeatures.filter((feature) => feature.biomeId === id)]));
   worldLayout.pois = generatePoiLayout();
+  worldLayout.pois.forEach((poi, index) => applyAuthoredAnchorOverride("poi-" + index, poi, false));
   function generateInfrastructureLayout() {
     const salt = worldLayout.salt + 10400;
     const palettes = {
@@ -1196,6 +2744,7 @@
     return sites;
   }
   worldLayout.infrastructure = generateInfrastructureLayout();
+  worldLayout.infrastructure.forEach((site) => applyAuthoredAnchorOverride(site.id, site, false));
   const foundationZones = [
     { id: "title-vantage", x: TITLE_VANTAGE.x, z: TITLE_VANTAGE.z, inner: 14, outer: 28, lift: 0 },
     { id: "start", x: START.x, z: START.z, inner: 18, outer: 42, lift: .2 },
@@ -1831,7 +3380,7 @@
     game.dataset.state = state;
     ui.skills.classList.remove("active");
     lastTime = performance.now();
-    if (!isCoarse && !testMode) showMessage("CLICK THE REALM TO RECAPTURE THE MOUSE", "#9fcbd4");
+    if (!isCoarse && !testMode && !adminMode) showMessage("CLICK THE REALM TO RECAPTURE THE MOUSE", "#9fcbd4");
   }
 
   function clearProgressionData() {
@@ -2281,6 +3830,7 @@
       initRenderer();
       updateLoading(17, "Weaving storm and stone...");
       await Promise.all([loadVisualAssets(), loadModelAssets()]);
+      await preloadAdminOverrideModels();
       updateLoading(28, "Raising the mountains...");
       await delay(35);
       createSkyAndLights();
@@ -2297,6 +3847,8 @@
       createSettlements();
       createChests();
       createBiomeProps();
+      await loadAdminCustomModels();
+      reapplyRegisteredEntityOverrides();
       createAtmosphere();
       updateLoading(73, "Arming the Warden...");
       await delay(35);
@@ -2322,7 +3874,12 @@
       if (pendingRunState && ui.enter) ui.enter.querySelector("span").textContent = "CONTINUE SAVED RUN";
       ui.loading.classList.remove("active");
       ui.title.classList.add("active");
-      ui.enter.focus({ preventScroll: true });
+      if (adminMode) {
+        startGame(false);
+        adminControls.simulationPaused = true;
+        setAdminMode("select");
+        initializeAdminMode();
+      } else ui.enter.focus({ preventScroll: true });
       updateLoading(100, "Ashenhold Continent ready");
       multiplayerBootReady = true;
       initializeMultiplayerAdapter();
@@ -2669,7 +4226,7 @@
       const roadDistance = x - roadCenterAt(z);
       heightValue -= Math.exp(-(roadDistance * roadDistance) / 760) * 2.6;
     }
-    heightValue -= Math.exp(-(x * x + Math.pow(z - RUINS.z, 2)) / 2400) * 2.2;
+    heightValue -= Math.exp(-(Math.pow(x - RUINS.x, 2) + Math.pow(z - RUINS.z, 2)) / 2400) * 2.2;
     return heightValue;
   }
 
@@ -2879,20 +4436,24 @@
   }
 
   function createRuins() {
+    const previousPlacementContext = beginAdminPlacementContext("keep");
+    const sceneChildrenBefore = new Set(scene.children);
+    const colliderStart = colliders.length;
     const ruins = new THREE.Group();
     ruins.name = "Ashenhold Keep";
     scene.add(ruins);
+    const cx = RUINS.x;
     const z = RUINS.z;
     // Canonical keep: a roughly 80 x 82 metre defensible enclosure, with a nine-metre gate.
-    addStoneBox(ruins, -38, z - 27, 6, 15, 82, 0, true);
-    addStoneBox(ruins, 38, z - 27, 6, 15, 82, 0, true);
-    addStoneBox(ruins, -20, z - 68, 34, 14, 6, 0, true);
-    addStoneBox(ruins, 20, z - 68, 34, 17, 6, 0, true);
-    addStoneBox(ruins, -21, z + 14, 31, 13, 6, 0, true);
-    addStoneBox(ruins, 21, z + 14, 31, 11, 6, 0, true);
+    addStoneBox(ruins, cx - 38, z - 27, 6, 15, 82, 0, true);
+    addStoneBox(ruins, cx + 38, z - 27, 6, 15, 82, 0, true);
+    addStoneBox(ruins, cx - 20, z - 68, 34, 14, 6, 0, true);
+    addStoneBox(ruins, cx + 20, z - 68, 34, 17, 6, 0, true);
+    addStoneBox(ruins, cx - 21, z + 14, 31, 13, 6, 0, true);
+    addStoneBox(ruins, cx + 21, z + 14, 31, 11, 6, 0, true);
 
     const towerGeometry = new THREE.CylinderGeometry(9.2, 10.2, 26, 10);
-    [[-38, z - 68], [38, z - 68], [-38, z + 14], [38, z + 14]].forEach((point, index) => {
+    [[cx - 38, z - 68], [cx + 38, z - 68], [cx - 38, z + 14], [cx + 38, z + 14]].forEach((point, index) => {
       const tower = new THREE.Mesh(towerGeometry, index % 2 ? darkStoneMaterial : stoneMaterial);
       const towerBase = terrainHeight(point[0], point[1]);
       tower.position.set(point[0], towerBase + 13, point[1]);
@@ -2911,18 +4472,26 @@
       }
     });
 
-    [-5.6, 5.6].forEach((x) => addStoneBox(ruins, x, z + 14, 3.4, 14, 5.8, 0, true));
-    addStoneBox(ruins, 0, z + 14, 14.6, 3.2, 5.8, 0, false).position.y += 10.3;
+    [-5.6, 5.6].forEach((x) => addStoneBox(ruins, cx + x, z + 14, 3.4, 14, 5.8, 0, true));
+    addStoneBox(ruins, cx, z + 14, 14.6, 3.2, 5.8, 0, false).position.y += 10.3;
 
     const obelisk = new THREE.Mesh(new THREE.ConeGeometry(3.2, 17, 4), darkStoneMaterial);
-    obelisk.position.set(0, terrainHeight(0, z - 27) + 8.5, z - 27);
+    obelisk.position.set(cx, terrainHeight(cx, z - 27) + 8.5, z - 27);
     obelisk.rotation.y = Math.PI / 4;
     obelisk.castShadow = !isCoarse;
     ruins.add(obelisk);
 
-    createFire(-16, z - 12, true);
-    createFire(18, z - 43, false);
-    createFire(0, z + 24, false);
+    createFire(cx - 16, z - 12, true);
+    createFire(cx + 18, z - 43, false);
+    createFire(cx, z + 24, false);
+    scene.children.slice().forEach((child) => {
+      if (child !== ruins && !sceneChildrenBefore.has(child) && child !== adminGizmo && child !== adminSelectionHelper) ruins.attach(child);
+    });
+    registerAdminEntity(ruins, {
+      id: "location:keep", label: "ASHENHOLD KEEP", type: "location", category: "Locations", sourceId: "keep",
+      pivot: true, anchor: { x: RUINS.x, y: terrainHeight(RUINS.x, RUINS.z), z: RUINS.z }, colliders: colliders.slice(colliderStart)
+    });
+    endAdminPlacementContext(previousPlacementContext);
   }
 
   function createFire(x, z, withLight) {
@@ -3028,7 +4597,9 @@
 
   function createAncientForest() {
     const profile = FOREST_PROFILES[realm.biome] || FOREST_PROFILES.jungle;
-    const target = isCoarse ? profile.coarse : profile.desktop;
+    const forestBiomes = BIOME_IDS.filter((id) => !TREELESS_BIOME_IDS.has(id));
+    const densityAverage = forestBiomes.reduce((sum, id) => sum + (editorDocument.biomes[id] && editorDocument.biomes[id].treeDensity !== undefined ? editorDocument.biomes[id].treeDensity : 1), 0) / Math.max(1, forestBiomes.length);
+    const target = Math.round((isCoarse ? profile.coarse : profile.desktop) * clamp(densityAverage, 0, 3));
     const placements = [];
     const salt = worldLayout.salt + 15200;
     for (let attempt = 0; placements.length < target && attempt < target * 16; attempt += 1) {
@@ -3189,8 +4760,12 @@
       trunkMesh.castShadow = !isCoarse;
       crownMesh.castShadow = false;
       farMesh.castShadow = false;
+      const chunkBiomeId = biomeIdAt(centerX, centerZ);
       forestChunks.push({
-        centerX, centerZ, radius: chunkSize * Math.SQRT1_2, count: bucket.trees.length,
+        centerX, centerZ, biomeId: chunkBiomeId,
+        baseDensity: Math.max(.001, editorDocument.biomes[chunkBiomeId] && editorDocument.biomes[chunkBiomeId].treeDensity !== undefined ? editorDocument.biomes[chunkBiomeId].treeDensity : 1),
+        radius: chunkSize * Math.SQRT1_2,
+        count: bucket.trees.length, baseCount: bucket.trees.length,
         nearMeshes: [trunkMesh, crownMesh].concat(heroModels), farMesh
       });
     });
@@ -3313,6 +4888,7 @@
   }
 
   function importedModel(id, x, z, scale, rotation, yOffset, collider, baseY) {
+    const adminId = placedAdminModelId(id, x, z, rotation, yOffset, scale);
     if (TREE_MODEL_IDS.has(id) && !biomeAllowsTreesAt(x, z)) return null;
     const asset = visualAssets.models && visualAssets.models[id];
     if (!asset) return null;
@@ -3351,10 +4927,14 @@
     scene.add(root);
     importedModelInstances += 1;
     if (TREE_MODEL_IDS.has(id)) recordTreePopulation(biomeIdAt(x, z), 1, "imported-model");
-    if (collider) addCollider(
+    const colliderLink = collider ? addCollider(
       x, z, collider.hx, collider.hz, rotation || 0,
       groundY + (collider.minY || 0), groundY + (collider.maxY || collider.height || 12)
-    );
+    ) : null;
+    registerAdminEntity(root, {
+      id: adminId, label: root.name, type: "model", category: "Models",
+      modelSlot: id, colliders: colliderLink ? [colliderLink] : []
+    });
     return root;
   }
 
@@ -3369,10 +4949,11 @@
   }
 
   function placePackModel(key, x, z, scale, rotation, opts) {
+    const options = opts || {};
+    const adminId = placedAdminModelId(key, x, z, rotation, options.yOffset, scale);
     if (TREE_MODEL_IDS.has(key) && !biomeAllowsTreesAt(x, z)) return null;
     const asset = visualAssets.models && visualAssets.models[key];
     if (!asset) return null;
-    const options = opts || {};
     const root = asset.scene.clone(true);
     root.name = "Pack " + key;
     const horizontalScale = scale || 1;
@@ -3390,6 +4971,9 @@
     scene.add(root);
     importedModelInstances += 1;
     if (TREE_MODEL_IDS.has(key)) recordTreePopulation(biomeIdAt(x, z), 1, "pack-model");
+    registerAdminEntity(root, {
+      id: adminId, label: root.name, type: "model", category: "Models", modelSlot: key
+    });
     return { root, baseY };
   }
 
@@ -3439,6 +5023,7 @@
   }
 
   function createImportedFort(x, z, rotation, scale, name) {
+    const colliderStart = colliders.length;
     const fort = new THREE.Group();
     fort.name = name;
     scene.add(fort);
@@ -3491,12 +5076,20 @@
     const fireB = worldPoint(12, -9);
     createFire(fireA.x, fireA.z, !isCoarse);
     createFire(fireB.x, fireB.z, false);
+    registerAdminEntity(fort, {
+      id: "location:fort-" + worldLayout.forts.findIndex((entry) => entry[4] === name),
+      label: name, type: "location", category: "Locations", sourceId: "fort-" + worldLayout.forts.findIndex((entry) => entry[4] === name),
+      pivot: true, anchor: { x, y: fortBaseY, z }, colliders: colliders.slice(colliderStart)
+    });
+    return fort;
   }
 
   function createImportedWorld() {
     if (!visualAssets.models || !visualAssets.models.tower) return;
     worldLayout.forts.forEach((fort, index) => {
+      const previousPlacementContext = beginAdminPlacementContext("fort-" + index);
       createImportedFort(fort[0], fort[1], fort[2], fort[3], fort[4]);
+      endAdminPlacementContext(previousPlacementContext);
       registerStronghold("fort-" + index, fort[4], "fort", fort[0], fort[1]);
     });
     const siegeScale = canonicalModelScale("siegeTower");
@@ -3546,6 +5139,9 @@
       return mesh;
     };
     (worldLayout.infrastructure || []).forEach((site, index) => {
+      const previousPlacementContext = beginAdminPlacementContext("infrastructure-" + site.id);
+      const sceneChildrenBefore = new Set(scene.children);
+      const siteColliderStart = colliders.length;
       byKind[site.kind] = (byKind[site.kind] || 0) + 1;
       const group = new THREE.Group();
       group.name = "Micro landmark " + site.id + " " + site.kind;
@@ -3605,6 +5201,15 @@
         }
       }
       group.userData.infrastructure = { id: site.id, kind: site.kind, index };
+      scene.children.slice().forEach((child) => {
+        if (child !== group && !sceneChildrenBefore.has(child) && child !== adminGizmo && child !== adminSelectionHelper) group.attach(child);
+      });
+      registerAdminEntity(group, {
+        id: "location:" + site.id, label: site.kind.replace(/-/g, " ").toUpperCase(),
+        type: "location", category: "Infrastructure", sourceId: site.id,
+        pivot: true, anchor: { x: site.x, y: baseY, z: site.z }, colliders: colliders.slice(siteColliderStart)
+      });
+      endAdminPlacementContext(previousPlacementContext);
     });
     infrastructureReport = {
       total: (worldLayout.infrastructure || []).length,
@@ -3819,24 +5424,55 @@
   function createVerticalRoutes() {
     verticalRouteReports = [];
     worldLayout.routes.forEach((route, routeIndex) => {
+      const previousPlacementContext = beginAdminPlacementContext("route-" + routeIndex);
+      const sceneChildrenBefore = new Set(scene.children);
+      const colliderStart = colliders.length;
+      const platformStart = platforms.length;
       if (routeIndex === 0) buildSpireRoute(route, routeIndex);
       else buildScaffoldRoute(route, routeIndex);
       verticalRouteReports.push(measureVerticalRoute(route[5]));
       const summit = platforms.filter((platform) => platform.routeId === route[5]).sort((a, b) => b.stepIndex - a.stepIndex)[0];
+      const pivot = new THREE.Group();
+      pivot.name = route[5] + " route editor pivot";
+      scene.add(pivot);
+      scene.children.slice().forEach((child) => {
+        if (child !== pivot && !sceneChildrenBefore.has(child) && child !== adminGizmo && child !== adminSelectionHelper) pivot.attach(child);
+      });
+      registerAdminEntity(pivot, {
+        id: "location:route-" + routeIndex, label: route[5], type: "location", category: "Routes", sourceId: "route-" + routeIndex,
+        pivot: true, anchor: { x: route[0], y: terrainHeight(route[0], route[1]), z: route[1] },
+        colliders: colliders.slice(colliderStart), platforms: platforms.slice(platformStart)
+      });
+      endAdminPlacementContext(previousPlacementContext);
       registerStronghold("ascent-" + routeIndex, route[5], "ascent", summit ? summit.x : route[0], summit ? summit.z : route[1]);
     });
   }
 
+  function locationAttachmentOverride(sourceId, point, anchor) {
+    const entry = editorDocument.entities["location:" + sourceId];
+    if (!entry || (!entry.rotationY && !entry.scale)) return point;
+    const scale = adminScale(entry.scale, { x: 1, y: 1, z: 1 });
+    const offset = rotateAdminXZ((point.x - anchor.x) * scale.x, (point.z - anchor.z) * scale.z, entry.rotationY || 0);
+    point.x = anchor.x + offset.x;
+    point.z = anchor.z + offset.z;
+    if (Number.isFinite(point.rotation)) point.rotation += entry.rotationY || 0;
+    return point;
+  }
+
   function createExperienceRunes() {
     const routeSummits = worldLayout.routes.map((route) => platforms.filter((platform) => platform.routeId === route[5]).sort((a, b) => b.stepIndex - a.stepIndex)[0]);
+    const fortDefinitions = worldLayout.forts.map((fort, index) => locationAttachmentOverride("fort-" + index, {
+      id: "fort-" + index, sourceId: "fort-" + index, name: fort[4] + " RUNE",
+      x: fort[0] + Math.cos(fort[2]) * 9, z: fort[1] + Math.sin(fort[2]) * 9, xp: 90 + index * 20
+    }, { x: fort[0], z: fort[1] }));
+    const routeDefinitions = routeSummits.filter(Boolean).map((summit, index) => ({
+      id: "route-" + index, sourceId: "route-" + index, name: worldLayout.routes[index][5] + " RUNE",
+      x: summit.x - (index ? 1.5 : 2.4), z: summit.z, xp: 135 + index * 25
+    }));
     const definitions = [
       { id: "hollow", name: "RUNE OF THE HOLLOW", x: RUNE_HOLLOW.x, z: RUNE_HOLLOW.z, xp: 80 },
-      { id: "keep", name: "KEEPER'S RUNE", x: RUINS.x + 12, z: RUINS.z - 26, xp: 100 }
-    ].concat(worldLayout.forts.map((fort, index) => ({
-      id: "fort-" + index, name: fort[4] + " RUNE", x: fort[0] + Math.cos(fort[2]) * 9, z: fort[1] + Math.sin(fort[2]) * 9, xp: 90 + index * 20
-    }))).concat(routeSummits.filter(Boolean).map((summit, index) => ({
-      id: "route-" + index, name: worldLayout.routes[index][5] + " RUNE", x: summit.x - (index ? 1.5 : 2.4), z: summit.z, xp: 135 + index * 25
-    })));
+      locationAttachmentOverride("keep", { id: "keep", sourceId: "keep", name: "KEEPER'S RUNE", x: RUINS.x + 12, z: RUINS.z - 26, xp: 100 }, RUINS)
+    ].concat(fortDefinitions, routeDefinitions);
     const runeStone = new THREE.MeshStandardMaterial({
       color: 0x34444a, map: visualAssets.stone || null, bumpMap: visualAssets.stone || null,
       bumpScale: .2, roughness: .82, metalness: .16, envMapIntensity: .34
@@ -3865,7 +5501,7 @@
       root.traverse((object) => { if (object.isMesh) { object.castShadow = !isCoarse; object.receiveShadow = true; } });
       scene.add(root);
       experienceRunes.push({
-        id: definition.id, name: definition.name, xp: definition.xp, root, crystal, halo, marker,
+        id: definition.id, sourceId: definition.sourceId || null, name: definition.name, xp: definition.xp, root, crystal, halo, marker,
         crystalMaterial, claimed: false, phase: index * 1.37, baseY: crystal.position.y
       });
     });
@@ -3960,6 +5596,7 @@
     const radialRotation = Math.atan2(x - poi.x, z - poi.z);
     poiChestSpots.push({
       idSuffix: poiChestSpots.length,
+      sourceId: poi._adminSourceId || null,
       name: poi.name + " CACHE",
       x,
       z,
@@ -4073,13 +5710,14 @@
   }
 
   function decorateStrongholdSite(stronghold, salt) {
+    const previousPlacementContext = beginAdminPlacementContext("stronghold-" + stronghold.id);
     const models = visualAssets.models || {};
     const choices = stronghold.kind === "camp" ? ["crateBig", "weaponrack", "tent"]
       : stronghold.kind === "ruin" || stronghold.kind === "shrine" || stronghold.kind === "graveyard" ? ["dngColumn", "statueColumnDamaged", "crateOpen"]
       : ["flagRed", "bannerRed", "crateBig", "weaponrack"];
     const available = choices.filter((key) => models[key]);
-    if (!available.length) return;
-    const count = isCoarse ? 1 : stronghold.kind === "keep" || stronghold.kind === "fort" ? 4 : 2;
+    if (!available.length) { endAdminPlacementContext(previousPlacementContext); return; }
+    const count = stronghold.kind === "keep" || stronghold.kind === "fort" ? 4 : 2;
     for (let index = 0; index < count; index += 1) {
       const key = available[Math.floor(seeded(salt + 90 + index * 5) * available.length)];
       const angle = seeded(salt + 91 + index * 5) * Math.PI * 2;
@@ -4087,11 +5725,20 @@
       const scale = key.indexOf("dng") === 0 ? POI_SCALES.dungeon : key.indexOf("statue") === 0 ? POI_SCALES.nature : key.indexOf("banner") === 0 ? POI_SCALES.town : POI_SCALES.medieval;
       placePackModel(key, stronghold.x + Math.cos(angle) * radius, stronghold.z + Math.sin(angle) * radius, scale, seeded(salt + 93 + index * 5) * Math.PI * 2, {});
     }
+    endAdminPlacementContext(previousPlacementContext);
   }
 
   // Strongholds are world gen: every fort, settlement, ascent summit and the keep registers once,
   // with seeded garrison spots ringed around its center (extra light/golem slots cover level scaling).
   function registerStronghold(id, name, kind, x, z) {
+    const locationSourceId = kind === "ascent" && /^ascent-\d+$/.test(id) ? "route-" + id.slice(7) : id;
+    const authoredOverride = editorDocument.entities["location:" + locationSourceId];
+    if (kind !== "ascent" && authoredOverride && authoredOverride.position) {
+      x = authoredOverride.position.x;
+      z = authoredOverride.position.z;
+    }
+    const locationRotation = authoredOverride && authoredOverride.rotationY || 0;
+    const locationScale = adminScale(authoredOverride && authoredOverride.scale, { x: 1, y: 1, z: 1 });
     const base = STRONGHOLD_GARRISONS[kind] || STRONGHOLD_GARRISONS.hamlet;
     const stronghold = { id, name, kind, biomeId: biomeIdAt(x, z), x, z, members: [], cleared: false, spots: [], baseCount: base.light + base.heavy + base.warg + base.golem };
     const salt = worldLayout.salt + 8100 + strongholds.length * 137;
@@ -4107,8 +5754,9 @@
       for (let attempt = 0; attempt < 6; attempt += 1) {
         const angle = seeded(salt + index * 7 + attempt * 37 + 1) * Math.PI * 2;
         const distance = ring[0] + seeded(salt + index * 7 + attempt * 37 + 2) * (ring[1] - ring[0]);
-        const gx = x + Math.cos(angle) * distance;
-        const gz = z + Math.sin(angle) * distance;
+        const offset = rotateAdminXZ(Math.cos(angle) * distance * locationScale.x, Math.sin(angle) * distance * locationScale.z, locationRotation);
+        const gx = x + offset.x;
+        const gz = z + offset.z;
         const gy = terrainHeight(gx, gz);
         if (gy <= waterLevelAt(gx, gz) + .35) continue;
         if (Math.abs(terrainHeight(gx + 1.5, gz) - gy) + Math.abs(terrainHeight(gx, gz + 1.5) - gy) > .9) continue;
@@ -4478,6 +6126,9 @@
     poiChestSpots.length = 0;
     poiDebugInfo.length = 0;
     (worldLayout.pois || []).forEach((poi, poiIndex) => {
+      poi._adminSourceId = "poi-" + poiIndex;
+      const previousPlacementContext = beginAdminPlacementContext("poi-" + poiIndex);
+      const sceneChildrenBefore = new Set(scene.children);
       const debug = { kind: poi.kind, name: poi.name, chests: 0, guards: 0, collidersAdded: 0 };
       const collidersBefore = colliders.length;
       if (poi.kind === "hamlet") buildHamlet(poi, poiIndex, debug);
@@ -4487,6 +6138,17 @@
       else if ((poi.biomeId || biomeIdAt(poi.x, poi.z)) === "moon") buildGraveyard(poi, poiIndex, debug);
       else buildShrine(poi, poiIndex, debug);
       debug.collidersAdded = colliders.length - collidersBefore;
+      const pivot = new THREE.Group();
+      pivot.name = poi.name + " editor pivot";
+      scene.add(pivot);
+      scene.children.slice().forEach((child) => {
+        if (child !== pivot && !sceneChildrenBefore.has(child) && child !== adminGizmo && child !== adminSelectionHelper) pivot.attach(child);
+      });
+      registerAdminEntity(pivot, {
+        id: "location:poi-" + poiIndex, label: poi.name, type: "location", category: "Points of Interest", sourceId: "poi-" + poiIndex,
+        pivot: true, anchor: { x: poi.x, y: terrainHeight(poi.x, poi.z), z: poi.z }, colliders: colliders.slice(collidersBefore)
+      });
+      endAdminPlacementContext(previousPlacementContext);
       poiDebugInfo.push(debug);
       const stronghold = registerStronghold("poi-" + poiIndex, poi.name, poi.kind === "shrine" && (poi.biomeId || biomeIdAt(poi.x, poi.z)) === "moon" ? "graveyard" : poi.kind, poi.x, poi.z);
       debug.guards = stronghold.baseCount;
@@ -4496,17 +6158,22 @@
 
   function createChests() {
     const routeSummits = worldLayout.routes.map((route) => platforms.filter((platform) => platform.routeId === route[5]).sort((a, b) => b.stepIndex - a.stepIndex)[0]);
-    const definitions = worldLayout.forts.map((fort, index) => ({
+    const fortChests = worldLayout.forts.map((fort, index) => locationAttachmentOverride("fort-" + index, {
       id: "chest-fort-" + index, name: fort[4] + " CHEST", xp: 70 + index * 20,
+      sourceId: "fort-" + index,
       x: fort[0] + Math.cos(fort[2]) * 4 - Math.sin(fort[2]) * 6,
       z: fort[1] + Math.sin(fort[2]) * 4 + Math.cos(fort[2]) * 6,
       rotation: fort[2]
-    })).concat(routeSummits.filter(Boolean).map((summit, index) => ({
+    }, { x: fort[0], z: fort[1] }));
+    const routeChests = routeSummits.filter(Boolean).map((summit, index) => ({
       id: "chest-route-" + index, name: worldLayout.routes[index][5] + " TROVE", xp: 130 + index * 30,
+      sourceId: "route-" + index,
       x: summit.x + (index ? 1.5 : 2.4), z: summit.z, rotation: -Math.PI / 2
-    }))).concat(poiChestSpots.map((spot, index) => ({
-      id: "chest-poi-" + index, name: spot.name, xp: spot.xp, x: spot.x, z: spot.z, rotation: spot.rotation
-    })));
+    }));
+    const poiChests = poiChestSpots.map((spot, index) => ({
+      id: "chest-poi-" + index, sourceId: spot.sourceId, name: spot.name, xp: spot.xp, x: spot.x, z: spot.z, rotation: spot.rotation
+    }));
+    const definitions = fortChests.concat(routeChests, poiChests);
     const bandMaterial = new THREE.MeshStandardMaterial({ color: 0x2e3436, roughness: .58, metalness: .7, envMapIntensity: .35 });
     const powerTypes = ["damage", "health", "regen", "sprint", "stamina", "critDamage"];
     definitions.forEach((definition, index) => {
@@ -4541,9 +6208,12 @@
       root.traverse((object) => { if (object.isMesh) { object.castShadow = !isCoarse; object.receiveShadow = true; } });
       scene.add(root);
       chests.push({
-        id: definition.id, name: definition.name, xp: definition.xp,
+        id: definition.id, sourceId: definition.sourceId || null, name: definition.name, xp: definition.xp,
         root, lid, lockMaterial, marker, interactionAnchor, opened: false, openTime: 0, phase: index * 1.71,
         powerUp: { type: powerType, amount: powerAmount }
+      });
+      registerAdminEntity(root, {
+        id: "chest:" + definition.id, label: definition.name, type: "chest", category: "Chests"
       });
     });
   }
@@ -4631,7 +6301,7 @@
     const facingDot = toLatch.lengthSq() < .001 ? -1 : facing.dot(toLatch.normalize());
     const ownSurface = surfaceHeightAt(foot.x, foot.z, foot.y + .95);
     const onOwnSurface = Math.abs(ownSurface - foot.y) <= .55;
-    const colliderBlocked = colliders.some((box) => segmentIntersectsChestCollider(origin, latch, box));
+    const colliderBlocked = colliders.some((box) => !box.disabled && segmentIntersectsChestCollider(origin, latch, box));
     let terrainBlocked = false;
     for (let sample = 1; sample < 12 && !terrainBlocked; sample += 1) {
       const amount = sample / 12;
@@ -4841,7 +6511,8 @@
       grassField = null;
       return;
     }
-    const wanted = Math.round((isCoarse ? 1800 : 9500) * (.18 + biome.grassStrength * .82));
+    const grassDensity = BIOME_IDS.reduce((sum, id) => sum + (editorDocument.biomes[id] && editorDocument.biomes[id].grassDensity !== undefined ? editorDocument.biomes[id].grassDensity : 1), 0) / BIOME_IDS.length;
+    const wanted = Math.round((isCoarse ? 1800 : 9500) * (.18 + biome.grassStrength * .82) * clamp(grassDensity, 0, 3));
     const geometry = new THREE.BufferGeometry();
     const width = .085;
     const height = .72;
@@ -4891,6 +6562,8 @@
       placed += 1;
     }
     grassField.count = placed;
+    grassBaseCount = placed;
+    grassBaseDensity = Math.max(.001, grassDensity);
     grassField.instanceMatrix.needsUpdate = true;
     if (grassField.instanceColor) grassField.instanceColor.needsUpdate = true;
     grassField.frustumCulled = false;
@@ -5043,7 +6716,8 @@
   }
 
   function placePropSet(definition, setIndex, biomeId) {
-    const wanted = isCoarse ? Math.round(definition.count / 2) : definition.count;
+    const density = editorDocument.biomes[biomeId] && editorDocument.biomes[biomeId].propDensity !== undefined ? editorDocument.biomes[biomeId].propDensity : 1;
+    const wanted = Math.round((isCoarse ? definition.count / 2 : definition.count) * clamp(density, 0, 3));
     const mesh = new THREE.InstancedMesh(definition.geometry, definition.material, wanted);
     const dummy = new THREE.Object3D();
     const shade = new THREE.Color();
@@ -5082,11 +6756,13 @@
     mesh.receiveShadow = true;
     mesh.frustumCulled = false;
     scene.add(mesh);
+    biomePropMeshes.push({ biomeId, kind: definition.kind, mesh, baseCount: placed, baseDensity: Math.max(.001, density), capacity: mesh.instanceMatrix.count });
     if (TREE_PROP_KINDS.has(definition.kind)) recordTreePopulation(biomeId, placed, "biome-props");
     return placed;
   }
 
   function createBiomeProps() {
+    biomePropMeshes = [];
     const byKind = {};
     const byBiome = {};
     let total = 0;
@@ -5532,6 +7208,7 @@
       kind: "dragon", rank: boss ? "THE WORLD-BURNER" : "ANCIENT DRAGON",
       xpReward: boss ? 950 : 320, healthReward: boss ? 35 : 12
     };
+    applyAdminEnemyTuning(dragon, true);
     root.traverse((object) => { if (object.isMesh) object.userData.dragon = dragon; });
     dragons.push(dragon);
     return dragon;
@@ -5709,6 +7386,7 @@
       tamed: false, tameReady: false, tameProgress: 0, tameMarker: null, ai: null,
       regionalModelLoaded: modelRoot !== root && (type === "biomeLight" || type === "biomeHeavy" || type === "golem")
     };
+    applyAdminEnemyTuning(enemy, true);
     setEnemyAction(enemy, "idle", true);
     root.traverse((object) => { if (object.isMesh || object.isSkinnedMesh) object.userData.dragon = enemy; });
     groundEnemies.push(enemy);
@@ -5776,6 +7454,7 @@
       enemy.hitRadius = baseStats.hitRadius;
       enemy.xpReward = Math.round(baseStats.xp * (1 + enemy.tier * .08));
       enemy.healthReward = baseStats.heal;
+      applyAdminEnemyTuning(enemy, true);
       enemy.modelRoot = model;
       enemy.mixer = mixer;
       enemy.actions = actions;
@@ -6149,6 +7828,7 @@
     const maximumY = Math.max(from.y, to.y);
     for (let index = 0; index < colliders.length; index += 1) {
       const box = colliders[index];
+      if (box.disabled) continue;
       if (maximumY < box.minY || minimumY > box.maxY) continue;
       const cosine = Math.abs(Math.cos(box.rotation || 0));
       const sine = Math.abs(Math.sin(box.rotation || 0));
@@ -6180,11 +7860,15 @@
 
   function roleSightProfile(enemy) {
     const role = enemy.ai ? enemy.ai.role : "patrol_guard";
-    if (role === "tower_lookout") return { range: 48, halfAngle: 72, buildup: 1.28 };
-    if (role === "gate_sentry") return { range: 41, halfAngle: 64, buildup: 1.12 };
-    if (role === "beast_patrol") return { range: 34, halfAngle: 76, buildup: 1.18 };
-    if (role === "reserve") return { range: 29, halfAngle: 56, buildup: .9 };
-    return { range: 36, halfAngle: 60, buildup: 1 };
+    let profile;
+    if (role === "tower_lookout") profile = { range: 48, halfAngle: 72, buildup: 1.28 };
+    else if (role === "gate_sentry") profile = { range: 41, halfAngle: 64, buildup: 1.12 };
+    else if (role === "beast_patrol") profile = { range: 34, halfAngle: 76, buildup: 1.18 };
+    else if (role === "reserve") profile = { range: 29, halfAngle: 56, buildup: .9 };
+    else profile = { range: 36, halfAngle: 60, buildup: 1 };
+    profile.range = enemy.adminSightRange || profile.range * (enemy.adminSightMultiplier || 1);
+    profile.buildup *= enemy.adminTracking || 1;
+    return profile;
   }
 
   function enemyVisionSample(enemy) {
@@ -7170,6 +8854,7 @@
       });
     });
     encounterRng.state = garrisonRngState;
+    refreshAdminActorEntities();
   }
 
   function createLandmarks() {
@@ -7287,7 +8972,7 @@
     updateProgressionUI();
     updateStrongholdUI();
     updateCamera(1, true);
-    if (!isCoarse && !testMode) requestPointer();
+    if (!isCoarse && !testMode && !adminMode) requestPointer();
     showLocation(BIOMES[currentBiomeId].name, resumed ? "CAMPAIGN RESTORED" : "ENTERING ASHENHOLD CONTINENT");
     markRunDirty(true);
     if (partyModeSelected()) coopRuntime?.startWorld();
@@ -7318,13 +9003,14 @@
       ui.pause.classList.remove("active");
       lastTime = performance.now();
       audio.init();
-      if (!isCoarse && !testMode) requestPointer();
+      if (!isCoarse && !testMode && !adminMode) requestPointer();
     }
   }
 
   function surfaceHeightAt(x, z, footY) {
     let height = terrainHeight(x, z);
     platforms.forEach((platform) => {
+      if (platform.disabled) return;
       const dx = x - platform.x;
       const dz = z - platform.z;
       const cosine = Math.cos(platform.rotation || 0);
@@ -7730,6 +9416,7 @@
     const actorTop = Number.isFinite(topY) ? topY : Number.isFinite(footY) ? footY + 2.15 : Infinity;
     const collisionRadius = Math.max(.04, radius - .055);
     return colliders.some((box) => {
+      if (box.disabled) return false;
       if (actorBottom >= box.maxY - .025 || actorTop <= box.minY + .025) return false;
       const dx = x - box.x;
       const dz = z - box.z;
@@ -8791,6 +10478,7 @@
 
   function updateCamera(dt, immediate) {
     if (!player.root) return;
+    if (adminMode && adminControls.mode === "freecam") return;
     const targetHeight = player.sliding ? 1.08 : player.landingTime > 0 ? 1.68 : 1.84;
     const target = player.root.position.clone().add(new THREE.Vector3(0, targetHeight, 0));
     if (lockedTarget && !lockedTarget.dead) {
@@ -9284,7 +10972,7 @@
     targetScanTimer -= dt;
     hudRefreshTimer -= dt;
     minimapRefreshTimer -= dt;
-    updatePlayer(dt);
+    if (!(adminMode && adminControls.mode === "noclip")) updatePlayer(dt);
     if (multiplayerWorldActive()) coopRuntime?.update(dt);
     else {
       updateDragons(dt, false);
@@ -9315,7 +11003,14 @@
       hitStopRemaining = Math.max(0, hitStopRemaining - rawDt);
       dt = 0;
     }
-    if (state === "playing") update(dt);
+    if (adminMode) updateAdminControls(rawDt);
+    if (state === "playing" && adminMode && adminControls.simulationPaused) {
+      elapsed += dt;
+      updateEffects(dt);
+      updateWorldDecor(dt);
+      if (adminControls.mode !== "freecam") updateCamera(dt, false);
+      if (hudRefreshTimer <= 0) { updateHUD(); hudRefreshTimer = .075; }
+    } else if (state === "playing") update(dt);
     else if (state === "title" || state === "ended") updateIdle(dt);
     renderer.render(scene, camera);
     if (state === "playing" && rawDt > 0 && rawDt < .2) {
@@ -9363,6 +11058,7 @@
     window.addEventListener("resize", resize);
     window.addEventListener("pagehide", () => { saveProgression(true); if (state !== "ended") writeActiveRun(); });
     window.addEventListener("keydown", (event) => {
+      if (adminMode && event.target && event.target.closest && event.target.closest(".ashenhold-admin")) return;
       const key = event.key.toLowerCase();
       if ([" ","arrowup","arrowdown","arrowleft","arrowright","tab","alt"].includes(key)) event.preventDefault();
       keys.add(key);
@@ -9384,7 +11080,7 @@
       if (event.key === "Enter" && (state === "title" || state === "ended")) startGame();
     });
     window.addEventListener("keyup", (event) => keys.delete(event.key.toLowerCase()));
-    window.addEventListener("blur", () => { if (state === "playing" && !isCoarse) pauseGame(true); });
+    window.addEventListener("blur", () => { if (state === "playing" && !isCoarse && !adminMode) pauseGame(true); });
     document.addEventListener("mousemove", (event) => {
       if (document.pointerLockElement === renderer.domElement && state === "playing") {
         applyLookDelta(event.movementX, event.movementY, .0025, .0019);
@@ -9394,14 +11090,14 @@
       const locked = document.pointerLockElement === renderer.domElement;
       game.classList.toggle("pointer-locked", locked);
       if (locked) pointerWasLocked = true;
-      else if (pointerWasLocked && state === "playing" && !suppressPointerPause && !testMode) pauseGame(true);
+      else if (pointerWasLocked && state === "playing" && !suppressPointerPause && !testMode && !adminMode) pauseGame(true);
     });
     viewport.addEventListener("mousedown", (event) => {
       if (state !== "playing") return;
       if (event.button === 1) { event.preventDefault(); toggleTargetLock(); return; }
       if (event.button === 2) { event.preventDefault(); dodge(); return; }
       if (event.button !== 0) return;
-      if (!isCoarse && !testMode && document.pointerLockElement !== renderer.domElement) requestPointer();
+      if (!isCoarse && !testMode && !adminMode && document.pointerLockElement !== renderer.domElement) requestPointer();
       else attack();
     });
     viewport.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -9828,6 +11524,23 @@
       start: startGame,
       multiplayerDebug: multiplayerSnapshot,
       multiplayerSnapshot,
+      worldOverrideDebug: () => ({
+        document: adminDocumentSnapshot(),
+        registered: Array.from(adminEntities.keys()),
+        entities: Object.keys(editorDocument.entities).reduce((output, id) => {
+          const record = adminEntities.get(id);
+          output[id] = record ? adminEntitySummary(record) : null;
+          return output;
+        }, {}),
+        biomes: BIOME_IDS.reduce((output, id) => {
+          output[id] = {
+            ground: "#" + BIOMES[id].ground.toString(16).padStart(6, "0"), fogDensity: BIOMES[id].fogDensity,
+            exposure: BIOMES[id].exposure,
+            treeDensity: id === "desert" ? 0 : editorDocument.biomes[id] && editorDocument.biomes[id].treeDensity !== undefined ? editorDocument.biomes[id].treeDensity : 1
+          };
+          return output;
+        }, {})
+      }),
       multiplayerWorldDebug: () => {
         const world = serializeNetworkWorld();
         const ids = world.enemies.map((enemy) => enemy.id);

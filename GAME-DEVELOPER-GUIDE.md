@@ -1,6 +1,6 @@
-# Ashenhold: Dragonfall - release 5.5 developer handoff
+# Ashenhold: Dragonfall - release 5.6 developer handoff
 
-Updated July 19, 2026. This is the source-of-truth engineering handoff for the static browser release at https://brornski.github.io/ashenhold-dragonfall/.
+Updated July 20, 2026. This is the source-of-truth engineering handoff for the static browser release at https://brornski.github.io/ashenhold-dragonfall/.
 
 ## Start locally
 
@@ -19,12 +19,96 @@ http://127.0.0.1:4173/?test&biome=jungle&seed=424242
 
 Never use `file://`; GLTF, texture, and font loading require an HTTP origin.
 
+## Ashenhold Forge local sandbox
+
+Ashenhold Forge is the repository's local-only admin/editor surface for the single authored continent. It is not a production administration system and it does not add a deployed write API.
+
+### Launch and session boundary
+
+On Windows, launch it from the repository root:
+
+```powershell
+.\open-admin-editor.cmd
+```
+
+The launcher requires Node, selects the first usable port from `4174`, `4184`, and `4194`, starts `tools/ashenhold-admin-server.mjs` bound to `127.0.0.1`, and opens `http://127.0.0.1:<port>/?admin`. It may reuse an existing bridge only after the session identifies the exact same repository/worktree; a bridge owned by another worktree is skipped. Edge or Chrome is opened in app mode when available, with the default browser as fallback.
+
+The runtime honors `?admin` only when `location.hostname` is `localhost`, a `127.x.x.x` address, or `[::1]`. A non-loopback URL with that query parameter emits a warning and continues as the ordinary game. A loopback static server can open the Forge UI in export-only mode, but **Save Repo** requires the Forge bridge. Do not use `file://`.
+
+Admin boot skips the title deck, enters the playable continent, pauses simulation by default, and disables normal persistence so experimentation cannot contaminate gameplay saves. The admin stylesheet, script, and `window.__ASHENHOLD_ADMIN__` runtime are loaded only after this loopback check. An ordinary URL must not request `admin-editor.css` or `admin-editor.js`, render the panel, or expose the mutation runtime.
+
+The bridge enforces a second boundary independently of the client:
+
+- listen only on `127.0.0.1` and accept only matching `localhost`/`127.0.0.1` Host and Origin values
+- issue a random 32-byte session token through `GET /__admin/session`; every mutating request must provide that token in `X-Ashenhold-Admin`
+- cap request bodies at 512 KiB and validate schema shape, forbidden prototype keys, world signature, entity count/IDs, numeric bounds, model slots, same-origin asset paths, biome IDs, and enemy tuning limits
+- restrict static paths against dot files, traversal, and symlink escapes
+
+The token is ephemeral local process state. It, Git credentials, secrets, and absolute workstation paths must never be written to an override, browser log, screenshot, commit, or deployment artifact.
+
+### Scene editing and traversal
+
+Use `V` for Select, `F` for Freecam, and `N` for Noclip. The backtick key collapses or restores the Forge panel. `Ctrl/Cmd+Z` undoes, `Shift+Ctrl/Cmd+Z` or `Ctrl/Cmd+Y` redoes, and Delete/Backspace removes the selected entity. The browser draft keeps up to 60 editor history states.
+
+Select an entity by clicking its world model or choosing it from the searchable, category-filtered Scene hierarchy. Selection renders a bounds box and axis gizmo. `G`, `R`, and `S` select move, rotate, and scale tools; the transform inspector accepts exact XYZ position, Y rotation, and XYZ scale. Gizmo dragging and inspector edits honor configurable move, rotation, and scale snapping (defaults: 1 metre, 15 degrees, and 0.1 scale). Selected objects can be framed, duplicated, hidden/shown, collision-enabled/disabled, dropped to terrain, reset, or deleted.
+
+The Models catalog adds an existing measured model slot at the camera. Appearance controls can tint a selected material, replace its texture with a same-origin `assets/` path, or replace model-slot geometry while retaining the entity transform and fitted bounds. Collision state follows edited and duplicated objects.
+
+Freecam moves independently of the Warden: `WASD` moves relative to the view, `Q`/`E` descends/ascends, Shift applies a 3.2x boost, pointer drag looks, and the wheel adjusts camera speed. Noclip moves the Warden through world collision with the same movement/elevation inputs and Shift boost. Return to Select before using the full translate/rotate/scale workflow. The simulation toggle lets AI and effects run without leaving Forge.
+
+### World and combat tuning
+
+World controls edit the one authored continent rather than generating a new seed. Each biome can override ground, cliff, grass, and fog colors; fog density and exposure; and tree, prop, and grass density. Changes preview live. Density values above currently allocated instance capacity take full effect after **Save Repo** and reload. Ember Dunes is a deliberate invariant: its tree density is clamped to zero in both the editor and runtime.
+
+Enemy tuning can be global or scoped to an enemy kind. Multipliers cover health, damage, speed, attack range, sight range, tracking, and attack rate, and apply to present and future spawns. Selecting an enemy also exposes exact health/max-health, damage, speed, attack range/interval, sight range, and tracking fields for that entity.
+
+### Draft, export, repository save, and publish
+
+Forge keeps a browser-local draft under `ashenhold-admin-draft-v1` and restores it only when its world signature matches. The Publish tab runs the same document validation used by the bridge and provides four portable paths:
+
+- **Copy JSON** copies the sanitized override document
+- **Download JSON** writes `ashenhold-world-overrides.json`
+- **Import JSON** validates and applies a portable document
+- **Export source** downloads a ready-to-use `world-overrides.js`
+
+The source export must remain data-only: an IIFE assigns `window.AshenholdWorldOverrides` and contains no editor runtime, token, bridge address, Git operation, or mutation API. Export is available without the bridge.
+
+**Save Repo** sends the validated document to the authenticated loopback bridge. The bridge atomically replaces only the repository-root `world-overrides.js`; it does not stage, commit, or push. **Publish Live** first validates, asks for explicit confirmation, saves the same file, and then requests the guarded Git path. Publishing succeeds only when all of these conditions hold:
+
+1. the bridge was started with `--allow-publish`
+2. the current branch exactly matches `--publish-branch` (the launcher configures `main`)
+3. no unrelated tracked file is modified; only `world-overrides.js` may be dirty
+4. `origin` is a GitHub HTTPS or SSH remote
+5. after fetching, local `HEAD` exactly equals `origin/main`, so Publish Live cannot smuggle pre-existing local commits into the override push
+6. `git diff --check world-overrides.js` passes
+
+The bridge stages only `world-overrides.js`, creates one commit when the file changed, and pushes `HEAD:main`. The launcher enables the capability but never bypasses these guards; therefore Publish Live is disabled from a feature worktree or non-`main` branch. Git authentication remains entirely in the user's local Git configuration and is never exposed to browser code.
+
+### Production override contract
+
+`world-overrides.js` is Forge's only editor-authored production artifact. `index.html` loads it before `app.js`, and the Pages workflow copies it into `_site`. Its top-level data contract is:
+
+```js
+window.AshenholdWorldOverrides = {
+  schemaVersion: 1,
+  worldSignature: "ashenhold-authored-continent-8",
+  entities: {},
+  biomes: {},
+  enemies: { global: {}, byKind: {} }
+};
+```
+
+The runtime sanitizes this value before use. Both the schema version and exact world signature are required; invalid input falls back to an empty override. Entity transforms, IDs, counts, visibility/deletion/collision flags, colors, textures, model slots, and optional enemy fields are bounded and allowlisted. Asset replacements must use same-origin paths beneath `assets/`. Biome palette/density/exposure fields and global/per-kind enemy multipliers are similarly bounded; desert trees remain hard-locked off. Keep the file declarative and deterministic.
+
+Production receives `world-overrides.js` as ordinary read-only runtime data. It must never receive `open-admin-editor.cmd`, `admin-editor.js`, `admin-editor.css`, `tools/ashenhold-admin-server.mjs`, the admin audit, local drafts, session tokens, Git credentials, or a mutation endpoint. A production change becomes live only after the override commit reaches `main` and the normal Pages workflow deploys it; Forge never mutates the hosted game directly.
+
 ## Architecture
 
 | Path | Responsibility |
 | --- | --- |
 | `index.html` | Semantic shell, premium title/party deck, public socket metadata, HUD, overlays, touch controls, script order |
 | `styles.css` | Responsive UI, party states, animation, accessibility, biome grading, 844x390 compact layout |
+| `world-overrides.js` | Data-only, production-safe Forge document loaded and sanitized before gameplay initialization |
 | `app.js` | Renderer, deterministic world generation, collisions, living AI, combat, progression, persistence, co-op adapter, public/test APIs |
 | `multiplayer-client.js` | Protocol 1 WebSocket client, reconnect, latency, state/event tracks, interpolation |
 | `multiplayer-avatars.js` | Procedural animated remote-Warden renderer and nameplates |
@@ -36,6 +120,8 @@ Never use `file://`; GLTF, texture, and font loading require an HTTP origin.
 | `assets/textures/` | Local terrain, sky, and six biome PBR sets |
 | `ATTRIBUTIONS.md` | Asset sources, licenses, and local notice locations |
 | `test-results/` | Playwright smoke, production, WCAG, payload, and deployed-site audits |
+| `admin-editor.js`, `admin-editor.css` | Loopback-only Forge interface, never shipped in the production artifact |
+| `open-admin-editor.cmd`, `tools/ashenhold-admin-server.mjs` | Windows launcher and authenticated localhost save/publish bridge |
 | `.github/workflows/pages.yml` | Runtime-only GitHub Pages artifact and deployment |
 | `vercel.json` | Optional legacy/custom-host security and cache headers |
 
@@ -45,7 +131,7 @@ Runtime states are `loading`, `title`, `playing`, `paused`, `skills`, `resolving
 
 ## Boot order
 
-1. Load local Three.js/loader vendors, then `multiplayer-client.js`, `multiplayer-avatars.js`, `multiplayer-game.js`, `multiplayer-ui.js`, and finally `app.js`.
+1. Load local Three.js/loader vendors, `world-overrides.js`, then `multiplayer-client.js`, `multiplayer-avatars.js`, `multiplayer-game.js`, `multiplayer-ui.js`, and finally `app.js`.
 2. Build the title party controller in Solo mode without opening a socket.
 3. Parse query flags and validate progression, active-run, and realm envelopes.
 4. Select the current biome and deterministic seed.
@@ -354,6 +440,7 @@ The normal `window.ashenholdGame` surface exposes only read-only methods:
 
 - `window.ashenholdGame.snapshot()`
 - `window.ashenholdGame.modelCatalog()`
+- `window.ashenholdGame.multiplayerSnapshot()`
 
 The snapshot includes realm, player/progression, relic bonuses, companions/Bonded Pace, stronghold summary/list, quest, route reports, POIs, asset density, canonical model dimensions, forest LOD/culling counts, infrastructure density, sky signature, capture-flag totals, model slots, spawn failures, collision-relevant position, sprint latches, renderer counts, and quality.
 
@@ -375,6 +462,8 @@ Only `?test` exposes mutating `window.__ASHENHOLD_TEST__` helpers. Important 5.4
 
 Never expose those mutations on a normal production URL.
 
+Loopback `?admin` exposes a separate frozen `window.__ASHENHOLD_ADMIN__` runtime for Forge. It is not part of the public game API: the loopback hostname check must precede its creation and the dynamic editor asset requests. The `npm run admin` gate asserts that an ordinary URL retains exactly the three read-only methods above and has no Forge panel, mutation runtime, or editor asset request.
+
 ## Release gates
 
 Install once in `test-results/` or use the workstation cache described in `AGENTS.md`.
@@ -388,6 +477,15 @@ node test-results\production-audit.cjs
 node test-results\accessibility-audit.cjs
 node test-results\payload-audit.cjs
 ```
+
+Run the Forge boundary audit from the harness directory:
+
+```powershell
+Set-Location test-results
+npm run admin
+```
+
+The admin audit starts its own loopback bridge without publishing permission and covers worktree identity, Origin/token/body/schema/prototype/asset-path rejection, direct paused admin boot, scene/model registration, transforms and collider linkage, treeless Ember Dunes, enemy tuning, undo/redo, data-only source export, and an ordinary-mode fixture that proves published model swaps, transforms, visibility, collision, custom objects, biome values, and per-enemy values are consumed without exposing editor assets or mutation APIs. It deliberately does not push or exercise Publish Live.
 
 The deterministic smoke covers title boot, local models/PBR, combat roles, runes/souls, permanent chest power, stronghold rewards/victory, taming, base/capstone sprint, hysteresis, collision recovery, routes/POIs, camera, minimap, mobile-safe state, and clean browser diagnostics.
 
@@ -412,7 +510,7 @@ The primary release workflow follows GitHub's Pages artifact model:
 
 1. merge tested work to `main`
 2. GitHub Actions checks out `main`
-3. the workflow assembles `_site` from `index.html`, `styles.css`, `app.js`, `manifest.json`, all four multiplayer browser modules, and `assets/`
+3. the workflow assembles `_site` from `index.html`, `styles.css`, `world-overrides.js`, `app.js`, `manifest.json`, all four multiplayer browser modules, and `assets/`
 4. `actions/upload-pages-artifact` uploads only that runtime tree
 5. `actions/deploy-pages` publishes it to the `github-pages` environment
 
@@ -426,7 +524,7 @@ node test-results\live-deployment-audit.cjs
 node test-results\e2e-smoke.cjs
 ```
 
-Verify root/title/party states, layout marker 7, active GLTF, biome normal map, manifest, all four multiplayer modules, excluded docs/tests/server/tools, exact socket metadata, no external requests in Solo, the approved secure socket after opt-in, two-client room convergence, and a full stronghold victory. GitHub Pages does not expose Vercel's configurable response headers; the live audit applies provider-appropriate checks.
+Verify root/title/party states, layout marker 8, the deployed data-only `world-overrides.js`, active GLTF, biome normal map, manifest, all four multiplayer modules, excluded Forge UI/bridge and docs/tests/server/tools, exact socket metadata, no production mutation API, no external requests in Solo, the approved secure socket after opt-in, two-client room convergence, and a full stronghold victory. GitHub Pages does not expose Vercel's configurable response headers; the live audit applies provider-appropriate checks.
 
 ## Safe extension patterns
 
@@ -440,7 +538,7 @@ Changing terrain or structures requires checking safe start/keep/fort foundation
 
 ## Honest limitations
 
-Ashenhold 5.5 is a browser game with an optional lightweight room service, not a large-studio native production.
+Ashenhold 5.6 is a browser game with an optional lightweight room service, not a large-studio native production.
 
 - Three.js r128 is old and an upgrade needs a separate import/render regression pass.
 - Ground enemies use bounded per-stronghold navigation grids and local steering, not a whole-world navmesh.
