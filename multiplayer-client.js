@@ -2,6 +2,7 @@
   "use strict";
 
   const PROTOCOL_VERSION = 2;
+  const WORLD_ID = "ashenhold-continent-v1";
   const STATE_RATE_MS = 50;
   const INTERPOLATION_MS = 110;
   const CLIENT_ID_KEY = "ashenhold.multiplayer.clientId";
@@ -68,6 +69,7 @@
       this.status = "offline";
       this.playerId = null;
       this.roomCode = "";
+      this.worldId = WORLD_ID;
       this.realm = null;
       this.isHost = false;
       this.worldReady = false;
@@ -124,8 +126,7 @@
         create: Boolean(options.create),
         roomCode: String(options.roomCode || "").replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 6),
         name: String(options.name || "Warden").trim().slice(0, 24),
-        biome: String(options.biome || "jungle"),
-        seed: Math.max(1, Math.floor(Number(options.seed) || Date.now() % 9999999))
+        worldId: WORLD_ID
       };
       this.intentionalClose = false;
       this.setStatus(this.reconnectAttempts ? "reconnecting" : "connecting");
@@ -179,7 +180,8 @@
         this.playerId = message.playerId;
         this.roomCode = message.roomCode;
         storeReconnectCredentials(message.roomCode, message.playerId, message.reconnectToken);
-        this.realm = message.realm;
+        this.worldId = String(message.worldId || message.world?.id || WORLD_ID);
+        this.realm = message.realm || null;
         this.isHost = Boolean(message.isHost);
         this.worldReady = Boolean(message.worldReady);
         this.started = Boolean(message.started);
@@ -217,6 +219,7 @@
       const measuredOffset = Number(snapshot.serverAt || 0) - Date.now();
       this.serverOffset = this.serverOffset ? this.serverOffset * .9 + measuredOffset * .1 : measuredOffset;
       this.snapshot = snapshot;
+      this.worldId = String(snapshot.worldId || snapshot.world?.id || this.worldId || WORLD_ID);
       this.realm = snapshot.realm || this.realm;
       this.worldReady = Boolean(snapshot.worldReady);
       this.started = Boolean(snapshot.started);
@@ -337,6 +340,7 @@
   window.AshenholdMultiplayer = Object.freeze({
     Client: AshenholdMultiplayerClient,
     PROTOCOL_VERSION,
+    WORLD_ID,
     get defaultUrl() { return AshenholdMultiplayerClient.defaultUrl; }
   });
 })();

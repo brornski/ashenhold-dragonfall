@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import WebSocket from "ws";
 
+const WORLD_ID = "ashenhold-continent-v1";
+
 const url = process.argv[2] || process.env.ASHENHOLD_WS_URL;
 if (!url) throw new Error("Pass a wss:// endpoint as the first argument or ASHENHOLD_WS_URL.");
 
@@ -47,16 +49,19 @@ let guestWelcome;
 
 try {
   const host = await createClient(); clients.push(host);
-  host.send({ type: "hello", protocol: 2, clientId: `remote-host-${Date.now()}`, name: "Remote Host", create: true, biome: "jungle", seed: 555019 });
+  host.send({ type: "hello", protocol: 2, clientId: `remote-host-${Date.now()}`, name: "Remote Host", create: true, worldId: WORLD_ID });
   hostWelcome = await host.waitFor((message) => message.type === "welcome");
   assert.match(hostWelcome.roomCode, /^[A-Z2-9]{6}$/);
   assert.ok(hostWelcome.reconnectToken?.length >= 40);
+  assert.equal(hostWelcome.worldId, WORLD_ID);
+  assert.equal("realm" in hostWelcome, false);
 
   const guest = await createClient(); clients.push(guest);
-  guest.send({ type: "hello", protocol: 2, clientId: `remote-guest-${Date.now()}`, name: "Remote Guest", roomCode: hostWelcome.roomCode });
+  guest.send({ type: "hello", protocol: 2, clientId: `remote-guest-${Date.now()}`, name: "Remote Guest", roomCode: hostWelcome.roomCode, worldId: WORLD_ID });
   guestWelcome = await guest.waitFor((message) => message.type === "welcome");
   assert.equal(guestWelcome.roomCode, hostWelcome.roomCode);
   assert.ok(guestWelcome.reconnectToken?.length >= 40);
+  assert.equal(guestWelcome.worldId, WORLD_ID);
 
   host.send({
     type: "register_world",

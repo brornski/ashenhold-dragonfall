@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 export const PROTOCOL_VERSION = 2;
 export const MAX_PLAYERS = 4;
 export const WORLD_LIMIT = 920;
+export const WORLD_ID = "ashenhold-continent-v1";
 const ROOM_TTL_MS = 30 * 60 * 1000;
 const RECONNECT_GRACE_MS = 60 * 1000;
 const SNAPSHOT_INTERVAL_MS = 50;
@@ -21,6 +22,7 @@ const MAX_HEALTH_UPGRADES = {
   bastion: { amount: 10, uses: 2 },
   run_vigor: { amount: 15, uses: 3 }
 };
+const PLAYER_COLORS = ["#69d5e6", "#e79a62", "#8bd58c", "#c695ef"];
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value) || 0));
@@ -192,9 +194,9 @@ function findPath(nav, from, to) {
   return [];
 }
 
-function buildRoom(code, event, now) {
+function buildRoom(code, now) {
   return {
-    code, biome: cleanId(event.biome, "jungle").toLowerCase(), seed: Math.max(1, Math.floor(Number(event.seed) || 424242)),
+    code, worldId: WORLD_ID,
     createdAt: now, updatedAt: now, revision: 0, sockets: new Set(), players: new Map(), enemies: new Map(),
     strongholds: new Map(), chests: new Map(), navigation: null, worldReady: false, started: false, hostId: null,
     lastSnapshotAt: 0, lastAiAt: now, eventSequence: 0, hitSequence: 0, pendingEvents: []
@@ -249,7 +251,7 @@ export class RealmServer {
     const creating = Boolean(event.create) || !requested;
     const code = creating ? this.randomCode() : requested;
     let room = this.rooms.get(code);
-    if (!room && creating) { room = buildRoom(code, event, now); this.rooms.set(code, room); }
+    if (!room && creating) { room = buildRoom(code, now); this.rooms.set(code, room); }
     if (!room) return this.reject(socket, "ROOM_NOT_FOUND", "That room does not exist.");
     const claimedPlayerId = cleanId(event.playerId, "");
     let player = claimedPlayerId ? room.players.get(claimedPlayerId) : null;
@@ -261,12 +263,13 @@ export class RealmServer {
       && (item.connected || now - item.lastSeenAt <= RECONNECT_GRACE_MS)).length;
     if (occupiedCount >= MAX_PLAYERS) return this.reject(socket, "ROOM_FULL", "This party already has four Wardens.");
     if (!player) {
-      const palette = ["#69d5e6", "#e79a62", "#8bd58c", "#c695ef"];
+      const claimedColors = new Set([...room.players.values()].map((candidate) => candidate.color));
+      const playerColor = PLAYER_COLORS.find((color) => !claimedColors.has(color)) || PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
       player = {
         id: playerId, name: cleanName(event.name), x: 0, y: 0, z: 210, rotation: 0,
         health: 100, maxHealth: 100, stamina: 100, weapon: "blade", moving: false,
         sprinting: false, superSprinting: false, sliding: false, airborne: false, attacking: false,
-        companionCount: 0, connected: true, color: palette[room.players.size % palette.length],
+        companionCount: 0, connected: true, color: playerColor,
         joinedAt: now, lastSeenAt: now, lastStateAt: 0, healthInitialized: false,
         lastAttackAt: Object.create(null), attackBatches: new Map(), pendingHits: new Map(),
         healthTokens: 25, lastHealthTokenAt: now, maxHealthAllowance: 0,
@@ -287,7 +290,7 @@ export class RealmServer {
     safeSend(socket, {
       type: "welcome", protocol: PROTOCOL_VERSION, playerId, roomCode: room.code,
       reconnectToken: player.reconnectToken,
-      realm: { biome: room.biome, seed: room.seed }, maxPlayers: MAX_PLAYERS,
+      worldId: room.worldId, maxPlayers: MAX_PLAYERS,
       isHost: room.hostId === playerId, worldReady: room.worldReady, started: room.started,
       snapshot: this.snapshot(room, playerId)
     });
@@ -668,7 +671,7 @@ export class RealmServer {
   snapshot(room, playerId) {
     return {
       revision: room.revision, serverAt: this.now(), roomCode: room.code,
-      realm: { biome: room.biome, seed: room.seed }, worldReady: room.worldReady,
+      worldId: room.worldId, worldReady: room.worldReady,
       started: room.started, hostId: room.hostId,
       players: [...room.players.values()].map(serializablePlayer),
       enemies: [...room.enemies.values()].map(serializableEnemy),

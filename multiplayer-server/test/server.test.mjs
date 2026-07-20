@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import WebSocket from "ws";
 import { createAshenholdServer } from "../create-server.mjs";
-import { RealmServer } from "../core.mjs";
+import { RealmServer, WORLD_ID } from "../core.mjs";
 
 let instance;
 let websocketUrl;
@@ -74,8 +74,9 @@ function hello(client, options = {}) {
     name: options.name || "Test Warden",
     create: Boolean(options.create),
     roomCode: options.roomCode,
-    biome: options.biome || "jungle",
-    seed: options.seed || 55119
+    worldId: options.worldId || WORLD_ID,
+    ...(options.biome ? { biome: options.biome } : {}),
+    ...(options.seed ? { seed: options.seed } : {})
   });
   return client.waitFor((message) => message.type === "welcome" || message.type === "error");
 }
@@ -112,7 +113,7 @@ function memoryHello(realm, socket, options = {}) {
   realm.receive(socket, JSON.stringify({
     type: "hello", protocol: 2, create: Boolean(options.create), roomCode: options.roomCode,
     playerId: options.playerId, reconnectToken: options.reconnectToken,
-    name: options.name || "Memory Warden", biome: "jungle", seed: 55119
+    name: options.name || "Memory Warden", worldId: WORLD_ID
   }));
   return socket.find((message) => message.type === "welcome" || message.type === "error");
 }
@@ -150,20 +151,29 @@ test("health endpoint advertises the room service", async () => {
   });
 });
 
-test("two Wardens share an authoritative realm, garrison, chest, and reconnect state", async () => {
+test("two Wardens share the fixed authoritative world, garrison, chest, and reconnect state", async () => {
   const host = await connect();
-  const hostWelcome = await hello(host, { create: true, name: "Host Warden", biome: "volcanic", seed: 90210 });
+  const hostWelcome = await hello(host, {
+    create: true, name: "Host Warden", worldId: "client-requested-world", biome: "volcanic", seed: 90210
+  });
   assert.equal(hostWelcome.type, "welcome");
   assert.match(hostWelcome.playerId, /^[0-9a-f-]{36}$/i);
   assert.ok(hostWelcome.reconnectToken.length >= 40);
   assert.match(hostWelcome.roomCode, /^[A-Z2-9]{6}$/);
-  assert.deepEqual(hostWelcome.realm, { biome: "volcanic", seed: 90210 });
+  assert.equal(hostWelcome.worldId, WORLD_ID);
+  assert.equal("realm" in hostWelcome, false, "fixed-world handshakes do not publish legacy realm metadata");
+  assert.equal("seed" in hostWelcome, false, "fixed-world handshakes never publish a generated seed");
+  const hostColor = hostWelcome.snapshot.players.find((player) => player.id === hostWelcome.playerId).color;
   host.send({ type: "hello", protocol: 2, create: true, name: "Duplicate Host" });
   await host.waitFor((message) => message.type === "error" && message.code === "ALREADY_JOINED");
 
   const guest = await connect();
   const guestWelcome = await hello(guest, { roomCode: hostWelcome.roomCode, name: "Guest Warden" });
   assert.equal(guestWelcome.type, "welcome");
+  assert.equal(guestWelcome.worldId, WORLD_ID);
+  assert.equal(guestWelcome.snapshot.worldId, WORLD_ID);
+  const guestColor = guestWelcome.snapshot.players.find((player) => player.id === guestWelcome.playerId).color;
+  assert.notEqual(guestColor, hostColor, "each concurrent Warden receives a distinct accent color");
   await host.waitFor((message) => message.type === "presence" && message.player?.id === guestWelcome.playerId);
 
   host.send({
@@ -243,6 +253,7 @@ test("two Wardens share an authoritative realm, garrison, chest, and reconnect s
   const restored = reconnectWelcome.snapshot.players.find((player) => player.id === guestWelcome.playerId);
   assert.equal(restored.name, "Guest Returned");
   assert.equal(restored.connected, true);
+  assert.equal(restored.color, guestColor, "a reconnect preserves the Warden's accent color");
   replacement.close();
   host.close();
 });
@@ -253,12 +264,15 @@ test("rooms enforce the four-Warden ceiling", async () => {
     const host = await connect();
     clients.push(host);
     const welcome = await hello(host, { create: true });
+    const colors = [welcome.snapshot.players.find((player) => player.id === welcome.playerId).color];
     for (let index = 2; index <= 4; index += 1) {
       const client = await connect();
       clients.push(client);
       const joined = await hello(client, { roomCode: welcome.roomCode });
       assert.equal(joined.type, "welcome");
+      colors.push(joined.snapshot.players.find((player) => player.id === joined.playerId).color);
     }
+    assert.equal(new Set(colors).size, 4, "all four concurrent Wardens receive distinct accent colors");
     const overflow = await connect();
     clients.push(overflow);
     const rejected = await hello(overflow, { roomCode: welcome.roomCode });

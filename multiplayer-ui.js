@@ -11,15 +11,17 @@
     try { window.localStorage.setItem(NAME_KEY, name); } catch { /* storage is optional */ }
   }
 
-  function currentRealm() {
-    const snapshot = window.ashenholdGame?.snapshot?.();
-    if (snapshot?.realm) return { biome: snapshot.realm.biome, seed: Number(snapshot.realm.seed) };
-    const params = new URLSearchParams(window.location.search);
-    return { biome: params.get("biome") || "jungle", seed: Number(params.get("seed")) || Math.floor(Date.now() % 9999999) + 1 };
-  }
-
   function sanitizeRoom(value) {
     return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 6);
+  }
+
+  function inviteUrl(roomCode) {
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    url.searchParams.set("room", sanitizeRoom(roomCode));
+    url.searchParams.set("autojoin", "1");
+    return url;
   }
 
   class PartyController {
@@ -28,7 +30,6 @@
       this.mode = "solo";
       this.elements = {};
       this.initialized = false;
-      this.redirecting = false;
       this.boundEnterGuard = false;
       this.pingTimer = null;
       this.init();
@@ -57,7 +58,7 @@
             <button id="partyLeave" type="button">LEAVE</button>
           </div>
         </div>
-        <div class="party-status" aria-live="polite"><i></i><span id="partyStatus">SOLO REALM</span><b id="partyCount"></b></div>
+        <div class="party-status" aria-live="polite"><i></i><span id="partyStatus">SOLO WORLD</span><b id="partyCount"></b></div>
         <div id="partyRoster" class="party-roster" aria-label="Party members"></div>`;
       anchor.insertAdjacentElement("afterend", party);
       const partyHud = document.createElement("aside");
@@ -103,7 +104,7 @@
         return;
       }
       this.client.on("status", (status) => {
-        const labels = { connecting: "CONTACTING REALM SERVER", reconnecting: "REJOINING PARTY", disconnected: "PARTY CONNECTION LOST", offline: this.mode === "solo" ? "SOLO REALM" : "CO-OP OFFLINE" };
+        const labels = { connecting: "CONTACTING PARTY SERVER", reconnecting: "REJOINING PARTY", disconnected: "PARTY CONNECTION LOST", offline: this.mode === "solo" ? "SOLO WORLD" : "CO-OP OFFLINE" };
         if (labels[status]) this.setStatus(labels[status], status === "disconnected" ? "error" : status);
       });
       this.client.on("welcome", (message) => this.onWelcome(message));
@@ -112,7 +113,7 @@
       this.client.on("latency", (latency) => { this.elements.hudLatency.textContent = `${latency} MS`; });
       this.client.on("world_registered", (message) => this.dispatch("world-registered", message));
       this.client.on("game_event:realm_started", (event) => {
-        this.setStatus("PARTY ENTERING THE REALM", "ready");
+        this.setStatus("PARTY ENTERING ASHENHOLD", "ready");
         this.dispatch("realm-started", event);
       });
       this.client.on("game_event:host_changed", (event) => {
@@ -172,7 +173,7 @@
       if (mode === "solo") {
         this.elements.session.hidden = true;
         this.elements.roster.replaceChildren();
-        this.setStatus("SOLO REALM", "solo");
+        this.setStatus("SOLO WORLD", "solo");
       } else if (!this.client?.url) {
         this.setStatus("CO-OP SERVER NOT CONFIGURED", "error");
       } else {
@@ -192,9 +193,13 @@
       if (this.mode === "join" && roomCode.length !== 6) { this.setStatus("ENTER THE FULL SIX-CHARACTER CODE", "error"); return; }
       saveName(this.playerName());
       this.elements.connect.disabled = true;
-      const realm = currentRealm();
       try {
-        await this.client.connect({ create: this.mode === "host", roomCode, name: this.playerName(), biome: realm.biome, seed: realm.seed });
+        await this.client.connect({
+          create: this.mode === "host",
+          roomCode,
+          name: this.playerName(),
+          worldId: window.AshenholdMultiplayer.WORLD_ID
+        });
       } catch (error) {
         this.setStatus(error.message || "PARTY CONNECTION FAILED", "error");
       } finally {
@@ -203,20 +208,6 @@
     }
 
     onWelcome(message) {
-      const realm = currentRealm();
-      if (!this.redirecting && message.realm && (message.realm.biome !== realm.biome || Number(message.realm.seed) !== Number(realm.seed))) {
-        this.redirecting = true;
-        this.setStatus("ALIGNING SHARED REALM", "connecting");
-        try { window.sessionStorage.setItem("ashenhold-realm-v1", JSON.stringify(message.realm)); } catch { /* optional */ }
-        const url = new URL(window.location.href);
-        url.searchParams.set("biome", message.realm.biome);
-        url.searchParams.set("seed", String(message.realm.seed));
-        url.searchParams.set("room", message.roomCode);
-        url.searchParams.set("autojoin", "1");
-        url.searchParams.delete("test");
-        window.location.replace(url.toString());
-        return;
-      }
       this.mode = message.isHost ? "host" : "join";
       this.elements.root.dataset.mode = this.mode;
       this.elements.panel.hidden = false;
@@ -226,7 +217,7 @@
       this.elements.hudRoom.textContent = message.roomCode;
       this.elements.connect.hidden = true;
       this.elements.code.parentElement.hidden = true;
-      this.setStatus(message.isHost ? "PARTY READY · YOU ARE HOST" : message.started ? "REALM IN PROGRESS · READY TO JOIN" : "CONNECTED · WAITING FOR HOST", "ready");
+      this.setStatus(message.isHost ? "PARTY READY · YOU ARE HOST" : message.started ? "WORLD IN PROGRESS · READY TO JOIN" : "CONNECTED · WAITING FOR HOST", "ready");
       this.renderRoster(message.snapshot?.players || []);
       clearInterval(this.pingTimer);
       this.client.ping();
@@ -250,10 +241,7 @@
 
     async copyInvite() {
       if (!this.client?.roomCode) return;
-      const url = new URL(window.location.href);
-      url.searchParams.set("room", this.client.roomCode);
-      url.searchParams.set("autojoin", "1");
-      url.searchParams.delete("test");
+      const url = inviteUrl(this.client.roomCode);
       try {
         await navigator.clipboard.writeText(url.toString());
         this.elements.copy.textContent = "INVITE COPIED";

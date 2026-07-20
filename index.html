@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#090d10">
-  <meta name="description" content="Ashenhold: Dragonfall — a third-person 3D open-world dark-fantasy browser game.">
+  <meta name="description" content="Ashenhold: Dragonfall — a third-person dark-fantasy hunt across one continuous six-biome continent.">
   <meta name="ashenhold-multiplayer-url" content="wss://multiplayer-server-weld.vercel.app/api/ws">
   <title>Ashenhold: Dragonfall</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath fill='%23e66f36' d='M32 3 8 14v18c0 15 9 24 24 29 15-5 24-14 24-29V14L32 3Zm0 12 7 11-5 2 8 8-10-4-10 4 8-8-5-2 7-11Z'/%3E%3C/svg%3E">
@@ -44,7 +44,7 @@
       </section>
 
       <section class="quest" aria-label="Current quest">
-        <small id="biomeTag" class="biome-tag">PROCEDURAL REALM</small>
+        <small id="biomeTag" class="biome-tag">ASHENHOLD CONTINENT</small>
         <small>MAIN QUEST</small>
         <h2>THE SIEGE OF ASHENHOLD</h2>
         <div class="quest-rule"></div>
@@ -114,7 +114,7 @@
     </section>
 
     <section id="strongholdHud" class="stronghold-hud" aria-label="Stronghold campaign status">
-      <small>REALM CONQUEST</small>
+      <small>CONTINENT CONQUEST</small>
       <strong><span id="strongholdNumber">0 / 0</span> SECURED</strong>
       <div><i id="strongholdProgressBar"></i></div>
       <b id="strongholdStatus">LOCATING STRONGHOLDS</b>
@@ -151,7 +151,7 @@
     <section id="loadingScreen" class="screen loading-screen active">
       <div class="loading-card">
         <span class="loading-rune"></span>
-        <p>FORGING THE REALM</p>
+        <p>AWAKENING ASHENHOLD</p>
         <div class="loading-track"><i id="loadingBar"></i></div>
         <small id="loadingText">Raising the mountains...</small>
       </div>
@@ -162,26 +162,26 @@
       <div class="title-card">
         <div class="title-brandline">
           <span class="title-sigil" aria-hidden="true"><i></i><b></b></span>
-          <p class="eyebrow"><span></span>A SEED-FORGED SOLO + CO-OP HUNT<span></span></p>
+          <p class="eyebrow"><span></span>ONE CONTINENT · SOLO + CO-OP<span></span></p>
         </div>
         <div class="title-grid">
           <div class="title-main">
-            <p id="realmLabel" class="realm-label">PROCEDURAL REALM</p>
+            <p id="realmLabel" class="realm-label">ONE WORLD · SIX CONNECTED BIOMES</p>
             <h1><small>ASHENHOLD</small>DRAGONFALL</h1>
-            <p class="title-lead">Hunt alone or rally up to four Wardens across a living open realm. Break enemy-held strongholds, bind wounded creatures, absorb permanent relic power, and face Vharok through the storm.</p>
+            <p class="title-lead">Hunt alone or rally up to four Wardens across one vast, continuous continent. Cross ancient forests, storm coasts, deserts, tundra, mountains, and Moonfall without leaving the shared world.</p>
             <div class="title-actions">
               <button id="enterButton" class="primary-button" type="button"><span>BEGIN THE HUNT</span><kbd>ENTER</kbd></button>
               <span class="title-save-state"><i></i> Solo progress saves locally</span>
             </div>
             <div class="feature-row">
-              <span><i>◆</i> Six shifting biomes</span><span><i>⚔</i> Four-Warden co-op</span><span><i>✦</i> Permanent relic power</span><span><i>◇</i> Tameable allies</span>
+              <span><i>◆</i> Six connected biomes</span><span><i>⚔</i> Four-Warden co-op</span><span><i>✦</i> Permanent relic power</span><span><i>◇</i> Tameable allies</span>
             </div>
           </div>
-          <aside class="title-briefing" aria-label="Current realm briefing">
+          <aside class="title-briefing" aria-label="Ashenhold world briefing">
             <div class="briefing-kicker"><span></span>WARDEN BRIEFING</div>
-            <div class="briefing-realm"><small>ACTIVE REALM</small><strong id="titleRealmName">FORGING...</strong></div>
+            <div class="briefing-realm"><small>STARTING REGION</small><strong id="titleRealmName">ASHENHOLD</strong></div>
             <dl>
-              <div><dt>SEED</dt><dd id="titleSeed">—</dd></div>
+              <div><dt>REGIONS</dt><dd>6 CONNECTED</dd></div>
               <div><dt>STRONGHOLDS</dt><dd id="titleStrongholds">—</dd></div>
               <div><dt>WARDEN LEVEL</dt><dd id="titleWardenLevel">1</dd></div>
             </dl>
@@ -190,7 +190,7 @@
               <li><b>02</b><span>Break location garrisons</span></li>
               <li><b>03</b><span>Slay the World-Burner</span></li>
             </ol>
-            <div class="briefing-status"><i></i> REALM READY</div>
+            <div class="briefing-status"><i></i> CONTINENT READY</div>
           </aside>
         </div>
         <small class="title-note">Choose Solo, Host, or Join · Click the world to capture the mouse · Press K for constellations</small>
@@ -199,10 +199,10 @@
 
     <section id="pauseScreen" class="screen pause-screen" role="dialog" aria-modal="true" aria-labelledby="pauseTitle">
       <div class="dialog">
-        <p class="dialog-kicker">THE REALM WAITS</p>
+        <p class="dialog-kicker">ASHENHOLD WAITS</p>
         <h2 id="pauseTitle">PAUSED</h2>
         <p>Mouse released. Your progress in this run is preserved.</p>
-        <button id="resumeButton" class="primary-button" type="button"><span>RETURN TO THE REALM</span><kbd>ESC</kbd></button>
+        <button id="resumeButton" class="primary-button" type="button"><span>RETURN TO THE WORLD</span><kbd>ESC</kbd></button>
         <button id="restartButton" class="text-button" type="button">Restart adventure</button>
       </div>
     </section>
@@ -214,7 +214,7 @@
             <p>WARDEN PROGRESSION</p>
             <h2>CONSTELLATIONS OF ASHENHOLD</h2>
           </div>
-          <button id="closeSkillsButton" type="button" aria-label="Close skill tree"><span>RETURN TO THE REALM</span><b aria-hidden="true">×</b><kbd>K</kbd></button>
+          <button id="closeSkillsButton" type="button" aria-label="Close skill tree"><span>RETURN TO THE WORLD</span><b aria-hidden="true">×</b><kbd>K</kbd></button>
         </header>
         <div class="progression-summary">
           <article>
@@ -252,7 +252,7 @@
           <div><small>DISTANCE WALKED</small><strong id="finalDistance">0m</strong></div>
           <div><small>WORLD EXPLORED</small><strong id="finalExplored">0%</strong></div>
         </div>
-        <button id="playAgainButton" class="primary-button" type="button"><span>FORGE THE NEXT REALM</span><kbd>ENTER</kbd></button>
+        <button id="playAgainButton" class="primary-button" type="button"><span>RETURN TO ASHENHOLD</span><kbd>ENTER</kbd></button>
       </div>
     </section>
 
