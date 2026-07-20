@@ -3,6 +3,7 @@
 const { chromium } = require("playwright");
 
 const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\/?$/, "/");
+const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components/tree/b182d81bff64531e584f50d71f046ae05fab3c87/src/components/waterFloor";
 
 function diagnostics(page) {
   const result = { consoleErrors: [], pageErrors: [], failedRequests: [] };
@@ -38,6 +39,16 @@ async function boot(page) {
     return { probe, positioned, opened, before, after };
   });
   const water = await page.evaluate(() => window.__ASHENHOLD_TEST__.waterTraversalProbe());
+  const waterVisual = water.available
+    ? await page.evaluate(({ x, z }) => {
+        const test = window.__ASHENHOLD_TEST__;
+        const before = test.waterDebug();
+        test.teleport(x, z);
+        test.step(.03);
+        return { before, after: test.waterDebug(), snapshot: window.ashenholdGame.snapshot() };
+      }, { x: water.route.wet.x, z: water.route.wet.z })
+    : null;
+  if (waterVisual) await page.screenshot({ path: "test-results/motion-stylized-water.png" });
 
   const desktopSkillsButton = await page.locator("#skillsButton").boundingBox();
   await page.click("#skillsButton");
@@ -169,6 +180,19 @@ async function boot(page) {
     waterExitDoesNotStick: water.available && water.exitDistance >= water.route.distance * .8 && water.returnedDry,
     forcedWaterLandingCanEscape: water.available && water.forcedExitDistance >= water.route.distance * .8 && water.escapedForcedWater,
     shallowWadingSurface: water.available && water.wadingDepth >= -.12 && water.wadingDepth <= .65,
+    stylizedWaterPinned: Boolean(waterVisual && waterVisual.after.style === "cortiz-anime-voronoi"
+      && waterVisual.after.source === STYLIZED_WATER_SOURCE
+      && waterVisual.after.textureFree && waterVisual.after.sameOriginRequests === 0),
+    boundedDrownedCoastWater: Boolean(waterVisual && waterVisual.after.surfaces.length === 1
+      && waterVisual.after.surfaces[0].id === "drowned-coast-water"
+      && waterVisual.after.surfaces[0].biomeId === "shore"
+      && Math.abs(waterVisual.after.surfaces[0].level - water.route.waterSurface) < .0001
+      && waterVisual.after.surfaces[0].radius === 520),
+    realWadingEmitsRipple: Boolean(waterVisual && waterVisual.snapshot.wading
+      && waterVisual.after.ripplesEmitted > waterVisual.before.ripplesEmitted
+      && waterVisual.after.activeRipples > 0),
+    fullWaterMotionTier: Boolean(waterVisual && waterVisual.after.tier === "full" && waterVisual.after.animated
+      && !waterVisual.after.reducedMotion && waterVisual.after.rippleCapacity === 6),
     chestFrontLatchValid: chest.probe.available && chest.probe.valid && chest.probe.validDistance <= 3.5,
     chestFarRejected: chest.probe.farRejected,
     chestBelowRejected: chest.probe.belowRejected,
@@ -223,6 +247,7 @@ async function boot(page) {
   const report = {
     checks,
     water,
+    waterVisual,
     chest,
     desktopSkills,
     mobileSkills,

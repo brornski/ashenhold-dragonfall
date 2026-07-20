@@ -103,9 +103,10 @@
     desert: { id: "ember-dust", features: ["sandsky-panorama", "painted-cloud-bands", "ember-horizon"], halo: [720, 195, -210], haloScale: 190 },
     snowy: { id: "frozen-aurora", features: ["aurora-ribbons", "snow-clouds", "ice-horizon"], halo: [610, 205, -370], haloScale: 135 },
     mountains: { id: "high-altitude", features: ["massive-clouds", "distant-peaks", "altitude-blue"], halo: [690, 235, -270], haloScale: 145 },
-    moon: { id: "celestial-void", features: ["starfield", "eclipse-moon", "violet-nebula"], halo: [690, 260, -160], haloScale: 105 }
+    moon: { id: "celestial-void", features: ["moonsky-panorama", "milky-way-arc", "violet-horizon"], halo: [690, 260, -160], haloScale: 105 }
   });
   const DESERT_SKYBOX_PATH = "assets/textures/skyboxes/ember-dunes-sandsky-2k.png";
+  const MOON_SKYBOX_PATH = "assets/textures/skyboxes/moonfall-moonsky-2k.png";
   const BIOMES = {
     snowy: { name: "FROSTBOUND WILDS", textureId: "snow", relief: 1.05, base: 2.6, fog: 0x869ca6, fogDensity: .00195, ground: 0x718087, cliff: 0x7d898d, grass: 0x50625c, grassStrength: .42, frost: 0xc9d4d5, frostStart: 16, water: 0x315663, waterLevel: -3.2, waterOpacity: .62, sky: 0xb2c5ce, sun: 0xffead2, sunIntensity: 1.22, hemi: 0xa9bdc4, exposure: 1.1, skyZenith: 0x6b87a0, skyHorizon: 0xdfe9ec, skyGlow: 0xdceef4, stoneTint: 0xcfdde2, particleSize: 1.4, particleOpacity: .5, particleFall: .55, particleCount: 1 },
     jungle: { name: "VERDANT RUINS", textureId: "jungle", relief: .72, base: 3.2, fog: 0x1b352c, fogDensity: .00305, ground: 0x344a32, cliff: 0x465448, grass: 0x284b2d, grassStrength: 1.0, frost: 0x7a8a76, frostStart: 125, water: 0x1e514c, waterLevel: -2.4, waterOpacity: .72, sky: 0x71968d, sun: 0xffd5a7, sunIntensity: 1.12, hemi: 0x759a82, exposure: 1.02, skyZenith: 0x1d3a33, skyHorizon: 0x7fae8f, skyGlow: 0xe8c87a, stoneTint: 0x718a64, particleSize: 1.05, particleOpacity: .38, particleFall: .7, particleCount: .9 },
@@ -287,6 +288,9 @@
   const SHORE_WATER_RADIUS = 520;
   const PLAYER_WADING_DEPTH = .55;
   const WATERLINE_MARGIN = .35;
+  const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components/tree/b182d81bff64531e584f50d71f046ae05fab3c87/src/components/waterFloor";
+  const STYLIZED_WATER_STYLE = "cortiz-anime-voronoi";
+  const WATER_RIPPLE_CAPACITY = isCoarse ? 0 : 6;
   const TREELESS_BIOME_IDS = new Set(["desert"]);
   const TREE_MODEL_IDS = new Set([
     "tree", "treePalm", "treePalmBend", "treePineA", "treePineB",
@@ -414,6 +418,11 @@
   let sunTarget;
   let terrain;
   let sky;
+  let waterSurfaces = [];
+  let waterRippleCursor = 0;
+  let waterRippleTimer = 0;
+  let waterWasWading = false;
+  let waterRipplesEmitted = 0;
   let stoneMaterial;
   let darkStoneMaterial;
   let worldWoodMaterial;
@@ -2358,7 +2367,7 @@
 
   function adminTextureCatalog() {
     const paths = new Set([
-      "assets/textures/storm-sky-panorama.jpg", DESERT_SKYBOX_PATH, "assets/textures/ashen-ground.jpg",
+      "assets/textures/storm-sky-panorama.jpg", DESERT_SKYBOX_PATH, MOON_SKYBOX_PATH, "assets/textures/ashen-ground.jpg",
       "assets/textures/ancient-stone.jpg", "assets/textures/alpine-cliff.jpg", "assets/textures/tundra-grass-v1.jpg"
     ]);
     Object.keys(visualAssets.biomeMaterialCatalog || {}).forEach((id) => {
@@ -3847,6 +3856,8 @@
     })());
     const desertSkyboxIndex = paths.length;
     paths.push(DESERT_SKYBOX_PATH);
+    const moonSkyboxIndex = paths.length;
+    paths.push(MOON_SKYBOX_PATH);
     const loaded = await Promise.allSettled(paths.map(textureFrom));
     if (loaded[0].status === "fulfilled") {
       visualAssets.sky = loaded[0].value;
@@ -3871,6 +3882,13 @@
       visualAssets.desertSky.wrapS = THREE.ClampToEdgeWrapping;
       visualAssets.desertSky.wrapT = THREE.ClampToEdgeWrapping;
       visualAssets.desertSky.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    }
+    if (loaded[moonSkyboxIndex].status === "fulfilled") {
+      visualAssets.moonSky = loaded[moonSkyboxIndex].value;
+      visualAssets.moonSky.encoding = THREE.sRGBEncoding;
+      visualAssets.moonSky.wrapS = THREE.ClampToEdgeWrapping;
+      visualAssets.moonSky.wrapT = THREE.ClampToEdgeWrapping;
+      visualAssets.moonSky.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     }
     visualAssets.biomeMaterials[currentBiomeId] = startingRegionalMaterial;
     const startingMaterial = visualAssets.biomeMaterials[currentBiomeId] || visualAssets.biomeMaterials.jungle || {};
@@ -4230,6 +4248,21 @@
       };
       return suppliedTexture;
     }
+    if (skyBiomeId === "moon" && visualAssets.moonSky) {
+      const suppliedTexture = visualAssets.moonSky.clone();
+      suppliedTexture.encoding = THREE.sRGBEncoding;
+      suppliedTexture.wrapS = THREE.ClampToEdgeWrapping;
+      suppliedTexture.wrapT = THREE.ClampToEdgeWrapping;
+      suppliedTexture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      suppliedTexture.needsUpdate = true;
+      suppliedTexture.userData = suppliedTexture.userData || {};
+      suppliedTexture.userData.skyReport = {
+        id: profile.id, features: profile.features.slice(), featureCount: 1,
+        signature: profile.id + ":moonskybox-2k-v1", gradientStops: 0, horizonBlend: true,
+        projection: "equirectangular", source: MOON_SKYBOX_PATH
+      };
+      return suppliedTexture;
+    }
     const surface = document.createElement("canvas");
     surface.width = 1024;
     surface.height = 512;
@@ -4564,6 +4597,271 @@
     return heightValue;
   }
 
+  // Adapted from Christian Ortiz's MIT-licensed WaterFloor at the pinned source
+  // above. Ashenhold keeps the texture-free Voronoi F1/smooth-F1 cel pattern and
+  // world-space ripple rings, but uses one dependency-free Three.js r128 material
+  // instead of React/R3F, render targets, or the demo's infinite camera-follow plane.
+  const STYLIZED_WATER_VERTEX_SHADER = `
+    varying vec3 vWaterWorldPosition;
+    varying float vWaterFogDepth;
+    void main() {
+      vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+      vec4 viewPosition = viewMatrix * worldPosition;
+      vWaterWorldPosition = worldPosition.xyz;
+      vWaterFogDepth = -viewPosition.z;
+      gl_Position = projectionMatrix * viewPosition;
+    }
+  `;
+
+  const STYLIZED_WATER_FRAGMENT_SHADER = `
+    uniform float uTime;
+    uniform float uScale;
+    uniform float uSmoothness;
+    uniform float uEdgeThreshold;
+    uniform float uEdgeSoftness;
+    uniform vec2 uFlow;
+    uniform float uNoiseScale;
+    uniform float uNoiseFlowSpeed;
+    uniform float uDistortAmount;
+    uniform vec3 uDeepColor;
+    uniform vec3 uMidColor;
+    uniform vec3 uHighlightColor;
+    uniform float uOpacity;
+    uniform float uDeepOpacity;
+    uniform vec3 uFogColor;
+    uniform float uFogDensity;
+    uniform vec2 uRippleCenters[6];
+    uniform float uRippleStarts[6];
+    uniform float uRippleEnabled[6];
+    varying vec3 vWaterWorldPosition;
+    varying float vWaterFogDepth;
+
+    vec2 waterHash2(vec2 p) {
+      vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+      p3 += dot(p3, p3.yzx + 33.33);
+      return fract((p3.xx + p3.yz) * p3.zy);
+    }
+
+    float waterSmoothMin(float a, float b, float k) {
+      float h = max(k - abs(a - b), 0.0) / max(k, 0.0001);
+      return min(a, b) - h * h * h * k / 6.0;
+    }
+
+    vec2 waterCellPoint(vec2 seed) {
+      return 0.18 + seed * 0.64;
+    }
+
+    void waterVoronoi(vec2 p, out float nearest, out float smoothNearest) {
+      vec2 cell = floor(p - 0.5);
+      vec2 local = p - cell;
+      nearest = 8.0;
+      smoothNearest = 8.0;
+      for (int y = 0; y <= 1; y++) {
+        for (int x = 0; x <= 1; x++) {
+          vec2 neighbor = vec2(float(x), float(y));
+          vec2 point = waterCellPoint(waterHash2(cell + neighbor));
+          vec2 pointOffset = neighbor + point - local;
+          float distanceToPoint = dot(pointOffset, pointOffset);
+          nearest = min(nearest, distanceToPoint);
+          smoothNearest = waterSmoothMin(smoothNearest, distanceToPoint, uSmoothness);
+        }
+      }
+    }
+
+    float waterNoiseHash(vec2 p) {
+      p = fract(p * vec2(127.1, 311.7));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
+    }
+
+    float waterValueNoise(vec2 p) {
+      vec2 cell = floor(p);
+      vec2 local = fract(p);
+      local = local * local * (3.0 - 2.0 * local);
+      return mix(
+        mix(waterNoiseHash(cell), waterNoiseHash(cell + vec2(1.0, 0.0)), local.x),
+        mix(waterNoiseHash(cell + vec2(0.0, 1.0)), waterNoiseHash(cell + vec2(1.0, 1.0)), local.x),
+        local.y
+      );
+    }
+
+    float waterFbm(vec2 p) {
+      #ifndef ASHENHOLD_COARSE_WATER
+        return 0.68 * waterValueNoise(p);
+      #else
+        return 0.375;
+      #endif
+    }
+
+    void main() {
+      vec2 worldXZ = vWaterWorldPosition.xz;
+      vec2 noiseUv = worldXZ * uNoiseScale + vec2(uTime * uNoiseFlowSpeed, 0.0);
+      vec2 distortion = vec2(waterFbm(noiseUv) - 0.375) * uDistortAmount;
+      vec2 cellUv = worldXZ * uScale + uFlow * uTime + distortion;
+      float nearest;
+      float smoothNearest;
+      waterVoronoi(cellUv, nearest, smoothNearest);
+      float edge = nearest - smoothNearest;
+      float cel = smoothstep(uEdgeThreshold - uEdgeSoftness, uEdgeThreshold + uEdgeSoftness, edge);
+      float midBand = smoothstep(0.04, 0.58, cel);
+      float foamBand = smoothstep(0.68, 0.96, cel);
+      vec3 color = mix(uDeepColor, uMidColor, midBand);
+      color = mix(color, uHighlightColor, foamBand);
+
+      float ripple = 0.0;
+      #ifndef ASHENHOLD_COARSE_WATER
+        for (int i = 0; i < 6; i++) {
+          if (uRippleEnabled[i] > 0.5) {
+            float age = max(uTime - uRippleStarts[i], 0.0);
+            float radius = age * 3.1;
+            float distanceToRipple = length(worldXZ - uRippleCenters[i]);
+            float primary = 1.0 - smoothstep(0.08, 0.24, abs(distanceToRipple - radius));
+            float secondaryRadius = max(radius - 0.85, 0.0);
+            float secondary = (1.0 - smoothstep(0.07, 0.2, abs(distanceToRipple - secondaryRadius))) * step(0.3, radius);
+            ripple += (primary + secondary * 0.58) * exp(-age * 1.45);
+          }
+        }
+      #endif
+      ripple = clamp(ripple, 0.0, 1.0);
+      color = mix(color, uHighlightColor, ripple);
+
+      vec3 viewDirection = normalize(cameraPosition - vWaterWorldPosition);
+      float fresnel = pow(1.0 - clamp(viewDirection.y, 0.0, 1.0), 2.1);
+      color = mix(color, uMidColor, fresnel * 0.24);
+      float alpha = mix(uDeepOpacity, 1.0, max(foamBand, ripple)) * uOpacity;
+      float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * vWaterFogDepth * vWaterFogDepth);
+      color = mix(color, uFogColor, clamp(fogFactor, 0.0, 1.0));
+      gl_FragColor = vec4(color, alpha);
+      #include <tonemapping_fragment>
+      #include <encodings_fragment>
+    }
+  `;
+
+  function createStylizedWaterMaterial(definition) {
+    const waterColor = new THREE.Color(definition.water);
+    const deepColor = waterColor.clone().multiplyScalar(.48);
+    const midColor = waterColor.clone().lerp(new THREE.Color(0x62c8df), .52);
+    const highlightColor = new THREE.Color(0xe9fbff);
+    const rippleCenters = Array.from({ length: 6 }, () => new THREE.Vector2(100000, 100000));
+    const material = new THREE.ShaderMaterial({
+      vertexShader: STYLIZED_WATER_VERTEX_SHADER,
+      fragmentShader: (isCoarse ? "#define ASHENHOLD_COARSE_WATER\n" : "") + STYLIZED_WATER_FRAGMENT_SHADER,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.FrontSide,
+      uniforms: {
+        uTime: { value: 0 },
+        uScale: { value: isCoarse ? .19 : .23 },
+        uSmoothness: { value: .46 },
+        uEdgeThreshold: { value: .09 },
+        uEdgeSoftness: { value: isCoarse ? .075 : .055 },
+        uFlow: { value: new THREE.Vector2(.07, -.23) },
+        uNoiseScale: { value: .87 },
+        uNoiseFlowSpeed: { value: reducedMotion ? 0 : .11 },
+        uDistortAmount: { value: .26 },
+        uDeepColor: { value: deepColor },
+        uMidColor: { value: midColor },
+        uHighlightColor: { value: highlightColor },
+        uOpacity: { value: definition.waterOpacity },
+        uDeepOpacity: { value: .62 },
+        uFogColor: { value: new THREE.Color(definition.fog) },
+        uFogDensity: { value: definition.fogDensity * (isCoarse ? 1.1 : 1) },
+        uRippleCenters: { value: rippleCenters },
+        uRippleStarts: { value: new Array(6).fill(0) },
+        uRippleEnabled: { value: new Array(6).fill(0) }
+      }
+    });
+    material.userData.stylizedWater = {
+      style: STYLIZED_WATER_STYLE,
+      source: STYLIZED_WATER_SOURCE,
+      animated: !reducedMotion,
+      tier: isCoarse ? "coarse" : "full"
+    };
+    return material;
+  }
+
+  function createStylizedWaterSurface(options) {
+    const definition = BIOMES[options.biomeId];
+    const mesh = new THREE.Mesh(options.geometry, createStylizedWaterMaterial(definition));
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(options.x, options.level, options.z);
+    mesh.renderOrder = 2;
+    mesh.userData.waterSurface = {
+      id: options.id,
+      biomeId: options.biomeId,
+      level: options.level,
+      radius: options.radius || null
+    };
+    scene.add(mesh);
+    waterSurfaces.push(mesh);
+    return mesh;
+  }
+
+  function emitStylizedWaterRipple(x, z) {
+    if (reducedMotion || isCoarse || !waterSurfaces.length) return false;
+    const index = waterRippleCursor % WATER_RIPPLE_CAPACITY;
+    waterRippleCursor = (waterRippleCursor + 1) % WATER_RIPPLE_CAPACITY;
+    waterSurfaces.forEach((surface) => {
+      const uniforms = surface.material.uniforms;
+      uniforms.uRippleCenters.value[index].set(x, z);
+      uniforms.uRippleStarts.value[index] = elapsed;
+      uniforms.uRippleEnabled.value[index] = 1;
+    });
+    waterRipplesEmitted += 1;
+    return true;
+  }
+
+  function resetStylizedWaterRipples() {
+    waterRippleCursor = 0;
+    waterRippleTimer = 0;
+    waterWasWading = false;
+    waterRipplesEmitted = 0;
+    waterSurfaces.forEach((surface) => {
+      const uniforms = surface.material.uniforms;
+      uniforms.uRippleStarts.value.fill(0);
+      uniforms.uRippleEnabled.value.fill(0);
+      uniforms.uRippleCenters.value.forEach((center) => center.set(100000, 100000));
+    });
+  }
+
+  function updateStylizedWater(dt) {
+    if (!waterSurfaces.length) return;
+    const time = reducedMotion ? 0 : elapsed;
+    waterSurfaces.forEach((surface) => {
+      const uniforms = surface.material.uniforms;
+      uniforms.uTime.value = time;
+      uniforms.uFogColor.value.copy(scene.fog.color);
+      uniforms.uFogDensity.value = scene.fog.density;
+      for (let index = 0; index < 6; index += 1) {
+        if (uniforms.uRippleEnabled.value[index] && time - uniforms.uRippleStarts.value[index] > 3.2) uniforms.uRippleEnabled.value[index] = 0;
+      }
+    });
+    waterRippleTimer = Math.max(0, waterRippleTimer - dt);
+    const enteredWater = player && player.wading && !waterWasWading;
+    if ((enteredWater || (player && player.wading && player.moving && waterRippleTimer <= 0)) && player.root) {
+      if (emitStylizedWaterRipple(player.root.position.x, player.root.position.z)) waterRippleTimer = enteredWater ? .32 : .52;
+    }
+    waterWasWading = Boolean(player && player.wading);
+  }
+
+  function stylizedWaterDebug() {
+    let activeRipples = 0;
+    if (waterSurfaces[0]) activeRipples = waterSurfaces[0].material.uniforms.uRippleEnabled.value.filter(Boolean).length;
+    return {
+      style: STYLIZED_WATER_STYLE,
+      source: STYLIZED_WATER_SOURCE,
+      textureFree: true,
+      sameOriginRequests: 0,
+      animated: !reducedMotion,
+      reducedMotion,
+      tier: isCoarse ? "coarse" : "full",
+      rippleCapacity: WATER_RIPPLE_CAPACITY,
+      ripplesEmitted: waterRipplesEmitted,
+      activeRipples,
+      surfaces: waterSurfaces.map((surface) => Object.assign({}, surface.userData.waterSurface))
+    };
+  }
+
   function createTerrain() {
     const segments = isCoarse ? 130 : 240;
     const geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, segments, segments);
@@ -4644,13 +4942,15 @@
 
     const shoreZone = CONTINENT_ZONE_BY_ID.get("shore");
     const shoreBiome = BIOMES.shore;
-    const water = new THREE.Mesh(
-      new THREE.CircleGeometry(SHORE_WATER_RADIUS, isCoarse ? 48 : 96),
-      new THREE.MeshPhongMaterial({ color: shoreBiome.water, transparent: true, opacity: shoreBiome.waterOpacity, shininess: 92, specular: new THREE.Color(shoreBiome.water).lerp(new THREE.Color(0xb6d9e4), .58) })
-    );
-    water.rotation.x = -Math.PI / 2;
-    water.position.set(shoreZone.center.x, shoreBiome.waterLevel, shoreZone.center.z);
-    scene.add(water);
+    createStylizedWaterSurface({
+      id: "drowned-coast-water",
+      biomeId: "shore",
+      geometry: new THREE.CircleGeometry(SHORE_WATER_RADIUS, isCoarse ? 48 : 96),
+      x: shoreZone.center.x,
+      z: shoreZone.center.z,
+      level: shoreBiome.waterLevel,
+      radius: SHORE_WATER_RADIUS
+    });
   }
 
   function createTerrainTexture() {
@@ -9117,6 +9417,7 @@
 
 
   function resetActors(savedRun) {
+    resetStylizedWaterRipples();
     dragons.forEach((dragon) => { clearDragonFireTelegraph(dragon); scene.remove(dragon.root); dragon.root.traverse((object) => { if (object.geometry && object.geometry.dispose) object.geometry.dispose(); }); });
     groundEnemies.forEach((enemy) => { scene.remove(enemy.root); disposeGroundEnemy(enemy); });
     bolts.forEach((bolt) => { scene.remove(bolt.mesh); bolt.mesh.traverse((object) => { if (object.geometry) object.geometry.dispose(); if (object.material) object.material.dispose(); }); });
@@ -10745,6 +11046,7 @@
   function updateWorldDecor(dt) {
     updateActiveBiomePresentation(false);
     const activeBiome = BIOMES[currentBiomeId];
+    updateStylizedWater(dt);
     regionalAssetPrefetchTimer -= dt;
     if (regionalAssetPrefetchTimer <= 0 && player.root) {
       regionalAssetPrefetchTimer = .65;
@@ -11798,6 +12100,7 @@
           horizonBlend: Boolean(skyReport.horizonBlend), environmentMap: Boolean(visualAssets.environment),
           projection: skyReport.projection || "generated-equirectangular", source: skyReport.source || "procedural"
         },
+        water: stylizedWaterDebug(),
         capturedFlags: { total: captureFlags.length, raised: captureFlags.filter((flag) => flag.root.visible && flag.target > 0).length },
         grassInstances: grassField ? grassField.count : 0,
         props: { kind: biomePropsReport.kind, total: biomePropsReport.total, byKind: Object.assign({}, biomePropsReport.byKind), byBiome: Object.assign({}, biomePropsReport.byBiome || {}) },
@@ -12199,6 +12502,7 @@
         return { sprint: { takeoffSpeed, airborneSpeed, directionAlignment } };
       },
       skyDebug: () => Object.assign({}, skyReport, { features: skyReport.features.slice(), environmentMap: Boolean(visualAssets.environment) }),
+      waterDebug: stylizedWaterDebug,
       captureFlagDebug: () => captureFlags.map((flag) => ({
         strongholdId: flag.strongholdId, visible: flag.root.visible, raised: flag.raise, target: flag.target,
         minimapMarker: Boolean(flag.root.visible && flag.target > 0),

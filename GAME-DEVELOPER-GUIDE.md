@@ -58,7 +58,7 @@ Freecam moves independently of the Warden: `WASD` moves relative to the view, `Q
 
 ### World and combat tuning
 
-World controls edit the one authored continent rather than generating a new seed. Each biome can override ground, cliff, grass, and fog colors; fog density and exposure; and tree, prop, and grass density. Changes preview live. Density values above currently allocated instance capacity take full effect after **Save Repo** and reload. Ember Dunes is a deliberate invariant: its tree density is clamped to zero in both the editor and runtime. Its sky uses the supplied 2K equirectangular panorama at `assets/textures/skyboxes/ember-dunes-sandsky-2k.png`, with the generated Ember Dunes sky retained as a load-failure fallback.
+World controls edit the one authored continent rather than generating a new seed. Each biome can override ground, cliff, grass, and fog colors; fog density and exposure; and tree, prop, and grass density. Changes preview live. Density values above currently allocated instance capacity take full effect after **Save Repo** and reload. Ember Dunes is a deliberate invariant: its tree density is clamped to zero in both the editor and runtime. Ember Dunes and Moonfall use the supplied 2K equirectangular panoramas at `assets/textures/skyboxes/ember-dunes-sandsky-2k.png` and `assets/textures/skyboxes/moonfall-moonsky-2k.png`; each biome retains its generated sky as a load-failure fallback.
 
 Enemy tuning can be global or scoped to an enemy kind. Multipliers cover health, damage, speed, attack range, sight range, tracking, and attack rate, and apply to present and future spawns. Selecting an enemy also exposes exact health/max-health, damage, speed, attack range/interval, sight range, and tracking fields for that entity.
 
@@ -204,7 +204,15 @@ Release 5.5 establishes one world unit as one metre and measures every loaded mo
 
 Every biome now builds a distinct ancient-forest profile with 2,000-3,600 desktop trees (adaptive coarse counts), including rare 30-82 metre hero trees. Trees are stored in 180-metre instanced chunks with near geometry, far silhouettes, timed distance culling, and a small collider budget for the largest trunks. Seeded infrastructure adds 24-32 biome-specific micro-landmarks such as collapsed walls, abandoned farms, hunter platforms, drowned piers, carts, and waystones outside protected routes and strongholds.
 
-The six realms use separate generated 2:1 sky environments and horizon blends: humid canopy light, tempest coast shelves, ember dust, aurora, high-altitude peaks, and the celestial void. Cleared shrines and graveyards raise animated Warden flags; their state derives from the persisted cleared-stronghold IDs and is represented by a blue flag on the minimap.
+The six regions use separate 2:1 sky environments and horizon blends: humid canopy light, tempest coast shelves, the supplied Ember Dunes sand panorama, aurora, high-altitude peaks, and the supplied Moonfall galactic panorama. The other four environments remain procedurally generated, while Ember Dunes and Moonfall fall back to their procedural versions if a supplied image cannot load. Cleared shrines and graveyards raise animated Warden flags; their state derives from the persisted cleared-stronghold IDs and is represented by a blue flag on the minimap.
+
+### Global stylized water renderer
+
+Every registered finite water surface uses one procedural anime-water material family adapted from Christian Ortiz's MIT-licensed `WaterFloor` in [Stylized Components](https://github.com/cortiz2894/stylized-components), pinned to revision `b182d81bff64531e584f50d71f046ae05fab3c87`. World-space XZ Voronoi distance fields produce broad deep/mid/highlight cel bands, animated distortion supplies coherent flow, and short-lived hard-edged rings mark Warden contact with the surface. The current authored continent renders one bounded Drowned Coast water mesh; other biome `waterLevel` values are gameplay/placement thresholds rather than visible bodies. The shared factory resolves a palette from the biome beneath each mesh center, so future authored finite water bodies can retain their regional identity without a second renderer.
+
+The port is a texture-free Three.js r128 `ShaderMaterial` embedded in `app.js`. It does not ship the upstream React Three Fiber demo, React/Leva/GSAP controls, seabed, sparkle-particle, depth-intersection, or GPU simulation layers, and it never requests code, textures, or data from GitHub at runtime. Coarse devices use the reduced shader/ripple tier; reduced-motion sessions suppress travel-driven ripple churn and minimize water animation while preserving the cel palette and readable waterline.
+
+This is a presentation replacement, not a topology or physics change. It reuses the registered Drowned Coast finite geometry; it neither invents rivers or pools, creates an infinite ocean, nor changes terrain heights, valid recovery positions, deep-water checks, shallow-water running, wading depth, or collision. Movement, save restoration, POI rejection, and multiplayer transforms therefore continue to use the existing gameplay water contract. When extending the map, register a new authored finite body through the shared water factory so its material, biome palette, quality policy, and traversal rules apply automatically.
 
 POI placement rejects water, excessive slope, existing forts/routes, and overlapping reservations. Detailed model decoration is presentation-only; encounter and chest positions are deterministic.
 
@@ -442,7 +450,7 @@ The normal `window.ashenholdGame` surface exposes only read-only methods:
 - `window.ashenholdGame.modelCatalog()`
 - `window.ashenholdGame.multiplayerSnapshot()`
 
-The snapshot includes realm, player/progression, relic bonuses, companions/Bonded Pace, stronghold summary/list, quest, route reports, POIs, asset density, canonical model dimensions, forest LOD/culling counts, infrastructure density, sky signature, capture-flag totals, model slots, spawn failures, collision-relevant position, sprint latches, renderer counts, and quality.
+The snapshot includes realm, player/progression, relic bonuses, companions/Bonded Pace, stronghold summary/list, quest, route reports, POIs, asset density, canonical model dimensions, forest LOD/culling counts, infrastructure density, sky signature, the global stylized-water renderer report, capture-flag totals, model slots, spawn failures, collision-relevant position, sprint latches, renderer counts, and quality.
 
 The separately loaded multiplayer modules expose `window.AshenholdMultiplayer`, `window.AshenholdRemoteWardens`, `window.AshenholdCoopRuntime`, and the live `window.AshenholdParty` controller. These are protocol/presentation boundaries, not permission to expose test mutations or raw save data. The game snapshot's co-op summary is diagnostic and must not include credentials or private payloads.
 
@@ -534,7 +542,7 @@ Adding a skill requires a unique ID, rank/cost/prerequisite data, implemented ef
 
 Adding an enemy requires readable telegraphs, threat scaling, seeded spawn safety, model fallback, animation mapping, cleanup, minimap identity, XP/mastery rewards, leash behavior when location-bound, and explicit tame eligibility.
 
-Changing terrain or structures requires checking safe start/keep/fort foundations, all route reports, entrance clearance, under-platform traversal, high-speed collision, run restore, zero spawn failures, and multiple seeds for all biomes.
+Changing terrain, water, or structures requires checking safe start/keep/fort foundations, all route reports, entrance clearance, under-platform traversal, high-speed collision, shoreline entry/exit, shallow-water running, deep-water rejection, run restore, zero spawn failures, and every authored biome. Water presentation changes must retain finite geometry, biome palette assignment, adaptive/reduced-motion tiers, no external runtime requests, and the existing traversal/collision authority.
 
 ## Honest limitations
 

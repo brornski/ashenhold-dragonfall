@@ -1,5 +1,6 @@
 const { chromium } = require("playwright");
 const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\/?$/, "/");
+const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components/tree/b182d81bff64531e584f50d71f046ae05fab3c87/src/components/waterFloor";
 
 (async () => {
   const browser = await chromium.launch({ headless: true });
@@ -22,6 +23,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   await page.evaluate(() => window.__ASHENHOLD_TEST__.start());
   await page.waitForTimeout(450);
   const initial = await page.evaluate(() => window.ashenholdGame.snapshot());
+  const waterVisual = initial.world.water;
 
   await page.evaluate(() => {
     window.__ASHENHOLD_TEST__.equipWeapon("blade");
@@ -259,6 +261,13 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
       && titleSnapshot.world.skyProfile.gradientStops >= 5 && titleSnapshot.world.skyProfile.horizonBlend
       && titleSnapshot.world.skyProfile.environmentMap && titleSnapshot.world.continent.zones.length === 6
       && new Set(titleSnapshot.world.continent.zones.map((zone) => zone.skybox)).size === 6,
+    stylizedWaterPinned: Boolean(waterVisual && waterVisual.style === "cortiz-anime-voronoi"
+      && waterVisual.source === STYLIZED_WATER_SOURCE && waterVisual.textureFree && waterVisual.sameOriginRequests === 0),
+    boundedDrownedCoastWater: Boolean(waterVisual && waterVisual.surfaces.length === 1
+      && waterVisual.surfaces[0].id === "drowned-coast-water" && waterVisual.surfaces[0].biomeId === "shore"
+      && Math.abs(waterVisual.surfaces[0].level - .15) < .0001 && waterVisual.surfaces[0].radius === 520),
+    desktopWaterTier: Boolean(waterVisual && waterVisual.tier === "full" && waterVisual.animated
+      && !waterVisual.reducedMotion && waterVisual.rippleCapacity === 6),
     biomeGrass: titleSnapshot.world.grassInstances >= 1200,
     platforms: titleSnapshot.world.platforms >= 10,
     expandedSkillTrees: titleSnapshot.skillBranches >= 12 && titleSnapshot.skillNodes >= 66,
@@ -307,7 +316,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     noPageErrors: pageErrors.length === 0,
     noFailedRequests: failedRequests.length === 0
   };
-  const report = { checks, jump: { start: jumpStart, peak: jumpPeak, height: jumpPeak - jumpStart }, sprintDistance, intenseSprintDistance, titleSnapshot, initial, afterBlade, afterBow, aimOnEnemy, aimClear, beforeRune, afterRune, strongholdResult, captureFlagResult, afterDragon, soulAbsorb, combatTextCount, chestResult, routeWalkability, collisionRecovery, modelCatalog, worldDebug, biomeProps, poiInfo, tamingResult, legendCount, superSprint, lowStaminaSprint, exhaustedSprint, intenseSprint, finalPlaying, victorySetup, ended, consoleErrors, consoleWarnings, pageErrors, failedRequests };
+  const report = { checks, jump: { start: jumpStart, peak: jumpPeak, height: jumpPeak - jumpStart }, sprintDistance, intenseSprintDistance, titleSnapshot, initial, waterVisual, afterBlade, afterBow, aimOnEnemy, aimClear, beforeRune, afterRune, strongholdResult, captureFlagResult, afterDragon, soulAbsorb, combatTextCount, chestResult, routeWalkability, collisionRecovery, modelCatalog, worldDebug, biomeProps, poiInfo, tamingResult, legendCount, superSprint, lowStaminaSprint, exhaustedSprint, intenseSprint, finalPlaying, victorySetup, ended, consoleErrors, consoleWarnings, pageErrors, failedRequests };
   console.log(JSON.stringify(report, null, 2));
   await browser.close();
   if (Object.values(checks).some((value) => !value)) process.exit(1);

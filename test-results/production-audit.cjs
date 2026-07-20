@@ -5,6 +5,7 @@ const fs = require("fs");
 
 const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\/?$/, "/");
 const BIOMES = ["snowy", "jungle", "desert", "shore", "mountains", "moon"];
+const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components/tree/b182d81bff64531e584f50d71f046ae05fab3c87/src/components/waterFloor";
 
 function instrument(page, label, diagnostics) {
   page.on("console", (message) => {
@@ -66,6 +67,7 @@ async function boot(context, diagnostics, suffix) {
       sky: zoneSnapshot.world.skyProfile,
       forest: zoneSnapshot.world.forest,
       infrastructure: zoneSnapshot.world.infrastructure,
+      water: zoneSnapshot.world.water,
       canonicalScale: zoneSnapshot.world.canonicalScale,
       renderedEnemy: enemy ? { name: enemy.name, kind: enemy.kind, animation: enemy.animation } : null,
       routes: zoneSnapshot.world.routeReports,
@@ -91,14 +93,28 @@ async function boot(context, diagnostics, suffix) {
           && zoneSnapshot.world.forest.culledChunks > 0 && zoneSnapshot.world.forest.visible < zoneSnapshot.world.forest.total,
         infrastructureMicroLandmarks: zoneSnapshot.world.infrastructure.total >= 24 && Object.keys(zoneSnapshot.world.infrastructure.byKind).length >= 4,
         biomeSkyTransition: zoneSnapshot.world.skyProfile.features.length >= 3 && zoneSnapshot.world.skyProfile.featureCount > 0
-          && (zoneSnapshot.world.skyProfile.gradientStops >= 5 || (biome === "desert"
-            && zoneSnapshot.world.skyProfile.projection === "equirectangular"
-            && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/ember-dunes-sandsky-2k.png"))
+          && (zoneSnapshot.world.skyProfile.gradientStops >= 5 || (zoneSnapshot.world.skyProfile.projection === "equirectangular"
+            && ((biome === "desert" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/ember-dunes-sandsky-2k.png")
+              || (biome === "moon" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/moonfall-moonsky-2k.png"))))
           && zoneSnapshot.world.skyProfile.horizonBlend && zoneSnapshot.world.skyProfile.environmentMap,
         desertSandskybox: biome !== "desert" || (zoneSnapshot.world.skyProfile.id === "ember-dust"
           && zoneSnapshot.world.skyProfile.signature === "ember-dust:sandskybox-2k-v1"
           && zoneSnapshot.world.skyProfile.projection === "equirectangular"
           && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/ember-dunes-sandsky-2k.png"),
+        moonfallMoonskybox: biome !== "moon" || (zoneSnapshot.world.skyProfile.id === "celestial-void"
+          && zoneSnapshot.world.skyProfile.signature === "celestial-void:moonskybox-2k-v1"
+          && zoneSnapshot.world.skyProfile.projection === "equirectangular"
+          && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/moonfall-moonsky-2k.png"),
+        stylizedWaterPinned: zoneSnapshot.world.water.style === "cortiz-anime-voronoi"
+          && zoneSnapshot.world.water.source === STYLIZED_WATER_SOURCE
+          && zoneSnapshot.world.water.textureFree && zoneSnapshot.world.water.sameOriginRequests === 0,
+        boundedDrownedCoastWater: zoneSnapshot.world.water.surfaces.length === 1
+          && zoneSnapshot.world.water.surfaces[0].id === "drowned-coast-water"
+          && zoneSnapshot.world.water.surfaces[0].biomeId === "shore"
+          && Math.abs(zoneSnapshot.world.water.surfaces[0].level - .15) < .0001
+          && zoneSnapshot.world.water.surfaces[0].radius === 520,
+        desktopWaterTier: zoneSnapshot.world.water.tier === "full" && zoneSnapshot.world.water.animated
+          && !zoneSnapshot.world.water.reducedMotion && zoneSnapshot.world.water.rippleCapacity === 6,
         biomeEnemyRendered: Boolean(enemy && zoneSnapshot.world.biomeEnemyNames.includes(enemy.name)),
         locationGarrisons: zoneSnapshot.strongholds.total >= 12 && zoneSnapshot.strongholds.list.every((stronghold) => stronghold.alive >= 3),
         expandedPois: zoneSnapshot.world.pois.length >= 8,
@@ -347,7 +363,7 @@ async function boot(context, diagnostics, suffix) {
   };
   await strongholdsPage.close();
 
-  const mobileContext = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+  const mobileContext = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true, reducedMotion: "reduce" });
   const mobilePage = await mobileContext.newPage();
   instrument(mobilePage, "mobile-landscape", diagnostics);
   await mobilePage.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
@@ -368,6 +384,9 @@ async function boot(context, diagnostics, suffix) {
     allControlsVisible: Object.values(mobile.controls).every((rect) => rect.display !== "none" && rect.visibility !== "hidden" && rect.left >= -1 && rect.top >= -1 && rect.right <= mobile.width + 1 && rect.bottom <= mobile.height + 1),
     touchDodge: mobile.dodgeStarted && mobile.snapshot.combat.dodging,
     noMinimumHeightOverflow: mobile.height === 390,
+    reducedCoarseWater: mobile.snapshot.world.water.tier === "coarse" && mobile.snapshot.world.water.reducedMotion
+      && !mobile.snapshot.world.water.animated && mobile.snapshot.world.water.rippleCapacity === 0
+      && mobile.snapshot.world.water.activeRipples === 0,
     adaptiveForestDensity: mobile.snapshot.world.forest.total >= 900 && mobile.snapshot.world.forest.total <= 2200
       && mobile.snapshot.world.forest.instancedMeshes === mobile.snapshot.world.forest.chunks * 3
   };

@@ -140,7 +140,7 @@ function inspectWorldOverrides(source) {
 }
 
 async function run() {
-  const [root, app, worldOverrides, monster, warden, normal, desertSkybox, manifest, ...moduleResponses] = await Promise.all([
+  const [root, app, worldOverrides, monster, warden, normal, desertSkybox, moonSkybox, manifest, ...moduleResponses] = await Promise.all([
     request("/"),
     request("/app.js"),
     request("/world-overrides.js"),
@@ -148,6 +148,7 @@ async function run() {
     request("/assets/models/quaternius-rpg-character/warden.gltf"),
     request("/assets/textures/biomes/jungle-normal.jpg"),
     request("/assets/textures/skyboxes/ember-dunes-sandsky-2k.png"),
+    request("/assets/textures/skyboxes/moonfall-moonsky-2k.png"),
     request("/manifest.json"),
     ...multiplayerModules.map(([, path]) => request(path))
   ]);
@@ -192,6 +193,7 @@ async function run() {
     fullWardenModel200: warden.status === 200 && /"animations"\s*:/.test(warden.body),
     pbrNormal200: normal.status === 200 && Number(normal.headers["content-length"] || normal.body.length) > 100000,
     desertSkybox200: desertSkybox.status === 200 && Number(desertSkybox.headers["content-length"] || desertSkybox.body.length) > 900000,
+    moonSkybox200: moonSkybox.status === 200 && Number(moonSkybox.headers["content-length"] || moonSkybox.body.length) > 900000,
     manifest200: manifest.status === 200 && /Ashenhold/.test(manifest.body),
     secureOrigin: baseUrl.protocol === "https:",
     forbiddenFiles404: forbidden.every((result) => result.status === 404),
@@ -222,6 +224,7 @@ async function run() {
       warden: warden.status,
       normal: normal.status,
       desertSkybox: desertSkybox.status,
+      moonSkybox: moonSkybox.status,
       manifest: manifest.status,
       multiplayerModules: Object.fromEntries(Object.entries(moduleResults).map(([name, result]) => [name, result.status])),
       forbidden: Object.fromEntries(forbidden.map((result) => [result.path, result.status])),

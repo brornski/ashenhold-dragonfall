@@ -24,6 +24,10 @@ Captured shrines and the Moonfall graveyard now raise a 20-22 metre animated War
 
 The Drowned Coast shoreline now supports uninterrupted shallow-water traversal. The Warden can run into, through, and back out of water on one consistent collision surface, including after jumping into a submerged area; water positions are valid recovery and active-save locations instead of one-way movement traps.
 
+Every registered water surface now uses a texture-free procedural anime renderer adapted from Christian Ortiz's MIT-licensed [Stylized Components `WaterFloor`](https://github.com/cortiz2894/stylized-components). The current map has one bounded Drowned Coast surface; world-space cel-shaded flow and contact ripples cover it without external runtime downloads, while the shared biome-palette factory is ready for future authored finite bodies. Coarse-device and reduced-motion tiers scale the effect down. The visual replacement leaves water geometry, shallow-water sprinting, wading depth, deep-water rejection, collision, and save restoration unchanged.
+
+Moonfall now uses the project owner's supplied 2K equirectangular galactic panorama, with its violet Milky Way arc and star field isolated to that region. The prior procedural celestial sky remains the automatic load-failure fallback.
+
 Parties now identify only the canonical `ashenhold-continent-v1` world. Invite links carry a room code and auto-join flag but no biome or seed; old links are cleaned in place, old layout-7 saves migrate without regenerating the map, and contradictory world registrations are rejected.
 
 ## Release 5.5: Living world and co-op

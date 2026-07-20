@@ -5,6 +5,14 @@
 - Three.js r128 (`assets/vendor/three.min.js`, `GLTFLoader.js`, `SkeletonUtils.js`) — MIT License, https://github.com/mrdoob/three.js
 - Local MIT notice: `assets/vendor/LICENSE-THREE-MIT.txt`.
 
+## Stylized water shader
+
+- Ashenhold's procedural water renderer adapts the core `WaterFloor` world-space Voronoi/cel shading and expanding ripple-ring design from [Stylized Components](https://github.com/cortiz2894/stylized-components) by Christian Ortiz (Cortiz).
+- Pinned upstream revision: [`b182d81bff64531e584f50d71f046ae05fab3c87`](https://github.com/cortiz2894/stylized-components/tree/b182d81bff64531e584f50d71f046ae05fab3c87/src/components/waterFloor).
+- License: MIT. The complete upstream notice is retained at `assets/vendor/stylized-components/LICENSE.txt`.
+- Ashenhold ports the relevant shader ideas to its dependency-free Three.js r128 runtime, applies its own biome palettes, finite water geometry, quality tiers, and traversal-triggered ripples, and ships no upstream demo assets.
+- The upstream React Three Fiber, React, Leva, GSAP, seabed, sparkle-particle, depth-intersection, and GPU simulation layers are not bundled. The adaptation performs no runtime request to GitHub or another third-party origin and needs no water texture download.
+
 ## Interface fonts
 
 - Cinzel and Inter are bundled as WOFF2 subsets under the SIL Open Font License 1.1.
@@ -58,12 +66,15 @@
 - Exact sources: [Ground Tiles 13](https://freestylized.com/material/ground_tiles_13/), [Ground Tiles 17](https://freestylized.com/material/ground_tiles_17/), [Ground With Rocks 03](https://freestylized.com/material/ground_with_rocks_03/), [Sand 01](https://freestylized.com/material/sand_01/), and [Lava Rocks 01](https://freestylized.com/material/lava_rocks_01/).
 - FreeStylized grants royalty-free commercial and non-commercial project use and restricts standalone redistribution of its source content. Exact archive-to-biome mapping and local terms notice: `assets/textures/freestylized-biomes/LICENSE-FREESTYLIZED.md`.
 
-## User-provided Ember Dunes skybox
+## User-provided biome skyboxes
 
 - Runtime asset: `assets/textures/skyboxes/ember-dunes-sandsky-2k.png`.
 - Source archive: `sandskybox.zip`, supplied by the project owner for inclusion in Ashenhold.
 - The 2048 x 1024 equirectangular panorama is used only by Ember Dunes; the redundant cubemap faces from the archive are not shipped.
-- The supplied archive did not include original author or license metadata. Local provenance and authorization notice: `assets/textures/skyboxes/LICENSE-USER-SUPPLIED.md`.
+- Runtime asset: `assets/textures/skyboxes/moonfall-moonsky-2k.png`.
+- Source archive: `moon skybox.zip`, supplied by the project owner for inclusion in Ashenhold.
+- The unmodified 2048 x 1024 equirectangular panorama replaces only Moonfall's generated sky; its redundant cubemap faces and layout reference are not shipped.
+- Neither supplied archive included original author or license metadata. Local provenance and authorization notice: `assets/textures/skyboxes/LICENSE-USER-SUPPLIED.md`.
 
 ## Generated tundra grass
 
