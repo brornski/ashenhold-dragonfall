@@ -12,7 +12,7 @@
     "multiplayer": "node multiplayer-audit.cjs",
     "motion": "node motion-regression.cjs",
     "world": "node fixed-world-regression.cjs",
-    "admin": "node admin-editor-audit.cjs",
+    "admin": "node admin-publish-integrity.cjs && node admin-editor-audit.cjs",
     "live": "node live-deployment-audit.cjs"
   },
   "devDependencies": {

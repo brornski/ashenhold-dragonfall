@@ -24,6 +24,20 @@ async function waitForBridge() {
   throw new Error("Local admin bridge did not become ready.");
 }
 
+async function stopBridgeProcess(bridge) {
+  if (!bridge || bridge.exitCode != null) return;
+  const waitForExit = (timeout) => new Promise((resolve) => {
+    const onExit = () => { clearTimeout(timer); resolve(true); };
+    const timer = setTimeout(() => { bridge.off("exit", onExit); resolve(false); }, timeout);
+    bridge.once("exit", onExit);
+  });
+  bridge.kill("SIGTERM");
+  if (!await waitForExit(1200) && bridge.exitCode == null) {
+    bridge.kill("SIGKILL");
+    await waitForExit(1200);
+  }
+}
+
 (async () => {
   const bridge = spawn(process.execPath, ["tools/ashenhold-admin-server.mjs", `--port=${PORT}`], {
     cwd: ROOT, windowsHide: true, stdio: ["ignore", "pipe", "pipe"]
@@ -34,6 +48,7 @@ async function waitForBridge() {
   try {
     const session = await waitForBridge();
     check(session.localOnly && session.token, "Bridge must issue a local ephemeral session token.");
+    check(session.publishConfigured === false, "Audit bridge must report that publish capability was not configured.");
     check(!session.publishEnabled, "Audit bridge must not enable publishing without the launch flag.");
     check(path.resolve(session.repositoryRoot) === ROOT && session.repositoryId, "Bridge session must identify the exact worktree it writes.");
 
@@ -149,13 +164,13 @@ async function waitForBridge() {
     check(runtime.report.valid && runtime.undoWorked && runtime.redoWorked, "Validation or editor history failed.");
     check(runtime.publicApi.join(",") === "snapshot,modelCatalog,multiplayerSnapshot", "Normal public game API contract changed.");
 
-    await admin.click('[data-admin-tab="appearance"]');
+    await admin.locator('[data-admin-tab="appearance"]').dispatchEvent("click");
     await admin.waitForSelector("#adminApplyColor");
-    await admin.click('[data-admin-tab="world"]');
+    await admin.locator('[data-admin-tab="world"]').dispatchEvent("click");
     await admin.waitForSelector("#adminApplyBiome");
-    await admin.click('[data-admin-tab="combat"]');
+    await admin.locator('[data-admin-tab="combat"]').dispatchEvent("click");
     await admin.waitForSelector("#adminApplyEnemyProfile");
-    await admin.click('[data-admin-tab="data"]');
+    await admin.locator('[data-admin-tab="data"]').dispatchEvent("click");
     await admin.waitForSelector("#adminSaveRepo");
 
     const targets = runtime.fixtureTargets;
@@ -224,8 +239,7 @@ async function waitForBridge() {
     }, null, 2));
   } finally {
     if (browser) await browser.close().catch(() => {});
-    bridge.kill("SIGTERM");
-    await new Promise((resolve) => { bridge.once("exit", resolve); setTimeout(resolve, 1500); });
+    await stopBridgeProcess(bridge);
     if (bridgeError) process.stderr.write(bridgeError);
   }
 })().catch((error) => {

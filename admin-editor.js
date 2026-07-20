@@ -554,8 +554,11 @@
     const buttonNode = byId("adminPublishLive");
     buttonNode.disabled = true;
     try {
-      await bridgeRequest("/__admin/overrides", { method: "PUT", body: JSON.stringify(api.getDocument()) });
-      const result = await bridgeRequest("/__admin/publish", { method: "POST", body: JSON.stringify({ message: "Update Ashenhold world from local editor" }) });
+      const saved = await bridgeRequest("/__admin/overrides", { method: "PUT", body: JSON.stringify(api.getDocument()) });
+      const result = await bridgeRequest("/__admin/publish", {
+        method: "POST",
+        body: JSON.stringify({ message: "Update Ashenhold world from local editor", digest: saved.digest })
+      });
       toast(`Published ${result.commit.slice(0, 8)} to ${result.branch}`, "success");
       await connectBridge();
     } catch (error) { toast(error.message, "error"); }

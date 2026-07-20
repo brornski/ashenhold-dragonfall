@@ -25,6 +25,9 @@ const sessionToken = crypto.randomBytes(32).toString("base64url");
 const overridePath = path.join(repositoryRoot, "world-overrides.js");
 const repositoryId = crypto.createHash("sha256").update(repositoryRoot.toLowerCase()).digest("hex").slice(0, 20);
 const maxBodyBytes = 512 * 1024;
+let lastSavedOverride = null;
+let saveInProgress = false;
+let publishInProgress = false;
 const git = async (...args) => execFileAsync("git", args, { cwd: repositoryRoot, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
 
 const mimeTypes = new Map([
@@ -197,13 +200,61 @@ async function validateTextureFiles(document) {
   }
 }
 
+const overrideSourcePrefix = `(function () {\n  "use strict";\n\n  // Data-only output from the local Ashenhold world editor.\n  window.AshenholdWorldOverrides = `;
+const overrideSourceSuffix = `;\n})();\n`;
+
 function sourceForDocument(document) {
   const json = JSON.stringify(document, null, 2).replace(/</g, "\\u003c");
-  return `(function () {\n  "use strict";\n\n  // Data-only output from the local Ashenhold world editor.\n  window.AshenholdWorldOverrides = ${json};\n})();\n`;
+  return overrideSourcePrefix + json + overrideSourceSuffix;
+}
+
+function digestForSource(source) {
+  return crypto.createHash("sha256").update(source, "utf8").digest("hex");
+}
+
+function publishIntegrityError(message) {
+  return Object.assign(new Error(message), { status: 409 });
+}
+
+function documentFromOverrideSource(source) {
+  if (typeof source !== "string" || !source.startsWith(overrideSourcePrefix) || !source.endsWith(overrideSourceSuffix)) {
+    throw publishIntegrityError("Publishing refused because world-overrides.js is not canonical Forge output. Save it through Forge again.");
+  }
+  const json = source.slice(overrideSourcePrefix.length, -overrideSourceSuffix.length);
+  let document;
+  try { document = sanitizeDocument(JSON.parse(json)); }
+  catch (_) { throw publishIntegrityError("Publishing refused because world-overrides.js no longer contains a valid Forge document."); }
+  if (sourceForDocument(document) !== source) {
+    throw publishIntegrityError("Publishing refused because world-overrides.js changed after validation. Save it through Forge again.");
+  }
+  return document;
+}
+
+function requireLastSavedDigest(expectedDigest) {
+  if (typeof expectedDigest !== "string" || !/^[a-f0-9]{64}$/.test(expectedDigest)) {
+    throw publishIntegrityError("Publishing requires the digest returned by the latest Forge save.");
+  }
+  if (!lastSavedOverride || lastSavedOverride.digest !== expectedDigest) {
+    throw publishIntegrityError("Publishing refused because this is not the latest override saved by this bridge session.");
+  }
+}
+
+async function readValidatedOverride(expectedDigest, sourceLabel) {
+  let source;
+  try { source = await readFile(overridePath, "utf8"); }
+  catch (_) { throw publishIntegrityError(`Publishing refused because ${sourceLabel || "world-overrides.js"} could not be read.`); }
+  if (digestForSource(source) !== expectedDigest || source !== lastSavedOverride.source) {
+    throw publishIntegrityError("Publishing refused because world-overrides.js changed after the latest Forge save.");
+  }
+  const document = documentFromOverrideSource(source);
+  try { await validateTextureFiles(document); }
+  catch (error) { throw publishIntegrityError(`Publishing refused during asset revalidation: ${error.message}`); }
+  return { source, document };
 }
 
 async function writeOverrides(document) {
   const source = sourceForDocument(document);
+  const digest = digestForSource(source);
   const temporaryPath = path.join(repositoryRoot, `.world-overrides.${process.pid}.${crypto.randomBytes(5).toString("hex")}.tmp`);
   await writeFile(temporaryPath, source, { encoding: "utf8", mode: 0o600, flag: "wx" });
   try {
@@ -221,7 +272,9 @@ async function writeOverrides(document) {
       throw replacementError;
     }
   }
-  return Buffer.byteLength(source);
+  const persisted = await readFile(overridePath, "utf8");
+  if (persisted !== source) throw publishIntegrityError("The override changed while Forge was saving it. Save again before publishing.");
+  return { bytes: Buffer.byteLength(source), digest, source };
 }
 
 async function gitStatus() {
@@ -233,29 +286,48 @@ async function gitStatus() {
   return { branch, changes, dirty: changes.length > 0 };
 }
 
-async function publishOverrides(message) {
-  const status = await gitStatus();
-  if (!allowPublish) throw new Error("Publishing is disabled. Start the bridge with --allow-publish.");
-  if (status.branch !== publishBranch) throw new Error(`Publishing requires branch ${publishBranch}; this worktree is on ${status.branch || "detached HEAD"}.`);
-  const unrelated = status.changes.filter((file) => file !== "world-overrides.js");
-  if (unrelated.length) throw new Error(`Publishing refused because unrelated tracked files are modified: ${unrelated.slice(0, 5).join(", ")}`);
-  const { stdout: remoteUrl } = await git("remote", "get-url", "origin");
-  if (!/^(?:https:\/\/github\.com\/|git@github\.com:)/i.test(remoteUrl.trim())) throw new Error("The origin remote is not a GitHub repository.");
-  await git("fetch", "origin", publishBranch);
-  const [{ stdout: localHead }, { stdout: remoteHead }] = await Promise.all([git("rev-parse", "HEAD"), git("rev-parse", `origin/${publishBranch}`)]);
-  if (localHead.trim() !== remoteHead.trim()) throw new Error(`Publishing requires HEAD to exactly match origin/${publishBranch} before the editor creates its one override commit.`);
-  await git("diff", "--check", "--", "world-overrides.js");
-  await git("add", "--", "world-overrides.js");
-  let committed = true;
-  try { await git("diff", "--cached", "--quiet", "--", "world-overrides.js"); committed = false; }
-  catch (_) { committed = true; }
-  if (committed) {
-    const cleanMessage = typeof message === "string" && /^[a-zA-Z0-9 .:_-]{3,100}$/.test(message) ? message : "Update Ashenhold world from local editor";
-    await git("commit", "-m", cleanMessage, "--", "world-overrides.js");
+async function publishOverrides(message, expectedDigest) {
+  if (!allowPublish) throw Object.assign(new Error("Publishing is disabled. Start the bridge with --allow-publish."), { status: 403 });
+  if (publishInProgress || saveInProgress) throw publishIntegrityError("Another Forge save or publish is already in progress.");
+  requireLastSavedDigest(expectedDigest);
+  publishInProgress = true;
+  try {
+    await readValidatedOverride(expectedDigest, "world-overrides.js");
+    const status = await gitStatus();
+    if (status.branch !== publishBranch) throw Object.assign(new Error(`Publishing requires branch ${publishBranch}; this worktree is on ${status.branch || "detached HEAD"}.`), { status: 409 });
+    const unrelated = status.changes.filter((file) => file !== "world-overrides.js");
+    if (unrelated.length) throw Object.assign(new Error(`Publishing refused because unrelated tracked files are modified: ${unrelated.slice(0, 5).join(", ")}`), { status: 409 });
+    const { stdout: remoteUrl } = await git("remote", "get-url", "origin");
+    if (!/^(?:https:\/\/github\.com\/|git@github\.com:)/i.test(remoteUrl.trim())) throw Object.assign(new Error("The origin remote is not a GitHub repository."), { status: 409 });
+    await git("fetch", "origin", publishBranch);
+    const [{ stdout: localHead }, { stdout: remoteHead }] = await Promise.all([git("rev-parse", "HEAD"), git("rev-parse", `origin/${publishBranch}`)]);
+    if (localHead.trim() !== remoteHead.trim()) throw Object.assign(new Error(`Publishing requires HEAD to exactly match origin/${publishBranch} before the editor creates its one override commit.`), { status: 409 });
+    await readValidatedOverride(expectedDigest, "world-overrides.js");
+    await git("diff", "--check", "--", "world-overrides.js");
+    await git("add", "--", "world-overrides.js");
+    const { stdout: stagedSource } = await git("show", ":world-overrides.js");
+    if (digestForSource(stagedSource) !== expectedDigest || stagedSource !== lastSavedOverride.source) {
+      throw publishIntegrityError("Publishing refused because the staged override does not match the latest validated Forge save.");
+    }
+    documentFromOverrideSource(stagedSource);
+    await readValidatedOverride(expectedDigest, "world-overrides.js");
+    let committed = true;
+    try { await git("diff", "--cached", "--quiet", "--", "world-overrides.js"); committed = false; }
+    catch (_) { committed = true; }
+    if (committed) {
+      const cleanMessage = typeof message === "string" && /^[a-zA-Z0-9 .:_-]{3,100}$/.test(message) ? message : "Update Ashenhold world from local editor";
+      await git("commit", "-m", cleanMessage);
+    }
+    const { stdout: committedSource } = await git("show", "HEAD:world-overrides.js");
+    if (digestForSource(committedSource) !== expectedDigest || committedSource !== lastSavedOverride.source) {
+      throw publishIntegrityError("Publishing refused because the committed override does not match the latest validated Forge save.");
+    }
+    await git("push", "origin", `HEAD:${publishBranch}`);
+    const { stdout: commitOutput } = await git("rev-parse", "HEAD");
+    return { branch: publishBranch, commit: commitOutput.trim(), committed, digest: expectedDigest };
+  } finally {
+    publishInProgress = false;
   }
-  await git("push", "origin", `HEAD:${publishBranch}`);
-  const { stdout: commitOutput } = await git("rev-parse", "HEAD");
-  return { branch: publishBranch, commit: commitOutput.trim(), committed };
 }
 
 async function handleApi(request, response, pathname) {
@@ -264,7 +336,7 @@ async function handleApi(request, response, pathname) {
     const status = await gitStatus().catch(() => ({ branch: "", changes: [], dirty: false }));
     return sendJson(response, 200, {
       localOnly: true, token: sessionToken, branch: status.branch, dirty: status.dirty,
-      publishEnabled: allowPublish && status.branch === publishBranch,
+      publishConfigured: allowPublish, publishEnabled: allowPublish && status.branch === publishBranch,
       publishBranch, worldSignature: "ashenhold-authored-continent-8", repositoryId, repositoryRoot
     });
   }
@@ -277,12 +349,19 @@ async function handleApi(request, response, pathname) {
   if (pathname === "/__admin/overrides" && request.method === "PUT") {
     const document = sanitizeDocument(JSON.parse(await readRequestBody(request)));
     await validateTextureFiles(document);
-    const bytes = await writeOverrides(document);
-    return sendJson(response, 200, { saved: true, bytes, file: "world-overrides.js", validation: { valid: true } });
+    if (publishInProgress || saveInProgress) throw publishIntegrityError("Another Forge save or publish is already in progress.");
+    saveInProgress = true;
+    try {
+      const saved = await writeOverrides(document);
+      lastSavedOverride = { digest: saved.digest, source: saved.source };
+      return sendJson(response, 200, { saved: true, bytes: saved.bytes, digest: saved.digest, file: "world-overrides.js", validation: { valid: true } });
+    } finally {
+      saveInProgress = false;
+    }
   }
   if (pathname === "/__admin/publish" && request.method === "POST") {
     const payload = record(JSON.parse(await readRequestBody(request) || "{}")) || {};
-    const result = await publishOverrides(payload.message);
+    const result = await publishOverrides(payload.message, payload.digest);
     return sendJson(response, 200, Object.assign({ published: true }, result));
   }
   return sendJson(response, 404, { error: "Unknown admin endpoint." });
