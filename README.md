@@ -127,6 +127,7 @@ npm run audit
 npm run a11y
 npm run payload
 npm run motion
+npm run live
 ```
 
 Release 5.5 is gated by deterministic gameplay, garrison-AI, and traversal-motion regressions; a multi-biome/seed production audit; desktop/mobile WCAG scans; a cold-start payload budget under 18 MB; Node room-service tests; a two-client remote socket smoke; and a live GitHub Pages audit. The complete contracts and extension notes are in [GAME-DEVELOPER-GUIDE.md](GAME-DEVELOPER-GUIDE.md).

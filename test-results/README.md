@@ -27,7 +27,7 @@ Then run from `test-results/`:
 - `npm run audit` - multi-biome/seed sky, ancient forests, infrastructure, progression, combat, save, scale, living AI, motion, co-op packaging, and 844x390 audit
 - `npm run a11y` - axe-core scan of title/party, gameplay, skills, and 844x390 states
 - `npm run payload` - boot timing, transfer budget, renderer, diagnostics, same-origin asset gate, and exact opt-in WebSocket exception
-- `npm run live` - post-deployment HTTP/artifact audit against GitHub Pages
+- `npm run live` - post-deployment GitHub Pages audit for the 5.5 app marker, co-op modules and load order, production WSS declaration, runtime assets, and exclusion of server/development source
 
 `ASHENHOLD_BASE` overrides the target. Reports and screenshots are written beside the runners and ignored by Git. Any false top-level check blocks release.
 
