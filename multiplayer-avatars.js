@@ -279,6 +279,7 @@
         lastZ: Number(player.z) || 0,
         sampledSpeed: 0,
         verticalSpeed: 0,
+        rawVerticalSpeed: 0,
         wasAirborne: Boolean(player.airborne),
         lastAttacking: Boolean(player.attacking),
         attackVariant: 0,
@@ -498,8 +499,9 @@
       if (player.dodging || player.rolling || Number(player.dodgeTime) > 0) return "dodge";
       if (player.sliding) return "slide";
       if (player.airborne) {
-        if (!warden.wasAirborne || warden.verticalSpeed > .35) return "jump";
-        if (warden.verticalSpeed < -.35) return "fall";
+        if (!warden.wasAirborne) return "jump";
+        if (warden.rawVerticalSpeed < -.2 || warden.verticalSpeed < -.35) return "fall";
+        if (warden.rawVerticalSpeed > .2 || warden.verticalSpeed > .35) return "jump";
         return warden.animationState === "fall" ? "fall" : "jump";
       }
       if (warden.wasAirborne) warden.landingTime = .2;
@@ -602,6 +604,7 @@
       const instantSpeed = sampleDistance / frameDt;
       warden.sampledSpeed += (instantSpeed - warden.sampledSpeed) * (1 - Math.pow(.03, frameDt));
       const instantVertical = (targetY - warden.lastY) / frameDt;
+      warden.rawVerticalSpeed = instantVertical;
       warden.verticalSpeed += (instantVertical - warden.verticalSpeed) * (1 - Math.pow(.03, frameDt));
       const distance = Math.hypot(targetX - warden.root.position.x, targetZ - warden.root.position.z);
       const catchup = 1 - Math.pow(distance > 8 ? .00001 : .0015, frameDt);
