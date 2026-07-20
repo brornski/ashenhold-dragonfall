@@ -292,6 +292,33 @@ async function sendPlayerFrame(page, frame) {
   await delay(70);
 }
 
+async function movePlayerThroughGame(page, x, z) {
+  const method = await page.evaluate(({ nextX, nextZ }) => {
+    const teleport = window.__ASHENHOLD_TEST__?.teleport;
+    if (typeof teleport !== "function") return "unavailable";
+    teleport(nextX, nextZ);
+    return "game-teleport";
+  }, { nextX: x, nextZ: z });
+  if (method === "unavailable") {
+    await sendPlayerFrame(page, playerFrame(x, 0, z));
+    return "direct-frame-fallback";
+  }
+  await page.waitForFunction(({ nextX, nextZ }) => {
+    const client = window.AshenholdParty?.client;
+    const local = client?.snapshot?.players?.find((player) => player.id === client.playerId);
+    return local && Math.abs(local.x - nextX) < .35 && Math.abs(local.z - nextZ) < .35;
+  }, { nextX: x, nextZ: z }, { timeout: 6000 });
+  return method;
+}
+
+async function sendPlayerFrameAndOpenChest(page, frame, chestId) {
+  const sent = await page.evaluate(({ state, id }) => {
+    const client = window.AshenholdParty?.client;
+    return Boolean(client?.sendPlayerState(state, true) && client.openChest(id));
+  }, { state: frame, id: chestId });
+  if (!sent) throw new Error("The multiplayer client rejected the ordered chest range probe.");
+}
+
 async function waitForEnemy(page, expected) {
   await page.waitForFunction(({ enemyId, health, dead }) => {
     const enemy = window.AshenholdParty.client.snapshot?.enemies?.find((item) => item.id === enemyId);
@@ -420,15 +447,16 @@ async function closePageClient(page) {
     const preloadedByApp = [host, guest].every((entry) => Object.values(entry.modules.preloaded).every(Boolean));
     if (preloadedByApp) await Promise.all([ensurePlaying(host.page), ensurePlaying(guest.page)]);
 
-    await sendPlayerFrame(host.page, playerFrame(1.25, 0, 209, { moving: true, sprinting: true, rotation: 0.42 }));
+    const movementMethods = [];
+    movementMethods.push(await movePlayerThroughGame(host.page, 1.25, 209));
     await guest.page.waitForFunction((id) => {
       const player = window.AshenholdParty.client.snapshot?.players?.find((item) => item.id === id);
-      return player && Math.abs(player.x - 1.25) < .01 && player.moving && player.sprinting;
+      return player && Math.abs(player.x - 1.25) < .35 && Math.abs(player.z - 209) < .35;
     }, joinedHost.playerId, { timeout: 6000 });
-    await sendPlayerFrame(guest.page, playerFrame(-1.5, 0, 209.5, { moving: true, rotation: -0.35 }));
+    movementMethods.push(await movePlayerThroughGame(guest.page, -1.5, 209.5));
     await host.page.waitForFunction((id) => {
       const player = window.AshenholdParty.client.snapshot?.players?.find((item) => item.id === id);
-      return player && Math.abs(player.x + 1.5) < .01 && player.moving;
+      return player && Math.abs(player.x + 1.5) < .35 && Math.abs(player.z - 209.5) < .35;
     }, joinedGuest.playerId, { timeout: 6000 });
     const movedHost = await clientState(host.page);
     const movedGuest = await clientState(guest.page);
@@ -444,12 +472,11 @@ async function closePageClient(page) {
       guest.page.waitForFunction(() => window.AshenholdParty.client.snapshot?.strongholds?.some((item) => item.id === "audit-shrine" && item.cleared && item.flagRaised), null, { timeout: 6000 })
     ]);
 
-    await sendPlayerFrame(guest.page, playerFrame(0, -3.5, 210));
     let guestState = await clientState(guest.page);
     const belowErrorIndex = guestState.audit.serverErrors.length;
-    await guest.page.evaluate(() => window.AshenholdParty.client.openChest("audit-chest"));
+    await sendPlayerFrameAndOpenChest(guest.page, playerFrame(0, -3.5, 210), "audit-chest");
     await waitForServerError(guest.page, "CHEST_RANGE", belowErrorIndex);
-    await sendPlayerFrame(guest.page, playerFrame(0, 0, 210));
+    movementMethods.push(await movePlayerThroughGame(guest.page, 0, 210));
     const guestClaimEventIndex = (await clientState(guest.page)).audit.events.length;
     await guest.page.evaluate(() => window.AshenholdParty.client.openChest("audit-chest"));
     await guest.page.waitForFunction((index) => window.__ASHENHOLD_MULTIPLAYER_AUDIT__.events.slice(index).some((event) => event.type === "chest_opened" && event.chestId === "audit-chest"), guestClaimEventIndex, { timeout: 6000 });
@@ -457,7 +484,7 @@ async function closePageClient(page) {
     const duplicateErrorIndex = guestState.audit.serverErrors.length;
     await guest.page.evaluate(() => window.AshenholdParty.client.openChest("audit-chest"));
     await waitForServerError(guest.page, "CHEST_CLAIMED", duplicateErrorIndex);
-    await sendPlayerFrame(host.page, playerFrame(1.25, 0, 209));
+    movementMethods.push(await movePlayerThroughGame(host.page, 1.25, 209));
     const hostClaimEventIndex = (await clientState(host.page)).audit.events.length;
     await host.page.evaluate(() => window.AshenholdParty.client.openChest("audit-chest"));
     await host.page.waitForFunction((index) => window.__ASHENHOLD_MULTIPLAYER_AUDIT__.events.slice(index).some((event) => event.type === "chest_opened" && event.chestId === "audit-chest"), hostClaimEventIndex, { timeout: 6000 });
@@ -496,6 +523,7 @@ async function closePageClient(page) {
     const criticalDiagnosticCount = Object.values(diagnostics).reduce((total, entry) => total + entry.consoleErrors.length + entry.criticalWarnings.length + entry.pageErrors.length + entry.requestFailures.length + entry.badResponses.length, 0);
 
     report.movement = {
+      methods: movementMethods,
       hostSeenByGuest: movedGuest.snapshot.players.find((player) => player.id === joinedHost.playerId),
       guestSeenByHost: movedHost.snapshot.players.find((player) => player.id === joinedGuest.playerId)
     };
@@ -520,7 +548,8 @@ async function closePageClient(page) {
       deterministicRealmShared: [joinedHost, joinedGuest].every((state) => state.realm?.biome === BIOME && Number(state.realm?.seed) === SEED),
       twoPlayerRosterShared: [joinedHost, joinedGuest].every((state) => state.snapshot?.players?.filter((player) => player.connected).length === 2) && joinedHost.roster.length === 2 && joinedGuest.roster.length === 2,
       gameplayRequiresRealmStart: preStartRejected,
-      movementPropagatesBothWays: Math.abs(report.movement.hostSeenByGuest?.x - 1.25) < .01 && Math.abs(report.movement.guestSeenByHost?.x + 1.5) < .01,
+      movementPropagatesBothWays: report.movement.methods.every((method) => method === "game-teleport")
+        && Math.abs(report.movement.hostSeenByGuest?.x - 1.25) < .35 && Math.abs(report.movement.guestSeenByHost?.x + 1.5) < .35,
       twoRemoteTracksShared: finalStates.every((state) => state.sampledRemotePlayers.length === 1),
       twoRemoteAvatarsConstructed: fallbackAvatars.every((entry) => entry.count === 1 && entry.sceneChildren === 1),
       sharedEnemyDamage: report.combat.damagedHealth.every((health) => health === 30),
