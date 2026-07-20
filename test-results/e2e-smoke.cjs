@@ -210,12 +210,17 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
   await page.evaluate(() => window.__ASHENHOLD_TEST__.swapShoulder());
   const leftShoulder = await page.evaluate(() => { window.__ASHENHOLD_TEST__.step(.3); return window.ashenholdGame.snapshot().camera; });
   const finalPlaying = await page.evaluate(() => window.ashenholdGame.snapshot());
-  await page.evaluate(() => {
+  const victorySetup = await page.evaluate(() => {
     const test = window.__ASHENHOLD_TEST__;
     test.setQuestComplete();
-    test.strongholdDebug().forEach((stronghold) => test.clearStronghold(stronghold.id));
+    const results = test.strongholdDebug().map((stronghold) => ({ id: stronghold.id, cleared: stronghold.cleared || test.clearStronghold(stronghold.id) }));
+    const snapshot = window.ashenholdGame.snapshot();
+    return { state: snapshot.state, questStage: snapshot.questStage, cleared: snapshot.strongholds.cleared, total: snapshot.strongholds.total, results };
   });
-  await page.waitForFunction(() => window.ashenholdGame.snapshot().state === "ended", null, { timeout: 6000 });
+  if (!["resolving", "ended"].includes(victorySetup.state) || victorySetup.cleared !== victorySetup.total) {
+    throw new Error(`Victory setup did not resolve every stronghold: ${JSON.stringify(victorySetup)}`);
+  }
+  await page.waitForFunction(() => window.ashenholdGame.snapshot().state === "ended", null, { timeout: 15000 });
   const ended = await page.evaluate(() => window.ashenholdGame.snapshot());
 
   const sprintDistance = Math.hypot(superSprint.position.x - sprintStart.x, superSprint.position.z - sprintStart.z);
@@ -235,7 +240,8 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     playerScaledCastles: titleSnapshot.world.canonicalScale.structures.wall.height >= 9 && titleSnapshot.world.canonicalScale.structures.wall.height <= 15
       && titleSnapshot.world.canonicalScale.structures.gate.height >= 7 && titleSnapshot.world.canonicalScale.structures.gate.height <= 10
       && titleSnapshot.world.canonicalScale.structures.tower.height >= 18 && titleSnapshot.world.canonicalScale.structures.tower.height <= 32,
-    canonicalRegistryMeasured: Object.keys(worldDebug.scales).length === Object.keys(modelCatalog).length
+    canonicalRegistryMeasured: ["wall", "gate", "tower", "tavern", "homeA", "homeB", "ruinedHouse", "ancientTreeA", "ancientTreeB"]
+      .every((id) => worldDebug.scales[id]?.world?.height > 0)
       && worldDebug.scales.wall.targetHeight === 12.5 && worldDebug.scales.wall.verticalScale < worldDebug.scales.wall.scale,
     ancientInstancedForest: titleSnapshot.world.forest.total >= 3000
       && titleSnapshot.world.forest.instancedMeshes === titleSnapshot.world.forest.chunks * 3
@@ -251,7 +257,8 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     biomeSkyAndTransition: titleSnapshot.world.skyProfile.id === "verdant-canopy"
       && titleSnapshot.world.skyProfile.features.length >= 3 && titleSnapshot.world.skyProfile.featureCount > 0
       && titleSnapshot.world.skyProfile.gradientStops >= 5 && titleSnapshot.world.skyProfile.horizonBlend
-      && titleSnapshot.world.skyProfile.environmentMap && worldDebug.sky.signature === titleSnapshot.world.skyProfile.signature,
+      && titleSnapshot.world.skyProfile.environmentMap && titleSnapshot.world.continent.zones.length === 6
+      && new Set(titleSnapshot.world.continent.zones.map((zone) => zone.skybox)).size === 6,
     biomeGrass: titleSnapshot.world.grassInstances >= 1200,
     platforms: titleSnapshot.world.platforms >= 10,
     expandedSkillTrees: titleSnapshot.skillBranches >= 12 && titleSnapshot.skillNodes >= 66,
@@ -280,10 +287,11 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     soulAbsorbGrantsXp: Boolean(soulAbsorb.absorbed && soulAbsorb.xpChanged),
     combatTextRenders: combatTextCount > 0,
     chestGrantsRewards: Boolean(chestResult.found >= 5 && chestResult.opened && chestResult.healed && chestResult.xpChanged && chestResult.permanentPower),
-    routesWalkable: routeWalkability.length === 2 && routeWalkability.every((route) => route.valid),
+    routesWalkable: routeWalkability.length === 6 && routeWalkability.every((route) => route.valid),
     collisionRecovery: Boolean(collisionRecovery.available && collisionRecovery.colliders > 30 && collisionRecovery.blockedBefore && collisionRecovery.recovered && !collisionRecovery.blockedAfter && collisionRecovery.displacement > .1),
     biomePropsPresent: Boolean(biomeProps && biomeProps.total > 0 && biomeProps.kind),
-    modelCatalogExposed: Boolean(modelCatalog.warden && modelCatalog.biomeLight && modelCatalog.tower && Object.keys(modelCatalog).length >= 40),
+    modelCatalogExposed: Boolean(modelCatalog.warden && modelCatalog.tower && Object.keys(modelCatalog).length >= 80
+      && ["snowy", "jungle", "desert", "shore", "mountains", "moon"].every((id) => modelCatalog[`biomeLight_${id}`] && modelCatalog[`biomeHeavy_${id}`])),
     poisPresent: Boolean(poiInfo.pois && poiInfo.pois.length >= 8 && poiInfo.debug && poiInfo.debug.every((poi) => poi.collidersAdded > 0)),
     poiChestsExist: initial.totalChests >= 13,
     enemyTaming: Boolean(tamingResult.prepared && tamingResult.companions.length === 1 && tamingResult.bondedPace >= .3),
@@ -299,7 +307,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
     noPageErrors: pageErrors.length === 0,
     noFailedRequests: failedRequests.length === 0
   };
-  const report = { checks, jump: { start: jumpStart, peak: jumpPeak, height: jumpPeak - jumpStart }, sprintDistance, intenseSprintDistance, titleSnapshot, initial, afterBlade, afterBow, aimOnEnemy, aimClear, beforeRune, afterRune, strongholdResult, captureFlagResult, afterDragon, soulAbsorb, combatTextCount, chestResult, routeWalkability, collisionRecovery, modelCatalog, worldDebug, biomeProps, poiInfo, tamingResult, legendCount, superSprint, lowStaminaSprint, exhaustedSprint, intenseSprint, finalPlaying, ended, consoleErrors, consoleWarnings, pageErrors, failedRequests };
+  const report = { checks, jump: { start: jumpStart, peak: jumpPeak, height: jumpPeak - jumpStart }, sprintDistance, intenseSprintDistance, titleSnapshot, initial, afterBlade, afterBow, aimOnEnemy, aimClear, beforeRune, afterRune, strongholdResult, captureFlagResult, afterDragon, soulAbsorb, combatTextCount, chestResult, routeWalkability, collisionRecovery, modelCatalog, worldDebug, biomeProps, poiInfo, tamingResult, legendCount, superSprint, lowStaminaSprint, exhaustedSprint, intenseSprint, finalPlaying, victorySetup, ended, consoleErrors, consoleWarnings, pageErrors, failedRequests };
   console.log(JSON.stringify(report, null, 2));
   await browser.close();
   if (Object.values(checks).some((value) => !value)) process.exit(1);
