@@ -119,6 +119,12 @@
     Object.freeze({ id: "moon", name: BIOMES.moon.name, center: Object.freeze({ x: 590, z: -410 }), bounds: Object.freeze({ minX: 300, maxX: 900, minZ: -900, maxZ: -40 }), skybox: SKY_PROFILES.moon.id })
   ]);
   const CONTINENT_ZONE_BY_ID = new Map(CONTINENT_ZONES.map((zone) => [zone.id, zone]));
+  const TREELESS_BIOME_IDS = new Set(["desert"]);
+  const TREE_MODEL_IDS = new Set([
+    "tree", "treePalm", "treePalmBend", "treePineA", "treePineB",
+    "pineCrooked", "ancientTreeA", "ancientTreeB"
+  ]);
+  const TREE_PROP_KINDS = new Set(["snowPine", "broadleaf", "palm", "windPine"]);
 
   function biomeIdAt(x, z) {
     let nearest = CONTINENT_ZONES[0];
@@ -130,6 +136,10 @@
       if (score < nearestScore) { nearest = zone; nearestScore = score; }
     });
     return nearest.id;
+  }
+
+  function biomeAllowsTreesAt(x, z) {
+    return !TREELESS_BIOME_IDS.has(biomeIdAt(x, z));
   }
 
   function waterLevelAt(x, z) {
@@ -292,6 +302,11 @@
     instancedMeshes: 0, heroColliders: 0, maxTrunkDiameter: 0,
     assetHeroes: 0, proceduralHeroes: 0, heroVariants: []
   };
+  let treePopulationReport = {
+    total: 0,
+    byBiome: Object.fromEntries(BIOME_IDS.map((id) => [id, 0])),
+    bySource: {}
+  };
   let infrastructureReport = { total: 0, byKind: {}, colliders: 0, importedModels: 0 };
   let captureFlags = [];
   let groundEnemies = [];
@@ -332,6 +347,14 @@
 
   const encounterRng = { state: (AUTHORED_WORLD_VARIATION ^ 0x6d2b79f5) >>> 0 };
   const slideTestSurfaceCache = {};
+
+  function recordTreePopulation(biomeId, count, source) {
+    const amount = Math.max(0, Math.floor(Number(count) || 0));
+    if (!amount) return;
+    treePopulationReport.total += amount;
+    treePopulationReport.byBiome[biomeId] = (treePopulationReport.byBiome[biomeId] || 0) + amount;
+    treePopulationReport.bySource[source] = (treePopulationReport.bySource[source] || 0) + amount;
+  }
 
   function networkIdPart(value) {
     return String(value == null ? "" : value).replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+/g, "_").slice(0, 52) || "actor";
@@ -2925,6 +2948,7 @@
   }
 
   function createDeadTree(x, z, scale, rotation) {
+    if (!biomeAllowsTreesAt(x, z)) return null;
     const group = new THREE.Group();
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.23 * scale, .48 * scale, 5.8 * scale, 6), woodMaterial);
     trunk.position.y = 2.9 * scale;
@@ -2942,6 +2966,8 @@
     group.position.set(x, terrainHeight(x, z), z);
     group.rotation.y = rotation;
     scene.add(group);
+    recordTreePopulation(biomeIdAt(x, z), 1, "procedural-model");
+    return group;
   }
 
   const FOREST_PROFILES = Object.freeze({
@@ -2949,12 +2975,13 @@
     snowy: { id: "ancient-conifer", desktop: 3000, coarse: 1800, minHeight: 16, maxHeight: 34, heroMin: 43, heroMax: 68, heroChance: .013, trunk: 1.05, crown: "conifer", leaf: 0x526a68, bark: 0x332c29 },
     shore: { id: "storm-coast-grove", desktop: 2500, coarse: 1500, minHeight: 15, maxHeight: 31, heroMin: 40, heroMax: 62, heroChance: .012, trunk: .92, crown: "broad", leaf: 0x3b6650, bark: 0x3c2c21 },
     mountains: { id: "wind-carved-pine", desktop: 2200, coarse: 1400, minHeight: 13, maxHeight: 29, heroMin: 38, heroMax: 58, heroChance: .011, trunk: .9, crown: "conifer", leaf: 0x40574c, bark: 0x332b29 },
-    desert: { id: "petrified-forest", desktop: 2000, coarse: 900, minHeight: 10, maxHeight: 24, heroMin: 32, heroMax: 52, heroChance: .01, trunk: 1.1, crown: "dead", leaf: 0x73543e, bark: 0x503727 },
+    desert: { id: "treeless-dunes", desktop: 0, coarse: 0, minHeight: 0, maxHeight: 0, heroMin: 0, heroMax: 0, heroChance: 0, trunk: 0, crown: "none", leaf: 0x73543e, bark: 0x503727 },
     moon: { id: "umbra-deadwood", desktop: 2200, coarse: 1200, minHeight: 11, maxHeight: 27, heroMin: 35, heroMax: 57, heroChance: .012, trunk: 1.06, crown: "crystal", leaf: 0x686a94, bark: 0x282638 }
   });
 
   function forestPlacementClear(x, z, padding) {
     const clearance = padding || 0;
+    if (!biomeAllowsTreesAt(x, z)) return false;
     if (z > -205 && z < 255 && Math.abs(x - roadCenterAt(z)) < 18 + clearance) return false;
     if (Math.hypot(x - START.x, z - START.z) < 48 + clearance) return false;
     if (Math.hypot(x - TITLE_VANTAGE.x, z - TITLE_VANTAGE.z) < 34 + clearance) return false;
@@ -3031,6 +3058,7 @@
         assetId: null
       });
     }
+    placements.forEach((tree) => recordTreePopulation(tree.biomeId, 1, "ancient-forest"));
     const heroAssetIds = profile.crown === "broad"
       ? ["ancientTreeA", "ancientTreeB"].filter((id) => visualAssets.models && visualAssets.models[id] && modelScaleRegistry[id])
       : [];
@@ -3280,6 +3308,7 @@
   }
 
   function importedModel(id, x, z, scale, rotation, yOffset, collider, baseY) {
+    if (TREE_MODEL_IDS.has(id) && !biomeAllowsTreesAt(x, z)) return null;
     const asset = visualAssets.models && visualAssets.models[id];
     if (!asset) return null;
     const root = asset.scene.clone(true);
@@ -3316,6 +3345,7 @@
     });
     scene.add(root);
     importedModelInstances += 1;
+    if (TREE_MODEL_IDS.has(id)) recordTreePopulation(biomeIdAt(x, z), 1, "imported-model");
     if (collider) addCollider(
       x, z, collider.hx, collider.hz, rotation || 0,
       groundY + (collider.minY || 0), groundY + (collider.maxY || collider.height || 12)
@@ -3334,6 +3364,7 @@
   }
 
   function placePackModel(key, x, z, scale, rotation, opts) {
+    if (TREE_MODEL_IDS.has(key) && !biomeAllowsTreesAt(x, z)) return null;
     const asset = visualAssets.models && visualAssets.models[key];
     if (!asset) return null;
     const options = opts || {};
@@ -3353,6 +3384,7 @@
     });
     scene.add(root);
     importedModelInstances += 1;
+    if (TREE_MODEL_IDS.has(key)) recordTreePopulation(biomeIdAt(x, z), 1, "pack-model");
     return { root, baseY };
   }
 
@@ -3488,7 +3520,7 @@
       const x = (seeded(7600 + i * 9) - .5) * 930;
       const z = (seeded(7601 + i * 9) - .5) * 930;
       if (Math.abs(x) < 28 && z > -185 && z < 235) continue;
-      const id = realm.biome === "jungle" ? "tree" : "rock";
+      const id = biomeIdAt(x, z) === "jungle" ? "tree" : "rock";
       importedModel(id, x, z, id === "tree" ? canonicalModelScale("tree", .8 + seeded(7602 + i * 9) * .7) : 3.2 + seeded(7602 + i * 9) * 3.4, seeded(7603 + i * 9) * Math.PI * 2, 0, null);
     }
   }
@@ -5018,6 +5050,7 @@
       const x = lerp(zone.bounds.minX + 28, zone.bounds.maxX - 28, seeded(salt + attempt * 3 + 1));
       const z = lerp(zone.bounds.minZ + 28, zone.bounds.maxZ - 28, seeded(salt + attempt * 3 + 2));
       if (biomeIdAt(x, z) !== biomeId) { attempt += 1; continue; }
+      if (TREE_PROP_KINDS.has(definition.kind) && !biomeAllowsTreesAt(x, z)) { attempt += 1; continue; }
       const y = biomePropGround(x, z);
       attempt += 1;
       if (y === null) continue;
@@ -5044,6 +5077,7 @@
     mesh.receiveShadow = true;
     mesh.frustumCulled = false;
     scene.add(mesh);
+    if (TREE_PROP_KINDS.has(definition.kind)) recordTreePopulation(biomeId, placed, "biome-props");
     return placed;
   }
 
@@ -5510,7 +5544,11 @@
   }
 
   function setEnemyAction(enemy, nextState, force) {
-    if (!enemy || !enemy.mixer || !enemy.actions || !enemy.actions[nextState]) return;
+    if (!enemy) return;
+    if (!enemy.mixer || !enemy.actions || !enemy.actions[nextState]) {
+      enemy.animationState = nextState;
+      return;
+    }
     if (!force && enemy.animationState === nextState) return;
     const previous = enemy.actions[enemy.animationState];
     const next = enemy.actions[nextState];
@@ -9610,6 +9648,12 @@
           }, {})
         },
         forest: Object.assign({}, forestReport, { profile: FOREST_PROFILES[currentBiomeId].id }),
+        treePopulation: {
+          total: treePopulationReport.total,
+          byBiome: Object.assign({}, treePopulationReport.byBiome),
+          bySource: Object.assign({}, treePopulationReport.bySource),
+          treelessBiomes: Array.from(TREELESS_BIOME_IDS)
+        },
         infrastructure: { total: infrastructureReport.total, byKind: Object.assign({}, infrastructureReport.byKind), colliders: infrastructureReport.colliders, importedModels: infrastructureReport.importedModels },
         skyProfile: {
           id: skyReport.id, signature: skyReport.signature, features: skyReport.features.slice(),
@@ -9953,6 +9997,12 @@
         id: WORLD_ID, worldId: WORLD_ID, signature: WORLD_LAYOUT_SIGNATURE, layoutSignature: WORLD_LAYOUT_SIGNATURE,
         layoutVersion: WORLD_LAYOUT_VERSION, generated: false,
         zones: CONTINENT_ZONES.map((zone) => ({ id: zone.id, biome: zone.id, name: zone.name, center: Object.assign({}, zone.center), bounds: Object.assign({}, zone.bounds), skybox: zone.skybox }))
+      }),
+      treePopulationDebug: () => ({
+        total: treePopulationReport.total,
+        byBiome: Object.assign({}, treePopulationReport.byBiome),
+        bySource: Object.assign({}, treePopulationReport.bySource),
+        treelessBiomes: Array.from(TREELESS_BIOME_IDS)
       }),
       biomeZoneDebug: () => CONTINENT_ZONES.map((zone) => ({ id: zone.id, biome: zone.id, name: zone.name, center: Object.assign({}, zone.center), bounds: Object.assign({}, zone.bounds), skybox: zone.skybox })),
       biomeAt: (x, z) => biomeIdAt(Number(x) || 0, Number(z) || 0),

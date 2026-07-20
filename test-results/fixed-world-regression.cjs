@@ -196,6 +196,7 @@ async function boot(context, query, label) {
     report.regionalAssets = regionalAssets;
     report.momentum = momentum;
     report.migration = restored.migration;
+    report.treePopulation = primary.snapshot.world?.treePopulation || null;
     report.diagnostics = allDiagnostics;
     report.checks = {
       canonicalWorldIdentity: primaryWorldId === WORLD_ID && legacyWorldId === WORLD_ID,
@@ -205,6 +206,11 @@ async function boot(context, query, label) {
       zonesHaveAuthoredCoordinates: zoneCentersValid && new Set(primaryZones.map((zone) => `${zone.center.x},${zone.center.z}`)).size === BIOMES.length,
       biomeDerivedFromPosition: traversedZones.length === BIOMES.length && traversedZones.every((entry) => normalizeBiome(entry.hookBiome) === entry.expected
         && normalizeBiome(entry.activeBiome) === entry.expected && entry.documentToken === documentToken),
+      emberDunesHaveZeroTrees: Boolean(primary.snapshot.world?.treePopulation?.total > 0
+        && primary.snapshot.world.treePopulation.byBiome?.desert === 0
+        && primary.snapshot.world.forest?.byBiome?.desert === 0
+        && primary.snapshot.world.treePopulation.treelessBiomes?.includes("desert")
+        && primary.snapshot.world.props?.byKind?.cactus > 0),
       noPublicSeedOrNextRealm: !("realm" in primary.snapshot) && !containsForbiddenPublicKey(primary.snapshot),
       noUserFacingSeedControls: primary.seedControls.length === 0 && legacy.seedControls.length === 0
         && !/(^|\n)\s*seed(?:\s|:|$)/im.test(primary.bodyText) && !/(^|\n)\s*seed(?:\s|:|$)/im.test(legacy.bodyText),
