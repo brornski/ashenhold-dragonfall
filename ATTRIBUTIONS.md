@@ -50,6 +50,14 @@
 - Asset IDs: Snow015, Ground037, Ground093C, Gravel041, Ground068, and Rocks011.
 - Local notice: `assets/textures/biomes/LICENSE-AMBIENTCG-CC0.txt`.
 
+## User-provided biome materials (Release 5.5)
+
+- FreeStylized material library, https://freestylized.com/
+- Runtime directory: `assets/textures/freestylized-biomes/`.
+- Five user-supplied 1K PBR materials were curated for jungle, shore, mountains, desert, and moon, then transcoded to compact WebP color, OpenGL-normal, and roughness maps. The snow realm retains the existing ambientCG material.
+- Exact sources: [Ground Tiles 13](https://freestylized.com/material/ground_tiles_13/), [Ground Tiles 17](https://freestylized.com/material/ground_tiles_17/), [Ground With Rocks 03](https://freestylized.com/material/ground_with_rocks_03/), [Sand 01](https://freestylized.com/material/sand_01/), and [Lava Rocks 01](https://freestylized.com/material/lava_rocks_01/).
+- FreeStylized grants royalty-free commercial and non-commercial project use and restricts standalone redistribution of its source content. Exact archive-to-biome mapping and local terms notice: `assets/textures/freestylized-biomes/LICENSE-FREESTYLIZED.md`.
+
 ## Generated tundra grass
 
 - Runtime asset: `assets/textures/tundra-grass-v1.jpg`.
@@ -76,6 +84,13 @@
 - Kenney Nature Kit — CC0 1.0, https://www.kenney.nl/assets/nature-kit
   Curated statues, campfire, tent, palms, pines, and cacti in `assets/models/kenney-nature/` (self-contained GLBs with embedded textures).
   License copy: `assets/models/kenney-nature/License.txt`.
+
+## Ancient hero-tree models (Release 5.5)
+
+- FreeStylized Starter Nature Pack — Foliage Kit 01, https://freestylized.com/asset_pack/foliage_kit_01/
+- Runtime derivatives: `assets/models/freestylized-foliage/F1_Tree1.glb` and `F1_Tree3.glb`.
+- The source FBX meshes were converted to GLB, welded, and quantized for the browser build. Source textures were omitted so Ashenhold can apply its existing biome palette without adding the pack's 19 MB normal map to startup transfer.
+- FreeStylized grants royalty-free commercial and non-commercial project use and restricts standalone redistribution of its source content. Local source, adaptation, and terms notice: `assets/models/freestylized-foliage/LICENSE-FREESTYLIZED.md`.
 
 ## Project-created visual assets
 
