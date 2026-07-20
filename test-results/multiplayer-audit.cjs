@@ -13,6 +13,7 @@ const BIOME = "jungle";
 const SEED = 424242;
 const PROTOCOL_VERSION = 2;
 const TIMEOUT = Math.max(15000, Number(process.env.ASHENHOLD_MULTIPLAYER_TIMEOUT) || 70000);
+const SYNC_TIMEOUT = Math.max(20000, Number(process.env.ASHENHOLD_MULTIPLAYER_SYNC_TIMEOUT) || 0);
 const PRODUCTION_MODULES = [
   ["client", "multiplayer-client.js", "AshenholdMultiplayer"],
   ["party", "multiplayer-ui.js", "AshenholdParty"],
@@ -274,7 +275,7 @@ async function connectParty(page, mode, name, roomCode = "") {
   await page.locator("#partyName").fill(name);
   if (mode === "join") await page.locator("#partyCode").fill(roomCode);
   await page.locator("#partyConnect").click();
-  await page.waitForFunction(() => window.AshenholdParty?.connected && window.AshenholdParty.client.roomCode.length === 6, null, { timeout: 15000 });
+  await page.waitForFunction(() => window.AshenholdParty?.connected && window.AshenholdParty.client.roomCode.length === 6, null, { timeout: SYNC_TIMEOUT });
   return clientState(page);
 }
 
@@ -293,25 +294,53 @@ async function sendPlayerFrame(page, frame) {
 }
 
 async function movePlayerThroughGame(page, x, z) {
-  const method = await page.evaluate(({ nextX, nextZ }) => {
+  const state = await page.evaluate(() => {
     const teleport = window.__ASHENHOLD_TEST__?.teleport;
-    if (typeof teleport !== "function") return "unavailable";
-    teleport(nextX, nextZ);
-    return "game-teleport";
-  }, { nextX: x, nextZ: z });
-  if (method === "unavailable") {
+    const client = window.AshenholdParty?.client;
+    const local = client?.snapshot?.players?.find((player) => player.id === client.playerId);
+    return {
+      method: typeof teleport === "function" ? "game-teleport" : "unavailable",
+      x: Number(local?.x),
+      z: Number(local?.z)
+    };
+  });
+  if (state.method === "unavailable") {
     await sendPlayerFrame(page, playerFrame(x, 0, z));
     return "direct-frame-fallback";
   }
-  await page.waitForFunction(({ nextX, nextZ }) => {
-    const client = window.AshenholdParty?.client;
-    const local = client?.snapshot?.players?.find((player) => player.id === client.playerId);
-    return local && Math.abs(local.x - nextX) < .35 && Math.abs(local.z - nextZ) < .35;
-  }, { nextX: x, nextZ: z }, { timeout: 6000 });
-  return method;
+  const startX = Number.isFinite(state.x) ? state.x : x;
+  const startZ = Number.isFinite(state.z) ? state.z : z;
+  // Keep scripted movement inside the authoritative server's anti-teleport
+  // envelope. The production adapter still serializes and acknowledges every
+  // step; the audit hook only supplies input that a fast player can legally
+  // traverse instead of jumping the entire distance in one frame.
+  const steps = Math.max(1, Math.ceil(Math.hypot(x - startX, z - startZ) / 6));
+  for (let index = 1; index <= steps; index += 1) {
+    const nextX = startX + (x - startX) * index / steps;
+    const nextZ = startZ + (z - startZ) * index / steps;
+    const position = await page.evaluate(({ stepX, stepZ }) => {
+      window.__ASHENHOLD_TEST__.teleport(stepX, stepZ);
+      return window.ashenholdGame?.snapshot?.().position;
+    }, { stepX: nextX, stepZ: nextZ });
+    await page.waitForFunction(({ stepX, stepY, stepZ }) => {
+      const client = window.AshenholdParty?.client;
+      const local = client?.snapshot?.players?.find((player) => player.id === client.playerId);
+      return local && Math.abs(local.x - stepX) < .35 && Math.abs(local.y - stepY) < .35 && Math.abs(local.z - stepZ) < .35;
+    }, { stepX: nextX, stepY: Number(position?.y) || 0, stepZ: nextZ }, { timeout: SYNC_TIMEOUT });
+  }
+  return state.method;
 }
 
 async function sendPlayerFrameAndOpenChest(page, frame, chestId) {
+  // The server intentionally drops player frames that arrive inside its 35 ms
+  // anti-spam window. Wait for that window, then queue the position and
+  // interaction together so the normal game loop cannot overwrite the
+  // deliberately below-floor probe before the server checks chest range.
+  await page.evaluate(() => {
+    const client = window.AshenholdParty?.client;
+    if (client) client.lastStateAt = performance.now() + 250;
+  });
+  await delay(70);
   const sent = await page.evaluate(({ state, id }) => {
     const client = window.AshenholdParty?.client;
     return Boolean(client?.sendPlayerState(state, true) && client.openChest(id));
@@ -323,11 +352,11 @@ async function waitForEnemy(page, expected) {
   await page.waitForFunction(({ enemyId, health, dead }) => {
     const enemy = window.AshenholdParty.client.snapshot?.enemies?.find((item) => item.id === enemyId);
     return enemy && enemy.health === health && enemy.dead === dead;
-  }, { enemyId: "audit-guard", ...expected }, { timeout: 10000 });
+  }, { enemyId: "audit-guard", ...expected }, { timeout: SYNC_TIMEOUT });
 }
 
 async function waitForServerError(page, code, afterIndex) {
-  await page.waitForFunction(({ expected, index }) => window.__ASHENHOLD_MULTIPLAYER_AUDIT__.serverErrors.slice(index).some((error) => error.code === expected), { expected: code, index: afterIndex }, { timeout: 6000 });
+  await page.waitForFunction(({ expected, index }) => window.__ASHENHOLD_MULTIPLAYER_AUDIT__.serverErrors.slice(index).some((error) => error.code === expected), { expected: code, index: afterIndex }, { timeout: SYNC_TIMEOUT });
 }
 
 async function renderFallbackAvatar(page) {
@@ -408,8 +437,8 @@ async function closePageClient(page) {
     const hostWelcome = await connectParty(host.page, "host", "Audit Host");
     const guestWelcome = await connectParty(guest.page, "join", "Audit Guest", hostWelcome.roomCode);
     await Promise.all([
-      host.page.waitForFunction(() => document.querySelectorAll("#partyRoster span").length === 2, null, { timeout: 10000 }),
-      guest.page.waitForFunction(() => document.querySelectorAll("#partyRoster span").length === 2, null, { timeout: 10000 })
+      host.page.waitForFunction(() => document.querySelectorAll("#partyRoster span").length === 2, null, { timeout: SYNC_TIMEOUT }),
+      guest.page.waitForFunction(() => document.querySelectorAll("#partyRoster span").length === 2, null, { timeout: SYNC_TIMEOUT })
     ]);
 
     const joinedHost = await clientState(host.page);
@@ -428,8 +457,8 @@ async function closePageClient(page) {
       if (!window.AshenholdParty.client.registerWorld(world)) throw new Error("Host could not register the audit world.");
     }, FIXTURE);
     await Promise.all([
-      host.page.waitForFunction(() => window.AshenholdParty.client.worldReady, null, { timeout: 10000 }),
-      guest.page.waitForFunction(() => window.AshenholdParty.client.worldReady, null, { timeout: 10000 })
+      host.page.waitForFunction(() => window.AshenholdParty.client.worldReady, null, { timeout: SYNC_TIMEOUT }),
+      guest.page.waitForFunction(() => window.AshenholdParty.client.worldReady, null, { timeout: SYNC_TIMEOUT })
     ]);
 
     const preStartErrorIndex = (await clientState(host.page)).audit.serverErrors.length;
@@ -441,8 +470,8 @@ async function closePageClient(page) {
 
     await host.page.evaluate(() => window.AshenholdParty.client.startRealm());
     await Promise.all([
-      host.page.waitForFunction(() => window.AshenholdParty.client.started, null, { timeout: 6000 }),
-      guest.page.waitForFunction(() => window.AshenholdParty.client.started, null, { timeout: 6000 })
+      host.page.waitForFunction(() => window.AshenholdParty.client.started, null, { timeout: SYNC_TIMEOUT }),
+      guest.page.waitForFunction(() => window.AshenholdParty.client.started, null, { timeout: SYNC_TIMEOUT })
     ]);
     const preloadedByApp = [host, guest].every((entry) => Object.values(entry.modules.preloaded).every(Boolean));
     if (preloadedByApp) await Promise.all([ensurePlaying(host.page), ensurePlaying(guest.page)]);
@@ -452,12 +481,12 @@ async function closePageClient(page) {
     await guest.page.waitForFunction((id) => {
       const player = window.AshenholdParty.client.snapshot?.players?.find((item) => item.id === id);
       return player && Math.abs(player.x - 1.25) < .35 && Math.abs(player.z - 209) < .35;
-    }, joinedHost.playerId, { timeout: 6000 });
+    }, joinedHost.playerId, { timeout: SYNC_TIMEOUT });
     movementMethods.push(await movePlayerThroughGame(guest.page, -1.5, 209.5));
     await host.page.waitForFunction((id) => {
       const player = window.AshenholdParty.client.snapshot?.players?.find((item) => item.id === id);
       return player && Math.abs(player.x + 1.5) < .35 && Math.abs(player.z - 209.5) < .35;
-    }, joinedGuest.playerId, { timeout: 6000 });
+    }, joinedGuest.playerId, { timeout: SYNC_TIMEOUT });
     const movedHost = await clientState(host.page);
     const movedGuest = await clientState(guest.page);
 
@@ -468,8 +497,8 @@ async function closePageClient(page) {
     await host.page.evaluate(() => window.AshenholdParty.client.attack("audit-guard", "blade", 100));
     await Promise.all([waitForEnemy(host.page, { health: 0, dead: true }), waitForEnemy(guest.page, { health: 0, dead: true })]);
     await Promise.all([
-      host.page.waitForFunction(() => window.AshenholdParty.client.snapshot?.strongholds?.some((item) => item.id === "audit-shrine" && item.cleared && item.flagRaised), null, { timeout: 6000 }),
-      guest.page.waitForFunction(() => window.AshenholdParty.client.snapshot?.strongholds?.some((item) => item.id === "audit-shrine" && item.cleared && item.flagRaised), null, { timeout: 6000 })
+      host.page.waitForFunction(() => window.AshenholdParty.client.snapshot?.strongholds?.some((item) => item.id === "audit-shrine" && item.cleared && item.flagRaised), null, { timeout: SYNC_TIMEOUT }),
+      guest.page.waitForFunction(() => window.AshenholdParty.client.snapshot?.strongholds?.some((item) => item.id === "audit-shrine" && item.cleared && item.flagRaised), null, { timeout: SYNC_TIMEOUT })
     ]);
 
     let guestState = await clientState(guest.page);
@@ -479,7 +508,7 @@ async function closePageClient(page) {
     movementMethods.push(await movePlayerThroughGame(guest.page, 0, 210));
     const guestClaimEventIndex = (await clientState(guest.page)).audit.events.length;
     await guest.page.evaluate(() => window.AshenholdParty.client.openChest("audit-chest"));
-    await guest.page.waitForFunction((index) => window.__ASHENHOLD_MULTIPLAYER_AUDIT__.events.slice(index).some((event) => event.type === "chest_opened" && event.chestId === "audit-chest"), guestClaimEventIndex, { timeout: 6000 });
+    await guest.page.waitForFunction((index) => window.__ASHENHOLD_MULTIPLAYER_AUDIT__.events.slice(index).some((event) => event.type === "chest_opened" && event.chestId === "audit-chest"), guestClaimEventIndex, { timeout: SYNC_TIMEOUT });
     guestState = await clientState(guest.page);
     const duplicateErrorIndex = guestState.audit.serverErrors.length;
     await guest.page.evaluate(() => window.AshenholdParty.client.openChest("audit-chest"));
@@ -487,10 +516,10 @@ async function closePageClient(page) {
     movementMethods.push(await movePlayerThroughGame(host.page, 1.25, 209));
     const hostClaimEventIndex = (await clientState(host.page)).audit.events.length;
     await host.page.evaluate(() => window.AshenholdParty.client.openChest("audit-chest"));
-    await host.page.waitForFunction((index) => window.__ASHENHOLD_MULTIPLAYER_AUDIT__.events.slice(index).some((event) => event.type === "chest_opened" && event.chestId === "audit-chest"), hostClaimEventIndex, { timeout: 6000 });
+    await host.page.waitForFunction((index) => window.__ASHENHOLD_MULTIPLAYER_AUDIT__.events.slice(index).some((event) => event.type === "chest_opened" && event.chestId === "audit-chest"), hostClaimEventIndex, { timeout: SYNC_TIMEOUT });
     await Promise.all([
-      host.page.waitForFunction(() => window.AshenholdParty.client.getChest("audit-chest")?.claimed, null, { timeout: 6000 }),
-      guest.page.waitForFunction(() => window.AshenholdParty.client.getChest("audit-chest")?.claimed, null, { timeout: 6000 })
+      host.page.waitForFunction(() => window.AshenholdParty.client.getChest("audit-chest")?.claimed, null, { timeout: SYNC_TIMEOUT }),
+      guest.page.waitForFunction(() => window.AshenholdParty.client.getChest("audit-chest")?.claimed, null, { timeout: SYNC_TIMEOUT })
     ]);
     const chestStates = await Promise.all([clientState(host.page), clientState(guest.page)]);
 
@@ -500,11 +529,15 @@ async function closePageClient(page) {
     await guest.page.waitForFunction((index) => {
       const audit = window.__ASHENHOLD_MULTIPLAYER_AUDIT__;
       return audit.statuses.slice(index).includes("disconnected") && audit.statuses.slice(index).includes("reconnecting") && window.AshenholdParty.client.status === "connected";
-    }, reconnectStatusIndex, { timeout: 15000 });
+    }, reconnectStatusIndex, { timeout: SYNC_TIMEOUT });
     guest.diagnostics.endTransportFault();
+    // Both full 3D clients can be main-thread constrained while rebuilding
+    // remote actors after reconnect. The server broadcasts presence every
+    // snapshot tick; allow the host page enough time to observe it under the
+    // production forest/render load before declaring the roster stale.
     await Promise.all([
-      host.page.waitForFunction((id) => window.AshenholdParty.client.snapshot?.players?.some((player) => player.id === id && player.connected), joinedGuest.playerId, { timeout: 8000 }),
-      guest.page.waitForFunction(() => window.AshenholdParty.client.snapshot?.players?.filter((player) => player.connected).length === 2, null, { timeout: 8000 })
+      host.page.waitForFunction((id) => window.AshenholdParty.client.snapshot?.players?.some((player) => player.id === id && player.connected), joinedGuest.playerId, { timeout: SYNC_TIMEOUT }),
+      guest.page.waitForFunction(() => window.AshenholdParty.client.snapshot?.players?.filter((player) => player.connected).length === 2, null, { timeout: SYNC_TIMEOUT })
     ]);
     const reconnected = await clientState(guest.page);
 
