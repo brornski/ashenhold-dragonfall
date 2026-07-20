@@ -209,8 +209,9 @@
       if (color != null) clean.color = "#" + color.toString(16).padStart(6, "0");
       const texture = overrideTexturePath(entry.texture);
       if (texture) clean.texture = texture;
-      if (typeof entry.visible === "boolean") clean.visible = entry.visible;
-      if (typeof entry.deleted === "boolean") clean.deleted = entry.deleted;
+      const lifecycleEditable = clean.type === "model" || clean.type === "custom-model";
+      if (lifecycleEditable && typeof entry.visible === "boolean") clean.visible = entry.visible;
+      if (lifecycleEditable && typeof entry.deleted === "boolean") clean.deleted = entry.deleted;
       if (typeof entry.collision === "boolean") clean.collision = entry.collision;
       const enemy = overrideRecord(entry.enemy);
       if (enemy) clean.enemy = {
@@ -1661,13 +1662,25 @@
     return true;
   }
 
-  function setAdminEntityVisibility(record, visible, persist) {
+  const ADMIN_LIFECYCLE_ENTITY_TYPES = new Set(["model", "custom-model"]);
+
+  function adminEntityLifecycleCapabilities(record) {
+    const editable = Boolean(record && !record.protected && ADMIN_LIFECYCLE_ENTITY_TYPES.has(record.type));
+    return { canHide: editable, canRemove: editable };
+  }
+
+  function applyAdminEntityVisibility(record, visible) {
     if (!record || !record.root) return false;
     record.root.visible = Boolean(visible);
     const stored = editorDocument.entities[record.id];
     const collisionEnabled = record.root.visible && (!stored || stored.collision !== false);
     (record.colliderLinks || []).forEach((link) => { link.target.disabled = !collisionEnabled; });
     (record.platformLinks || []).forEach((link) => { link.target.disabled = !collisionEnabled; });
+    return true;
+  }
+
+  function setAdminEntityVisibility(record, visible, persist) {
+    if (!adminEntityLifecycleCapabilities(record).canHide || !applyAdminEntityVisibility(record, visible)) return false;
     if (persist !== false) {
       const entry = editorDocument.entities[record.id] || { type: record.type };
       entry.visible = record.root.visible;
@@ -1755,7 +1768,11 @@
     if (entry.color) applyAdminColor(record, entry.color, false);
     if (entry.texture) applyAdminTexture(record, entry.texture, false).catch((error) => console.warn("Admin texture could not be loaded:", entry.texture, error));
     if (entry.enemy) applyAdminEnemyValues(record, entry.enemy, false);
-    setAdminEntityVisibility(record, !entry.deleted && entry.visible !== false, false);
+    if (adminEntityLifecycleCapabilities(record).canHide) setAdminEntityVisibility(record, !entry.deleted && entry.visible !== false, false);
+    else {
+      delete entry.visible;
+      delete entry.deleted;
+    }
     if (entry.collision !== undefined) setAdminEntityCollision(record.id, entry.collision, false);
   }
 
@@ -1930,6 +1947,7 @@
     if (!record || !record.root) return null;
     const transform = adminEntityTransform(record);
     const material = adminMaterialDetails(record.root);
+    const lifecycle = adminEntityLifecycleCapabilities(record);
     let size = { x: 0, y: 0, z: 0 };
     if (record.root.visible) {
       const measured = new THREE.Vector3();
@@ -1939,7 +1957,8 @@
     const output = {
       id: record.id, label: record.label, type: record.type, category: record.category,
       sourceId: record.sourceId, modelSlot: record.modelSlot, transform,
-      visible: record.root.visible, protected: record.protected, size,
+      visible: record.root.visible, protected: record.protected,
+      canHide: lifecycle.canHide, canRemove: lifecycle.canRemove, size,
       collision: record.colliderLinks.concat(record.platformLinks).length > 0 && record.colliderLinks.concat(record.platformLinks).some((link) => !link.target.disabled),
       meshCount: material.meshCount, color: record.color || material.color,
       texture: record.texture || material.textures[0] || "", textures: material.textures,
@@ -2344,12 +2363,12 @@
 
   function deleteAdminEntity(id) {
     const record = adminEntities.get(id);
-    if (!record || record.protected) return false;
+    if (!adminEntityLifecycleCapabilities(record).canRemove) return false;
     const entry = editorDocument.entities[id] || { type: record.type };
     entry.deleted = true;
     entry.visible = false;
     editorDocument.entities[id] = entry;
-    setAdminEntityVisibility(record, false, false);
+    applyAdminEntityVisibility(record, false);
     if (record.type === "custom-model") {
       if (record.root.parent) record.root.parent.remove(record.root);
       unregisterAdminEntity(id);
@@ -2541,7 +2560,7 @@
       if (record.originalModelSlot) applyAdminModelSlot(record, record.originalModelSlot, false);
       restoreAdminAppearance(record);
       applyAdminTransform(record, record.defaultTransform, false);
-      setAdminEntityVisibility(record, record.defaultVisible, false);
+      if (adminEntityLifecycleCapabilities(record).canHide) setAdminEntityVisibility(record, record.defaultVisible, false);
     });
     dragons.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
     groundEnemies.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
@@ -2638,7 +2657,9 @@
       }),
       listEntities: () => Array.from(adminEntities.values()).map((record) => ({
         id: record.id, label: record.label, type: record.type, category: record.category,
-        modelSlot: record.modelSlot, visible: Boolean(record.root && record.root.visible), protected: record.protected
+        modelSlot: record.modelSlot, visible: Boolean(record.root && record.root.visible), protected: record.protected,
+        canHide: adminEntityLifecycleCapabilities(record).canHide,
+        canRemove: adminEntityLifecycleCapabilities(record).canRemove
       })).sort((a, b) => a.category.localeCompare(b.category) || a.label.localeCompare(b.label)),
       getEntity: (id) => adminEntitySummary(adminEntities.get(id)),
       select: selectAdminEntity,

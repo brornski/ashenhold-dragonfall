@@ -143,7 +143,10 @@ function sanitizeDocument(input) {
     const texture = safeTexturePath(entry.texture);
     if (entry.texture !== undefined && !texture) throw new Error(`Invalid texture path for ${id}. Use an existing PNG, JPEG, or WebP under assets/.`);
     if (texture) clean.texture = texture;
-    for (const flag of ["visible", "deleted", "collision"]) if (typeof entry[flag] === "boolean") clean[flag] = entry[flag];
+    if (clean.type === "model" || clean.type === "custom-model") {
+      for (const flag of ["visible", "deleted"]) if (typeof entry[flag] === "boolean") clean[flag] = entry[flag];
+    }
+    if (typeof entry.collision === "boolean") clean.collision = entry.collision;
     if (record(entry.enemy)) {
       clean.enemy = {};
       const limits = { health: [0, 100000], maxHealth: [1, 100000], damage: [0, 10000], speed: [0, 250], attackRange: [.1, 250], attackInterval: [.05, 60], sightRange: [.1, 500], tracking: [.05, 10] };

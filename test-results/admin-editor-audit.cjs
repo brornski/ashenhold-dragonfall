@@ -103,20 +103,23 @@ async function stopBridgeProcess(bridge) {
     const admin = await context.newPage();
     admin.on("pageerror", (error) => diagnostics.push("page: " + error.message));
     admin.on("console", (message) => { if (message.type() === "error") diagnostics.push("console: " + message.text()); });
-    await admin.goto(BASE + "?admin", { waitUntil: "domcontentloaded", timeout: 120000 });
+    await admin.goto(BASE + "?admin&test", { waitUntil: "domcontentloaded", timeout: 120000 });
     await admin.waitForSelector("#ashenholdAdmin .admin-panel", { timeout: 120000 });
     await admin.waitForFunction(() => window.__ASHENHOLD_ADMIN__?.info().ready, null, { timeout: 120000 });
 
     const runtime = await admin.evaluate(() => {
       const api = window.__ASHENHOLD_ADMIN__;
+      const testApi = window.__ASHENHOLD_TEST__;
       const before = api.info();
       const entities = api.listEntities();
       const modelSlots = api.modelCatalog();
+      const forceCandidate = testApi.enemyDebug().find((entry) => !entry.camp) || testApi.enemyDebug()[0];
       const baseModel = entities.find((entry) => entry.type === "model" && ["siegeTower", "bridgePillar"].includes(entry.modelSlot) && entry.id.split(":").length >= 7)
         || entities.find((entry) => entry.type === "model" && entry.modelSlot && entry.id.startsWith("model:") && entry.id.split(":").length >= 7)
         || entities.find((entry) => entry.type === "model" && entry.modelSlot && entry.id.startsWith("model:"));
       const baseChest = entities.find((entry) => entry.type === "chest");
-      const baseEnemy = entities.find((entry) => entry.type === "enemy" && !/^ASHENHOLD KEEP\b/.test(entry.label))
+      const baseEnemy = entities.find((entry) => entry.type === "enemy" && forceCandidate && entry.label === forceCandidate.name)
+        || entities.find((entry) => entry.type === "enemy" && !/^ASHENHOLD KEEP\b/.test(entry.label))
         || entities.find((entry) => entry.type === "enemy");
       const keep = entities.find((entry) => entry.id === "location:keep");
       const custom = api.addModel(modelSlots.some((entry) => entry.id === "crateBig") ? "crateBig" : modelSlots[0].id);
@@ -128,6 +131,45 @@ async function stopBridgeProcess(bridge) {
       api.setCollision(custom.id, false);
       const hiddenCollision = api.getEntity(custom.id).collision;
       api.setCollision(custom.id, true);
+      const customHideAccepted = Boolean(api.setVisible(custom.id, false));
+      const customHidden = api.getEntity(custom.id);
+      const customShowAccepted = Boolean(api.setVisible(custom.id, true));
+      const removable = api.duplicate(custom.id);
+      const customRemoveAccepted = Boolean(removable && api.remove(removable.id));
+      const customRemoved = Boolean(removable && !api.getEntity(removable.id));
+
+      const gameplayBefore = {
+        chest: baseChest && api.getEntity(baseChest.id),
+        enemy: baseEnemy && api.getEntity(baseEnemy.id),
+        keep: keep && api.getEntity(keep.id)
+      };
+      const lifecycleCalls = {
+        chestHide: baseChest && api.setVisible(baseChest.id, false),
+        chestRemove: baseChest && api.remove(baseChest.id),
+        enemyHide: baseEnemy && api.setVisible(baseEnemy.id, false),
+        enemyRemove: baseEnemy && api.remove(baseEnemy.id),
+        keepHide: keep && api.setVisible(keep.id, false),
+        keepRemove: keep && api.remove(keep.id)
+      };
+      const gameplayAfter = {
+        chest: baseChest && api.getEntity(baseChest.id),
+        enemy: baseEnemy && api.getEntity(baseEnemy.id),
+        keep: keep && api.getEntity(keep.id)
+      };
+      const keepSourceId = gameplayAfter.keep && gameplayAfter.keep.sourceId;
+      const lifecycleDocument = api.getDocument();
+      const unsafeLifecyclePersisted = [baseChest && baseChest.id, baseEnemy && baseEnemy.id, keep && keep.id].filter(Boolean).some((id) => {
+        const entry = lifecycleDocument.entities[id];
+        return Boolean(entry && (Object.prototype.hasOwnProperty.call(entry, "visible") || Object.prototype.hasOwnProperty.call(entry, "deleted")));
+      });
+      const chestSourceId = baseChest && baseChest.id.replace(/^chest:/, "");
+      const chestPositioned = chestSourceId && testApi.positionAtChest(chestSourceId);
+      const chestOpened = chestSourceId && testApi.openChest(chestSourceId);
+      const enemyStillRegistered = baseEnemy && testApi.enemyDebug().some((entry) => entry.name === baseEnemy.label);
+      const enemyAttackTelegraph = testApi.forceEnemyAttack();
+      const forcedEnemyAfter = testApi.enemyDebug().find((entry) => !entry.camp) || testApi.enemyDebug()[0];
+      const enemyAIActive = Boolean(forcedEnemyAfter && forcedEnemyAfter.health > 0 && forcedEnemyAfter.aiState === "combat");
+      const keepStrongholdPresent = keepSourceId && testApi.strongholdDebug().some((entry) => entry.id === keepSourceId);
       const desert = api.setBiome("desert", { treeDensity: 2, propDensity: 1.1, fogDensity: .0022 });
       api.setEnemyProfile("warg", { health: 1.15, damage: 1.25, sightRange: 1.2, tracking: 1.3 });
       const documentValue = api.getDocument();
@@ -135,11 +177,17 @@ async function stopBridgeProcess(bridge) {
       const report = api.validate();
       const undoWorked = api.undo();
       const redoWorked = api.redo();
+      api.select(custom.id);
       return {
         before, after: api.info(), entities: entities.length,
         categories: Array.from(new Set(entities.map((entry) => entry.category))),
         modelSlots: modelSlots.length, custom, moved, hiddenCollision,
         collisionRestored: api.getEntity(custom.id).collision,
+        safeLifecycle: { customHideAccepted, customHidden, customShowAccepted, customRemoveAccepted, customRemoved },
+        gameplayLifecycle: {
+          before: gameplayBefore, calls: lifecycleCalls, after: gameplayAfter, unsafeLifecyclePersisted,
+          chestSourceId, chestPositioned, chestOpened, enemyStillRegistered, enemyAttackTelegraph, enemyAIActive, keepSourceId, keepStrongholdPresent
+        },
         desert, warg: documentValue.enemies.byKind.warg,
         documentEntry: documentValue.entities[custom.id], source, report, undoWorked, redoWorked,
         fixtureTargets: {
@@ -158,6 +206,20 @@ async function stopBridgeProcess(bridge) {
     for (const category of ["Locations", "Models", "Enemies", "Chests"]) check(runtime.categories.includes(category), `Missing scene category: ${category}`);
     check(runtime.custom && runtime.moved && runtime.documentEntry.type === "custom-model", "Custom model placement and transform persistence failed.");
     check(runtime.hiddenCollision === false && runtime.collisionRestored, "Collider toggle did not follow the edited object.");
+    check(runtime.safeLifecycle.customHideAccepted && runtime.safeLifecycle.customHidden.visible === false && runtime.safeLifecycle.customHidden.collision === false && runtime.safeLifecycle.customShowAccepted, "Decorative/custom Hide and Show must remain functional and collision-coherent.");
+    check(runtime.safeLifecycle.customRemoveAccepted && runtime.safeLifecycle.customRemoved, "Custom model Remove must delete its scene registration.");
+    check(runtime.fixtureTargets.model && runtime.fixtureTargets.chest && runtime.fixtureTargets.enemy && runtime.fixtureTargets.keep, "Gameplay lifecycle fixture targets were not registered.");
+    const gameplayLifecycle = runtime.gameplayLifecycle;
+    for (const type of ["chest", "enemy", "keep"]) {
+      check(gameplayLifecycle.before[type].canHide === false && gameplayLifecycle.before[type].canRemove === false, `Gameplay lifecycle capabilities were not locked for ${type}.`);
+      check(gameplayLifecycle.after[type].visible === true, `Rejected lifecycle edit still hid ${type}.`);
+    }
+    check(Object.values(gameplayLifecycle.calls).every((value) => value === false), "Gameplay-owned Hide/Remove calls must be rejected by the runtime API.");
+    check(!gameplayLifecycle.unsafeLifecyclePersisted, "Rejected gameplay lifecycle edits leaked into the exported document.");
+    check(gameplayLifecycle.chestPositioned === gameplayLifecycle.chestSourceId && gameplayLifecycle.chestOpened, "A protected chest must remain visible and interactable after rejected Hide/Remove calls.");
+    check(gameplayLifecycle.enemyStillRegistered, "A protected enemy disappeared from the gameplay roster after rejected Hide/Remove calls.");
+    check(gameplayLifecycle.enemyAIActive, "A protected enemy lost its live AI combat state after rejected Hide/Remove calls.");
+    check(gameplayLifecycle.keepStrongholdPresent, "A protected location must retain its stronghold gameplay state after rejected Hide/Remove calls.");
     check(runtime.desert.treeDensity === 0, "Ember Dunes must remain tree-free through the editor.");
     check(runtime.warg.damage === 1.25 && runtime.warg.tracking === 1.3, "Enemy archetype tuning was not persisted.");
     check(runtime.source.includes("window.AshenholdWorldOverrides") && !runtime.source.includes("__ASHENHOLD_ADMIN__"), "Source export must be data-only.");
@@ -184,12 +246,14 @@ async function stopBridgeProcess(bridge) {
           position: { x: targets.model.transform.position.x + 3, y: targets.model.transform.position.y + 1, z: targets.model.transform.position.z - 2 },
           rotationY: targets.model.transform.rotationY + .2, scale: targets.model.transform.scale, collision: false, visible: true
         },
-        [targets.chest.id]: { type: "chest", visible: false, collision: false },
+        [targets.chest.id]: { type: "chest", visible: false, deleted: true, collision: false },
         [targets.enemy.id]: {
-          type: "enemy", enemy: { health: 77, maxHealth: 123, damage: 19, speed: 4.5, attackRange: 8, attackInterval: 1.4, sightRange: 88, tracking: 1.7 }
+          type: "enemy", visible: false, deleted: true,
+          enemy: { health: 77, maxHealth: 123, damage: 19, speed: 4.5, attackRange: 8, attackInterval: 1.4, sightRange: 88, tracking: 1.7 }
         },
         "location:keep": {
-          type: "location", position: { x: targets.keep.transform.position.x + 9, y: targets.keep.transform.position.y, z: targets.keep.transform.position.z + 7 },
+          type: "location", visible: false, deleted: true,
+          position: { x: targets.keep.transform.position.x + 9, y: targets.keep.transform.position.y, z: targets.keep.transform.position.z + 7 },
           rotationY: .22, scale: { x: 1.08, y: 1, z: 1.08 }
         },
         "custom:audit:fixture": {
@@ -207,20 +271,45 @@ async function stopBridgeProcess(bridge) {
     const normal = await context.newPage();
     const adminAssetRequests = [];
     normal.on("request", (request) => { if (/admin-editor\.(?:js|css)/.test(request.url())) adminAssetRequests.push(request.url()); });
+    normal.on("pageerror", (error) => diagnostics.push("normal page: " + error.message));
+    normal.on("console", (message) => { if (message.type() === "error") diagnostics.push("normal console: " + message.text()); });
     await normal.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 120000 });
     await normal.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 120000 });
-    const normalState = await normal.evaluate(() => ({
-      mutationApi: typeof window.__ASHENHOLD_ADMIN__, panel: Boolean(document.getElementById("ashenholdAdmin")),
-      scriptTags: Array.from(document.scripts).map((script) => script.getAttribute("src") || "").filter((source) => /admin-editor/.test(source)),
-      publicApi: Object.keys(window.ashenholdGame), overrides: window.__ASHENHOLD_TEST__.worldOverrideDebug()
-    }));
+    const normalState = await normal.evaluate(({ chestAdminId, chestSourceId, enemyName, keepSourceId }) => {
+      const testApi = window.__ASHENHOLD_TEST__;
+      testApi.start();
+      const chestPositioned = testApi.positionAtChest(chestSourceId);
+      const chestOpened = testApi.openChest(chestSourceId);
+      const enemyStillRegistered = testApi.enemyDebug().some((entry) => entry.name === enemyName);
+      const enemyAttackTelegraph = testApi.forceEnemyAttack();
+      const forcedEnemyAfter = testApi.enemyDebug().find((entry) => !entry.camp) || testApi.enemyDebug()[0];
+      const enemyAIActive = Boolean(forcedEnemyAfter && forcedEnemyAfter.health > 0 && forcedEnemyAfter.aiState === "combat");
+      const keepStrongholdPresent = testApi.strongholdDebug().some((entry) => entry.id === keepSourceId);
+      return {
+        mutationApi: typeof window.__ASHENHOLD_ADMIN__, panel: Boolean(document.getElementById("ashenholdAdmin")),
+        scriptTags: Array.from(document.scripts).map((script) => script.getAttribute("src") || "").filter((source) => /admin-editor/.test(source)),
+        publicApi: Object.keys(window.ashenholdGame), overrides: testApi.worldOverrideDebug(),
+        gameplay: { chestAdminId, chestPositioned, chestOpened, enemyStillRegistered, enemyAttackTelegraph, enemyAIActive, keepStrongholdPresent }
+      };
+    }, {
+      chestAdminId: targets.chest.id, chestSourceId: targets.chest.id.replace(/^chest:/, ""),
+      enemyName: targets.enemy.label, keepSourceId: targets.keep.sourceId
+    });
     check(normalState.mutationApi === "undefined" && !normalState.panel, "Ordinary game URL exposed the local mutation API.");
     check(normalState.scriptTags.length === 0 && adminAssetRequests.length === 0, "Ordinary game URL loaded local editor assets.");
     const applied = normalState.overrides.entities;
     check(normalState.overrides.registered.length >= 5, "Ordinary mode did not consume entity overrides.");
     check(applied[targets.model.id]?.modelSlot === replacementSlot && Math.abs(applied[targets.model.id].transform.position.x - fixture.entities[targets.model.id].position.x) < .05, "Published model swap/transform was not applied in ordinary mode.");
     check(applied[targets.model.id]?.color === "#47b8d8" && applied[targets.model.id]?.collision === false, "Published model appearance/collision was not applied.");
-    check(applied[targets.chest.id]?.visible === false && applied[targets.chest.id]?.collision === false, "Published chest visibility/collision was not applied.");
+    for (const id of [targets.chest.id, targets.enemy.id, targets.keep.id]) {
+      const documentEntry = normalState.overrides.document.entities[id];
+      check(documentEntry && !Object.prototype.hasOwnProperty.call(documentEntry, "visible") && !Object.prototype.hasOwnProperty.call(documentEntry, "deleted"), `Unsafe lifecycle flags were not stripped from ${id}.`);
+      check(applied[id]?.visible === true && applied[id]?.canHide === false && applied[id]?.canRemove === false, `Gameplay-owned ${id} did not remain visible and lifecycle-locked.`);
+    }
+    check(normalState.gameplay.chestPositioned === targets.chest.id.replace(/^chest:/, "") && normalState.gameplay.chestOpened, "A published hidden/deleted chest override must be ignored so the chest remains interactable.");
+    check(normalState.gameplay.enemyStillRegistered, "A published hidden/deleted enemy override removed the actor from the gameplay roster.");
+    check(normalState.gameplay.enemyAIActive, "A published hidden/deleted enemy override prevented the actor AI from retaining live combat state.");
+    check(normalState.gameplay.keepStrongholdPresent, "A published hidden/deleted location override must be ignored so stronghold state remains intact.");
     check(applied[targets.enemy.id]?.enemy?.maxHealth === 123 && applied[targets.enemy.id]?.enemy?.damage === 19, "Published per-enemy values were not applied.");
     check(applied["location:keep"] && Math.abs(applied["location:keep"].transform.position.x - fixture.entities["location:keep"].position.x) < .05, "Published keep transform was not applied.");
     check(applied["custom:audit:fixture"]?.modelSlot === "crateBig" && applied["custom:audit:fixture"]?.color === "#c98642", "Published custom model was not created in ordinary mode.");
@@ -232,8 +321,10 @@ async function stopBridgeProcess(bridge) {
         loopbackToken: true, worktreeIdentity: true, originRejected: true, unauthorizedWriteRejected: true, signatureValidated: true,
         prototypeRejected: true, textureTraversalRejected: true, bodyLimit: true,
         adminBoot: true, sceneRegistry: true, customTransform: true, colliderLink: true,
+        safeDecorativeLifecycle: true, gameplayLifecycleGuardrails: true, gameplayStatePreserved: true,
         treelessDesert: true, enemyTuning: true, history: true, dataOnlyExport: true,
-        ordinaryUrlReadOnly: true, ordinaryUrlSkipsEditorAssets: true, productionOverridesApplied: true, cleanDiagnostics: true
+        ordinaryUrlReadOnly: true, ordinaryUrlSkipsEditorAssets: true, productionOverridesApplied: true,
+        productionGameplayLifecycle: true, cleanDiagnostics: true
       },
       metrics: { entities: runtime.entities, modelSlots: runtime.modelSlots, categories: runtime.categories, bridgeBranch: session.branch }
     }, null, 2));

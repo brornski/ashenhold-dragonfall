@@ -21,7 +21,7 @@
 
   function button(id, label, options) {
     const config = options || {};
-    return `<button type="button" id="${id}" class="${config.className || ""}"${config.title ? ` title="${escapeHtml(config.title)}"` : ""}${config.pressed != null ? ` aria-pressed="${config.pressed}"` : ""}>${config.icon ? `<span aria-hidden="true">${config.icon}</span>` : ""}<b>${label}</b>${config.key ? `<kbd>${config.key}</kbd>` : ""}</button>`;
+    return `<button type="button" id="${id}" class="${config.className || ""}"${config.title ? ` title="${escapeHtml(config.title)}"` : ""}${config.pressed != null ? ` aria-pressed="${config.pressed}"` : ""}${config.disabled ? " disabled" : ""}>${config.icon ? `<span aria-hidden="true">${config.icon}</span>` : ""}<b>${label}</b>${config.key ? `<kbd>${config.key}</kbd>` : ""}</button>`;
   }
 
   function field(id, label, value, options) {
@@ -134,6 +134,8 @@
   function transformMarkup(entity) {
     if (!entity) return `<div class="admin-empty tall"><span>◇</span><b>Nothing selected</b><p>Click a model in the world or choose one from the scene hierarchy.</p></div>`;
     const transform = entity.transform;
+    const lifecycleLocked = !entity.canHide && !entity.canRemove;
+    const lifecycleTitle = "Gameplay-owned entities cannot be hidden or removed because their interaction, AI, or progression state remains authoritative.";
     return `
       <section class="admin-card admin-selected-card">
         <div class="admin-object-heading"><div><small>${escapeHtml(entity.type)} · ${escapeHtml(entity.id)}</small><h2>${escapeHtml(entity.label)}</h2></div><button type="button" id="adminFocus">Frame</button></div>
@@ -151,8 +153,9 @@
         <div class="admin-three-fields">${field("adminSnapMove", "Move", 1, { step: .1, min: 0 })}${field("adminSnapRotate", "Rotate °", 15, { step: 1, min: 0 })}${field("adminSnapScale", "Scale", .1, { step: .05, min: 0 })}</div>
       </section>
       <section class="admin-card admin-danger-zone">
-        <div class="admin-two-actions">${button("adminDuplicate", "Duplicate", { icon: "＋" })}${button("adminToggleVisible", entity.visible ? "Hide" : "Show", { icon: entity.visible ? "◉" : "○" })}</div>
-        <div class="admin-two-actions">${button("adminToggleCollision", entity.collision ? "Disable collision" : "Enable collision")}${button("adminDelete", "Remove", { className: "danger" })}</div>
+        <div class="admin-two-actions">${button("adminDuplicate", "Duplicate", { icon: "＋" })}${button("adminToggleVisible", entity.visible ? "Hide" : "Show", { icon: entity.visible ? "◉" : "○", disabled: !entity.canHide, title: !entity.canHide ? lifecycleTitle : "" })}</div>
+        <div class="admin-two-actions">${button("adminToggleCollision", entity.collision ? "Disable collision" : "Enable collision")}${button("adminDelete", "Remove", { className: "danger", disabled: !entity.canRemove, title: !entity.canRemove ? lifecycleTitle : "" })}</div>
+        ${lifecycleLocked ? `<div class="admin-note"><b>Gameplay object protected</b><p>Chests, enemies, dragons, and location groups keep authoritative gameplay state, so Forge locks Hide and Remove. Edit their supported transform, appearance, collision, or tuning fields instead.</p></div>` : ""}
       </section>`;
   }
 
@@ -376,11 +379,19 @@
     const duplicate = byId("adminDuplicate");
     if (duplicate) duplicate.addEventListener("click", () => { const item = api.duplicate(state.selectedId); if (item) { state.selectedId = item.id; toast("Object duplicated"); renderBody(); } else toast("This object has no replaceable model slot", "warning"); });
     const visible = byId("adminToggleVisible");
-    if (visible) visible.addEventListener("click", () => { const item = selected(); api.setVisible(state.selectedId, !item.visible); renderBody(); });
+    if (visible) visible.addEventListener("click", () => {
+      const item = selected();
+      if (!item || !item.canHide || !api.setVisible(state.selectedId, !item.visible)) return toast("Gameplay-owned objects cannot be hidden", "warning");
+      renderBody();
+    });
     const collision = byId("adminToggleCollision");
     if (collision) collision.addEventListener("click", () => { const item = selected(); api.setCollision(state.selectedId, !item.collision); renderBody(); });
     const remove = byId("adminDelete");
-    if (remove) remove.addEventListener("click", () => { if (window.confirm("Remove this object from the authored world?")) { api.remove(state.selectedId); state.selectedId = null; renderBody(); } });
+    if (remove) remove.addEventListener("click", () => {
+      const item = selected();
+      if (!item || !item.canRemove) return toast("Gameplay-owned objects cannot be removed", "warning");
+      if (window.confirm("Remove this object from the authored world?") && api.remove(state.selectedId)) { state.selectedId = null; renderBody(); }
+    });
     const add = byId("adminAddModelButton");
     if (add) add.addEventListener("click", () => { const item = api.addModel(byId("adminAddModel").value); if (item) { state.selectedId = item.id; toast("Model placed at camera"); renderBody(); } });
     const color = byId("adminColor");
@@ -582,7 +593,12 @@
     else if (key === "g") setTransformMode("translate");
     else if (key === "r") setTransformMode("rotate");
     else if (key === "s" && info.mode === "select") setTransformMode("scale");
-    else if ((key === "delete" || key === "backspace") && state.selectedId) { event.preventDefault(); api.remove(state.selectedId); state.selectedId = null; scheduleRender(); }
+    else if ((key === "delete" || key === "backspace") && state.selectedId) {
+      event.preventDefault();
+      const item = selected();
+      if (item && item.canRemove && api.remove(state.selectedId)) { state.selectedId = null; scheduleRender(); }
+      else toast("Gameplay-owned objects cannot be removed", "warning");
+    }
     if (["w", "a", "s", "d", "q", "e", "shift"].includes(key) && (info.mode === "freecam" || info.mode === "noclip")) {
       event.preventDefault(); event.stopImmediatePropagation(); api.controls.setInput(key, true);
     } else if (["v", "f", "n", "g", "r"].includes(key) || (key === "s" && info.mode === "select")) {
