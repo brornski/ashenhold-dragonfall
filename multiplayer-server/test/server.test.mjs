@@ -151,6 +151,20 @@ test("health endpoint advertises the room service", async () => {
   });
 });
 
+test("world registration enforces the fixed identity while accepting legacy envelopes", () => {
+  const realm = new RealmServer({ randomCode: () => "WORLDX" });
+  const host = new MemorySocket();
+  const welcome = memoryHello(realm, host, { create: true, name: "World Host" });
+  memorySend(realm, host, { type: "register_world", world: { worldId: "another-continent" } });
+  assert.equal(host.find((message) => message.type === "error")?.code, "WORLD_MISMATCH");
+  assert.equal(realm.rooms.get(welcome.roomCode).worldReady, false);
+
+  memorySend(realm, host, { type: "register_world", world: { strongholds: [], enemies: [], chests: [] } });
+  assert.equal(host.find((message) => message.type === "world_registered")?.accepted, true,
+    "protocol-2 clients without a worldId remain compatible with the one fixed continent");
+  assert.equal(realm.rooms.get(welcome.roomCode).worldId, WORLD_ID);
+});
+
 test("two Wardens share the fixed authoritative world, garrison, chest, and reconnect state", async () => {
   const host = await connect();
   const hostWelcome = await hello(host, {
@@ -179,6 +193,7 @@ test("two Wardens share the fixed authoritative world, garrison, chest, and reco
   host.send({
     type: "register_world",
     world: {
+      worldId: WORLD_ID,
       navigation: { cellSize: 5, width: 24, height: 24, originX: -60, originZ: 160, blocked: [] },
       strongholds: [{ id: "shrine-ember", name: "Ember Shrine", kind: "shrine", x: 0, z: 207 }],
       enemies: [

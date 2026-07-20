@@ -232,10 +232,10 @@ export class RealmServer {
     if (event.type === "register_world") return this.registerWorld(room, player, event);
     if (event.type === "start_realm") return this.startRealm(room, player);
     if (event.type === "ping") return safeSend(socket, { type: "pong", sentAt: event.sentAt, serverAt: this.now() });
-    if (!room.started) return this.reject(socket, "REALM_NOT_STARTED", "Wait for the party host to start the shared realm.");
+    if (!room.started) return this.reject(socket, "REALM_NOT_STARTED", "Wait for the party host to start the shared world.");
     if (event.type === "register_enemy") return this.registerEnemy(room, player, event);
     if (event.type === "player_health_ack") return this.playerHealthAck(room, player, event);
-    if (player.health <= 0) return this.reject(socket, "PLAYER_DEAD", "A fallen Warden cannot change the shared realm.");
+    if (player.health <= 0) return this.reject(socket, "PLAYER_DEAD", "A fallen Warden cannot change the shared world.");
     if (event.type === "max_health_upgrade") return this.maxHealthUpgrade(room, player, event);
     if (event.type === "host_enemy_state") return this.hostEnemyState(room, player, event);
     if (event.type === "attack") return this.attack(room, player, event);
@@ -411,12 +411,16 @@ export class RealmServer {
   }
 
   registerWorld(room, player, event) {
-    if (room.hostId !== player.id) return this.reject(player.socket, "HOST_ONLY", "Only the party host may initialize the realm.");
+    if (room.hostId !== player.id) return this.reject(player.socket, "HOST_ONLY", "Only the party host may initialize the world.");
     if (room.worldReady) {
       safeSend(player.socket, { type: "world_registered", accepted: false, reason: "already_ready", snapshot: this.snapshot(room, player.id) });
       return false;
     }
     const world = event.world || {};
+    const declaredWorldId = cleanId(world.worldId, "");
+    if (declaredWorldId && declaredWorldId !== room.worldId) {
+      return this.reject(player.socket, "WORLD_MISMATCH", "This party is bound to the Ashenhold continent.");
+    }
     room.navigation = normalizeNavigation(world.navigation);
     for (const source of (Array.isArray(world.strongholds) ? world.strongholds : []).slice(0, 64)) {
       const id = cleanId(source.id, "stronghold-" + room.strongholds.size);
@@ -485,8 +489,8 @@ export class RealmServer {
   }
 
   registerEnemy(room, player, event) {
-    if (room.hostId !== player.id) return this.reject(player.socket, "HOST_ONLY", "Only the party host may register a late realm enemy.");
-    if (!room.worldReady) return this.reject(player.socket, "WORLD_NOT_READY", "Initialize the shared realm before registering enemies.");
+    if (room.hostId !== player.id) return this.reject(player.socket, "HOST_ONLY", "Only the party host may register a late world enemy.");
+    if (!room.worldReady) return this.reject(player.socket, "WORLD_NOT_READY", "Initialize the shared world before registering enemies.");
     const source = event.enemy || {};
     const id = cleanId(source.id, "");
     if (!id) return this.reject(player.socket, "BAD_ENEMY", "A stable enemy id is required.");
@@ -494,7 +498,7 @@ export class RealmServer {
       safeSend(player.socket, { type: "enemy_registered", accepted: false, reason: "already_registered", enemyId: id, snapshot: this.snapshot(room, player.id) });
       return true;
     }
-    if (room.enemies.size >= 320) return this.reject(player.socket, "ENEMY_LIMIT", "The shared realm enemy limit has been reached.");
+    if (room.enemies.size >= 320) return this.reject(player.socket, "ENEMY_LIMIT", "The shared world enemy limit has been reached.");
     const x = clamp(source.x, -WORLD_LIMIT, WORLD_LIMIT); const z = clamp(source.z, -WORLD_LIMIT, WORLD_LIMIT);
     const enemy = {
       id, name: cleanName(source.name), kind: cleanId(source.kind, "biomeLight"), x, y: clamp(source.y, -40, 180), z,
@@ -519,8 +523,8 @@ export class RealmServer {
   }
 
   startRealm(room, player) {
-    if (room.hostId !== player.id) return this.reject(player.socket, "HOST_ONLY", "Only the party host may start the realm.");
-    if (!room.worldReady) return this.reject(player.socket, "WORLD_NOT_READY", "Initialize the shared realm before starting.");
+    if (room.hostId !== player.id) return this.reject(player.socket, "HOST_ONLY", "Only the party host may start the world.");
+    if (!room.worldReady) return this.reject(player.socket, "WORLD_NOT_READY", "Initialize the shared world before starting.");
     if (room.started) return true;
     room.started = true; room.revision += 1;
     this.queueEvent(room, "realm_started", { playerId: player.id });

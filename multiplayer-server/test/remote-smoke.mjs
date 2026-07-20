@@ -66,6 +66,7 @@ try {
   host.send({
     type: "register_world",
     world: {
+      worldId: WORLD_ID,
       navigation: { cellSize: 5, width: 24, height: 24, originX: -60, originZ: 160, blocked: [] },
       strongholds: [{ id: "remote-shrine", name: "Remote Shrine", kind: "shrine", x: 0, z: 207 }],
       enemies: [{

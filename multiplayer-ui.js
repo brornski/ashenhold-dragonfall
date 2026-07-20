@@ -24,6 +24,19 @@
     return url;
   }
 
+  function discardLegacyWorldParameters() {
+    const url = new URL(window.location.href);
+    let changed = false;
+    for (const key of [...url.searchParams.keys()]) {
+      if (!['biome', 'seed'].includes(key.toLowerCase())) continue;
+      url.searchParams.delete(key);
+      changed = true;
+    }
+    if (!changed) return;
+    try { window.history.replaceState(window.history.state, "", url.toString()); }
+    catch { /* the fixed world still ignores legacy parameters if history is unavailable */ }
+  }
+
   class PartyController {
     constructor() {
       this.client = window.AshenholdMultiplayer ? new window.AshenholdMultiplayer.Client() : null;
@@ -277,5 +290,6 @@
     get multiplayer() { return this.connected && this.mode !== "solo"; }
   }
 
+  discardLegacyWorldParameters();
   window.AshenholdParty = new PartyController();
 })();
