@@ -83,7 +83,7 @@ Ashenhold Forge is a local-only world sandbox for changing the authored continen
 Forge supports these core workflows:
 
 - click a world object or choose it from the searchable, category-filtered Scene tree; use the axis gizmo or inspector for snapped move (`G`), rotate (`R`), and scale (`S`) edits
-- frame, duplicate, hide, disable collision on, or delete the selection; drop it to terrain, reset its transform, tint its material, replace a same-origin `assets/` texture, or replace model-slot geometry while retaining its fitted transform
+- frame, duplicate, move, recolor, retarget collision on, or replace model geometry; decorative and custom models may also be hidden or removed, while chests, enemies, dragons, and location groups lock those lifecycle actions so their interaction, AI, and progression state cannot become invisible-but-active
 - add catalog models at the camera and tune each biome's ground, cliff, grass, fog, exposure, vegetation, and prop density; Ember Dunes intentionally keeps tree density at zero
 - tune global or per-enemy-kind health, damage, speed, attack range, sight, tracking, and attack rate, or set exact values on the selected enemy
 - press `F` for freecam (`WASD`, `Q`/`E`, Shift boost, drag to look, wheel for speed), `N` for Warden noclip, and `V` to return to selection; use `Ctrl+Z` / `Ctrl+Y` for history and backtick to collapse the panel
