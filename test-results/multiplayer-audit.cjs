@@ -11,6 +11,7 @@ const ROOT = path.resolve(__dirname, "..");
 const REPORT_PATH = path.join(__dirname, "multiplayer-audit.json");
 const BIOME = "jungle";
 const SEED = 424242;
+const PROTOCOL_VERSION = 2;
 const TIMEOUT = Math.max(15000, Number(process.env.ASHENHOLD_MULTIPLAYER_TIMEOUT) || 70000);
 const PRODUCTION_MODULES = [
   ["client", "multiplayer-client.js", "AshenholdMultiplayer"],
@@ -126,7 +127,7 @@ async function probeBackend(websocketUrl) {
     const response = await fetch(backendHealthUrl(websocketUrl), { signal: AbortSignal.timeout(1400) });
     if (!response.ok) return false;
     const health = await response.json();
-    return health.ok === true && health.service === "ashenhold-multiplayer" && health.protocol === 1;
+    return health.ok === true && health.service === "ashenhold-multiplayer" && health.protocol === PROTOCOL_VERSION;
   } catch {
     return false;
   }
