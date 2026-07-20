@@ -11842,11 +11842,22 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
   function setupInputs() {
     window.addEventListener("resize", resize);
     window.addEventListener("pagehide", () => { saveProgression(true); if (state !== "ended") writeActiveRun(); });
+    const gameplayOwnsKeyboard = (event) => {
+      if (state !== "playing" || adminMode) return false;
+      const target = event.target;
+      return !(target && target.closest && target.closest("input, textarea, select, [contenteditable='true']"));
+    };
+    const blockBrowserGameplayShortcut = (event) => {
+      if (!gameplayOwnsKeyboard(event) || (!event.ctrlKey && !event.metaKey)) return;
+      event.preventDefault();
+      event.returnValue = false;
+    };
+    window.addEventListener("keydown", blockBrowserGameplayShortcut, { capture: true, passive: false });
+    window.addEventListener("keypress", blockBrowserGameplayShortcut, { capture: true, passive: false });
+    window.addEventListener("keyup", blockBrowserGameplayShortcut, { capture: true, passive: false });
     window.addEventListener("keydown", (event) => {
       if (adminMode && event.target && event.target.closest && event.target.closest(".ashenhold-admin")) return;
       const key = event.key.toLowerCase();
-      const superSprintMovement = state === "playing" && event.ctrlKey && ["KeyW", "KeyA", "KeyS", "KeyD"].includes(event.code);
-      if (superSprintMovement) event.preventDefault();
       if ([" ","arrowup","arrowdown","arrowleft","arrowright","tab","alt"].includes(key)) event.preventDefault();
       keys.add(key);
       if (state === "playing" && key === "control" && !event.repeat) player.slideInputPressed = true;

@@ -24,14 +24,26 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
   await page.waitForTimeout(450);
   const initial = await page.evaluate(() => window.ashenholdGame.snapshot());
   const superSprintShortcutGuard = await page.evaluate(() => {
-    const guarded = ["KeyW", "KeyA", "KeyS", "KeyD"].map((code) => {
-      const key = code.slice(3).toLowerCase();
-      const down = new KeyboardEvent("keydown", { key, code, ctrlKey: true, bubbles: true, cancelable: true });
-      window.dispatchEvent(down);
-      window.dispatchEvent(new KeyboardEvent("keyup", { key, code, ctrlKey: true, bubbles: true }));
-      return down.defaultPrevented;
-    });
-    return guarded.every(Boolean);
+    const fire = (type, key, code, options = {}) => {
+      const event = new KeyboardEvent(type, Object.assign({ key, code, bubbles: true, cancelable: true }, options));
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const ctrl = fire("keydown", "Control", "ControlLeft", { ctrlKey: true });
+    const diagonalA = fire("keydown", "a", "KeyA", { ctrlKey: true });
+    const diagonalD = fire("keydown", "d", "KeyD", { ctrlKey: true });
+    fire("keyup", "d", "KeyD", { ctrlKey: true });
+    fire("keyup", "a", "KeyA", { ctrlKey: true });
+    fire("keyup", "Control", "ControlLeft");
+    const shiftedCtrl = fire("keydown", "Control", "ControlLeft", { ctrlKey: true });
+    const shiftedA = fire("keydown", "A", "KeyA", { ctrlKey: true, shiftKey: true });
+    const shiftedD = fire("keydown", "D", "KeyD", { ctrlKey: true, shiftKey: true });
+    const shiftedTab = fire("keydown", "Tab", "Tab", { ctrlKey: true, shiftKey: true });
+    fire("keyup", "Tab", "Tab", { ctrlKey: true, shiftKey: true });
+    fire("keyup", "D", "KeyD", { ctrlKey: true, shiftKey: true });
+    fire("keyup", "A", "KeyA", { ctrlKey: true, shiftKey: true });
+    fire("keyup", "Control", "ControlLeft");
+    return [ctrl, diagonalA, diagonalD, shiftedCtrl, shiftedA, shiftedD, shiftedTab].every(Boolean);
   });
   const waterVisual = initial.world.water;
 
