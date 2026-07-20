@@ -22,7 +22,7 @@ The world now uses a measured one-unit-per-metre model registry and layout versi
 
 Strongholds feel inhabited before combat begins. Gate sentries, courtyard defenders, tower lookouts, reserves, and beast patrols hold seeded posts and routes; vision cones, movement noise, suspicion, ally alerts, local navigation, separation, return-to-post behavior, and stuck recovery replace immediate omniscient pursuit.
 
-Optional co-op supports parties of two to four Wardens. Choose **Host Co-op** or **Join Room** on the title screen, share the six-character code, and let the host start the aligned biome and seed. The WebSocket room service owns shared enemy AI, damage, chest claims, taming, stronghold clears, and host succession; browser clients interpolate remote Wardens and expose room, roster, connection, and latency status. Solo remains the default and opens no network connection.
+Optional co-op supports parties of two to four Wardens. Choose **Host Co-op** or **Join Room** on the title screen, share the six-character code, and let the host start the aligned biome and seed. The protocol 2 room service owns shared ground-enemy and bonded-companion simulation, damage, chest claims, taming, stronghold clears, and host succession; browser clients interpolate remote Wardens and expose room, roster, connection, and latency status. Multi-target attacks share a server-validated action ID, while incoming enemy strikes use a hit-intent/acknowledgement exchange so the existing dodge, invulnerability, and defensive skill rules still resolve in the player's browser. If the host disconnects or falls, the earliest connected living Warden becomes host immediately. Solo remains the default and opens no network connection.
 
 Traversal now distinguishes grounded sprinting, downhill sliding, airborne rise/fall, momentum-carrying slide jumps, and landing recovery. `Control` starts a slide only on a usable descent and remains super sprint on flat or uphill terrain. The skill constellations are always reachable with `K` or the dedicated desktop/touch control.
 
@@ -73,7 +73,7 @@ The game client has no runtime package manager or build step. It is static HTML/
 - `index.html` - semantic shell, HUD, menus, title deck, touch controls
 - `styles.css` - responsive interface, animation, accessibility, biome grading
 - `app.js` - renderer, procedural world, collision, AI, combat, progression, saves, audio, debug API
-- `multiplayer-client.js` - protocol client, reconnects, interpolation, and server URL selection
+- `multiplayer-client.js` - protocol 2 client, private session reconnect credentials, interpolation, and server URL selection
 - `multiplayer-avatars.js` - animated remote-Warden presentation
 - `multiplayer-game.js` - game-to-room synchronization coordinator
 - `multiplayer-ui.js` - title party flow, invite links, roster, status, and in-game party HUD
@@ -86,9 +86,20 @@ GitHub Pages receives the four base runtime files, four multiplayer browser modu
 
 ### Co-op service and security
 
-The production client declares `wss://multiplayer-server-weld.vercel.app/api/ws` in a public meta tag. This secure WebSocket is the sole permitted cross-origin runtime request; assets and all non-party requests remain same-origin. The connection is opened only after Host/Join is selected and connected, or when an explicit `?room=CODE&autojoin=1` invite is followed. No credential is embedded in the client. Display name, transient session ID, realm identity, transforms, and gameplay events cross the socket, so room codes are invitations rather than authentication and must not be treated as secrets or access control.
+Production uses protocol 2 at these public endpoints:
 
-Rooms are memory-only, expire after 30 idle minutes, allow four connected Wardens, and retain a disconnected player record for 60 seconds. There is no account, matchmaking, private-room authorization, durable room state, cloud save, voice/text chat, or anti-cheat guarantee. Permanent progression and active-run saves remain local to each browser. A server restart or serverless instance replacement loses live rooms.
+- secure WebSocket: `wss://multiplayer-server-weld.vercel.app/api/ws`
+- service health: https://multiplayer-server-weld.vercel.app/health
+
+The WebSocket declared by the public meta tag is the sole permitted cross-origin runtime request; assets and all non-party requests remain same-origin. It opens only after Host/Join is selected and connected, or when an explicit `?room=CODE&autojoin=1` invite is followed.
+
+The service issues each Warden a random public player UUID. Its welcome message also returns a separate, high-entropy private reconnect credential, which the client keeps in `sessionStorage` under that room and presents only when reclaiming the same player identity. The credential is not placed in invite URLs, room codes, rosters, shared snapshots, logs, or the static build. A room code allows someone to join an available room; it is an invitation, not authentication, privacy, or access control. Display name, public player ID, realm identity, transforms, combat state, and gameplay events cross the socket.
+
+The service owns hostile ground AI, bonded-companion follow/target/attack behavior, attack cadence/range/target limits, chest and tame claims, and stronghold state. An action ID groups the valid targets of one swing, projectile, shout, chain, trail, or splash instead of charging each target as a separate attack. For damage against a Warden, the server sends a one-use hit intent; the addressed client applies local avoidance and mitigation and acknowledges the resulting health. A short server timeout applies the raw hit if no valid acknowledgement arrives.
+
+Host succession is immediate when the active host disconnects or is defeated: the earliest connected living Warden receives authority. The former host's identity record remains reclaimable for 60 seconds with its private credential, but reconnecting does not displace the current host.
+
+Rooms are unauthenticated and process-memory only, allow four connected Wardens, use a 30-minute idle cleanup, and retain disconnected identities for 60 seconds only while that server instance survives. The Vercel WebSocket function is configured with a maximum 300-second invocation duration, and the provider may end or replace an instance sooner. A reconnect can therefore find that the room no longer exists or was created on another instance; automatic retry is not durable recovery. There is no account, matchmaking, private-room authorization, cross-instance routing, durable room state, cloud save, voice/text chat, or anti-cheat guarantee. Permanent progression and active-run saves remain local to each browser.
 
 To run and test the room service locally:
 
@@ -130,10 +141,23 @@ npm run motion
 npm run live
 ```
 
-Release 5.5 is gated by deterministic gameplay, garrison-AI, and traversal-motion regressions; a multi-biome/seed production audit; desktop/mobile WCAG scans; a cold-start payload budget under 18 MB; Node room-service tests; a two-client remote socket smoke; and a live GitHub Pages audit. The complete contracts and extension notes are in [GAME-DEVELOPER-GUIDE.md](GAME-DEVELOPER-GUIDE.md).
+Release 5.5 is gated by deterministic gameplay, garrison-AI, and traversal-motion regressions; a multi-biome/seed production audit; desktop/mobile WCAG scans; a cold-start payload budget under 18 MB; Node room-service tests; a two-browser production-adapter audit; a two-client remote protocol 2 socket smoke; and a live GitHub Pages audit. The service suite covers private reconnect credential rejection, immediate host succession, reserved reconnect slots, authoritative world/enemy/chest/stronghold state, bounded health and status effects, hit acknowledgements with timeout fallback, and supported weapon cadence/range envelopes. The complete contracts and extension notes are in [GAME-DEVELOPER-GUIDE.md](GAME-DEVELOPER-GUIDE.md).
 
 ## Assets and saves
 
 Third-party asset provenance is documented in [ATTRIBUTIONS.md](ATTRIBUTIONS.md). Runtime assets are local and no private credential is embedded in the client.
+
+Release 5.5 maps the user-provided FreeStylized materials to realms as follows. Each named runtime triplet contains local WebP color, OpenGL-normal, and roughness maps.
+
+| Realm | Source material | Runtime maps |
+| --- | --- | --- |
+| Verdant Ruins (`jungle`) | Ground Tiles 13 | `jungle-{color,normal,roughness}.webp` |
+| Drowned Coast (`shore`) | Ground Tiles 17 | `shore-{color,normal,roughness}.webp` |
+| Ember Dunes (`desert`) | Sand 01 | `desert-{color,normal,roughness}.webp` |
+| Frostbound Wilds (`snowy`) | Existing ambientCG snow material | existing snow color/normal/roughness JPGs |
+| Sky-Sunder Peaks (`mountains`) | Ground With Rocks 03 | `mountains-{color,normal,roughness}.webp` |
+| Moonfall Expanse (`moon`) | Lava Rocks 01 | `moon-{color,normal,roughness}.webp` |
+
+Ancient hero trees use the shared FreeStylized Foliage Kit derivatives `assets/models/freestylized-foliage/F1_Tree1.glb` and `F1_Tree3.glb`. They were converted, welded, and quantized for the browser; the source pack's large texture set is intentionally omitted so the meshes receive Ashenhold's biome palette at runtime. Exact source links, adaptations, and redistribution terms are recorded in [ATTRIBUTIONS.md](ATTRIBUTIONS.md) and the notices beside each asset family.
 
 Progress is stored in browser local storage. Permanent Warden progression and relic bonuses survive runs; active-run state restores the current realm, stronghold clears, chest/rune claims, companion bonds, and deterministic encounter state. Saves are device/browser local and can be edited by the player.
