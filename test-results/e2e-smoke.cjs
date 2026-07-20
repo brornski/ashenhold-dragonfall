@@ -23,6 +23,16 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
   await page.evaluate(() => window.__ASHENHOLD_TEST__.start());
   await page.waitForTimeout(450);
   const initial = await page.evaluate(() => window.ashenholdGame.snapshot());
+  const superSprintShortcutGuard = await page.evaluate(() => {
+    const guarded = ["KeyW", "KeyA", "KeyS", "KeyD"].map((code) => {
+      const key = code.slice(3).toLowerCase();
+      const down = new KeyboardEvent("keydown", { key, code, ctrlKey: true, bubbles: true, cancelable: true });
+      window.dispatchEvent(down);
+      window.dispatchEvent(new KeyboardEvent("keyup", { key, code, ctrlKey: true, bubbles: true }));
+      return down.defaultPrevented;
+    });
+    return guarded.every(Boolean);
+  });
   const waterVisual = initial.world.water;
 
   await page.evaluate(() => {
@@ -234,6 +244,7 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
     pbrBiomeMaterial: titleSnapshot.world.pbrBiomeMaterial,
     animatedWarden: titleSnapshot.world.animatedWarden,
     proceduralAssassinRun: titleSnapshot.world.proceduralRunAnimation,
+    superSprintBrowserShortcutsBlocked: superSprintShortcutGuard,
     importedModels: titleSnapshot.world.importedModels >= 15,
     canonicalWorldScale: titleSnapshot.world.canonicalScale.unitMeters === 1 && titleSnapshot.world.canonicalScale.wardenHeight === 1.9 && titleSnapshot.world.canonicalScale.doorWidth >= 2.4,
     playerScaledBuildings: ["tavern", "homeA", "homeB", "ruinedHouse"].every((id) => {

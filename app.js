@@ -11845,6 +11845,8 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
     window.addEventListener("keydown", (event) => {
       if (adminMode && event.target && event.target.closest && event.target.closest(".ashenhold-admin")) return;
       const key = event.key.toLowerCase();
+      const superSprintMovement = state === "playing" && event.ctrlKey && ["KeyW", "KeyA", "KeyS", "KeyD"].includes(event.code);
+      if (superSprintMovement) event.preventDefault();
       if ([" ","arrowup","arrowdown","arrowleft","arrowright","tab","alt"].includes(key)) event.preventDefault();
       keys.add(key);
       if (state === "playing" && key === "control" && !event.repeat) player.slideInputPressed = true;
