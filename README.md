@@ -87,7 +87,7 @@ Forge is freecam-first: it opens in freecam, and scene selection plus gizmo and 
 - add catalog models at the camera and tune each biome's ground, cliff, grass, fog, exposure, vegetation, and prop density; Ember Dunes intentionally keeps tree density at zero
 - tune global or per-enemy-kind health, damage, speed, attack range, sight, tracking, and attack rate, or set exact values on the selected enemy
 - freecam uses `WASD`, `Q`/`E`, Shift boost, and the wheel for speed; a short left click selects, left-drag away from a gizmo or right-drag looks, and left-drag on a gizmo transforms the selection
-- from freecam, `V` returns the Warden to the camera's exact XYZ and facing, clears stale movement, combat, and pose state, and enters Select; `N` places the Warden at the freecam position and starts noclip; use `F` for freecam, `Ctrl+Z` / `Ctrl+Y` for history, and backtick to collapse the panel
+- from freecam, `V` returns the Warden to the camera's exact XYZ and facing, clears stale movement, combat, and pose state, and resumes Warden control; `N` places the Warden at the freecam position and starts noclip; use `F` for freecam, `Ctrl+Z` / `Ctrl+Y` for history, and backtick to collapse the panel
 
 The Publish tab validates the document and can copy/download JSON, import JSON, or export a ready-to-use `world-overrides.js` source file. Browser edits also maintain a local draft. **Save Repo** uses the authenticated loopback bridge to atomically replace only the repository-root `world-overrides.js`; a regular static server can run the editor in export-only mode but cannot save to the repository. Some density increases beyond the currently allocated instance capacity require Save Repo followed by a reload.
 
