@@ -102,13 +102,14 @@
     shore: { id: "tempest-coast", features: ["coastal-sky-panorama", "sunbreak-clouds", "sea-horizon"], halo: [650, 145, -330], haloScale: 120 },
     desert: { id: "ember-dust", features: ["sandsky-panorama", "painted-cloud-bands", "ember-horizon"], halo: [720, 195, -210], haloScale: 190 },
     snowy: { id: "frozen-aurora", features: ["snowbound-panorama", "painted-cloud-mass", "violet-frost-horizon"], halo: [610, 205, -370], haloScale: 135 },
-    mountains: { id: "high-altitude", features: ["massive-clouds", "distant-peaks", "altitude-blue"], halo: [690, 235, -270], haloScale: 145 },
+    mountains: { id: "high-altitude", features: ["graveyard-storm-panorama", "verdant-cloud-vortex", "sundered-horizon"], halo: [690, 235, -270], haloScale: 145 },
     moon: { id: "celestial-void", features: ["moonsky-panorama", "milky-way-arc", "violet-horizon"], halo: [690, 260, -160], haloScale: 105 }
   });
   const DESERT_SKYBOX_PATH = "assets/textures/skyboxes/ember-dunes-sandsky-2k.png";
   const MOON_SKYBOX_PATH = "assets/textures/skyboxes/moonfall-moonsky-2k.png";
   const SHORE_SKYBOX_PATH = "assets/textures/skyboxes/drowned-coast-skybox-2k.png";
   const SNOWY_SKYBOX_PATH = "assets/textures/skyboxes/frostbound-skyline-2k.png";
+  const MOUNTAIN_SKYBOX_PATH = "assets/textures/skyboxes/skysunder-graveyard-skybox.jpg";
   const WARDEN_MODEL_PATH = "assets/models/hooded-shadow-assassin/scene.gltf";
   const WARDEN_MODEL_SCALE = 1.68;
   const WARDEN_MODEL_Y_OFFSET = 1.6;
@@ -2374,7 +2375,7 @@
 
   function adminTextureCatalog() {
     const paths = new Set([
-      "assets/textures/storm-sky-panorama.jpg", DESERT_SKYBOX_PATH, MOON_SKYBOX_PATH, SHORE_SKYBOX_PATH, SNOWY_SKYBOX_PATH, "assets/textures/ashen-ground.jpg",
+      "assets/textures/storm-sky-panorama.jpg", DESERT_SKYBOX_PATH, MOON_SKYBOX_PATH, SHORE_SKYBOX_PATH, SNOWY_SKYBOX_PATH, MOUNTAIN_SKYBOX_PATH, "assets/textures/ashen-ground.jpg",
       "assets/textures/ancient-stone.jpg", "assets/textures/alpine-cliff.jpg", "assets/textures/tundra-grass-v1.jpg"
     ]);
     Object.keys(visualAssets.biomeMaterialCatalog || {}).forEach((id) => {
@@ -3869,6 +3870,8 @@
     paths.push(SHORE_SKYBOX_PATH);
     const snowySkyboxIndex = paths.length;
     paths.push(SNOWY_SKYBOX_PATH);
+    const mountainSkyboxIndex = paths.length;
+    paths.push(MOUNTAIN_SKYBOX_PATH);
     const loaded = await Promise.allSettled(paths.map(textureFrom));
     if (loaded[0].status === "fulfilled") {
       visualAssets.sky = loaded[0].value;
@@ -3914,6 +3917,13 @@
       visualAssets.snowySky.wrapS = THREE.ClampToEdgeWrapping;
       visualAssets.snowySky.wrapT = THREE.ClampToEdgeWrapping;
       visualAssets.snowySky.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    }
+    if (loaded[mountainSkyboxIndex].status === "fulfilled") {
+      visualAssets.mountainSky = loaded[mountainSkyboxIndex].value;
+      visualAssets.mountainSky.encoding = THREE.sRGBEncoding;
+      visualAssets.mountainSky.wrapS = THREE.ClampToEdgeWrapping;
+      visualAssets.mountainSky.wrapT = THREE.ClampToEdgeWrapping;
+      visualAssets.mountainSky.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     }
     visualAssets.biomeMaterials[currentBiomeId] = startingRegionalMaterial;
     const startingMaterial = visualAssets.biomeMaterials[currentBiomeId] || visualAssets.biomeMaterials.jungle || {};
@@ -4315,6 +4325,21 @@
         id: profile.id, features: profile.features.slice(), featureCount: 1,
         signature: profile.id + ":snowline-2k-v1", gradientStops: 0, horizonBlend: true,
         projection: "equirectangular", source: SNOWY_SKYBOX_PATH
+      };
+      return suppliedTexture;
+    }
+    if (skyBiomeId === "mountains" && visualAssets.mountainSky) {
+      const suppliedTexture = visualAssets.mountainSky.clone();
+      suppliedTexture.encoding = THREE.sRGBEncoding;
+      suppliedTexture.wrapS = THREE.ClampToEdgeWrapping;
+      suppliedTexture.wrapT = THREE.ClampToEdgeWrapping;
+      suppliedTexture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      suppliedTexture.needsUpdate = true;
+      suppliedTexture.userData = suppliedTexture.userData || {};
+      suppliedTexture.userData.skyReport = {
+        id: profile.id, features: profile.features.slice(), featureCount: 1,
+        signature: profile.id + ":graveyard-skybox-v1", gradientStops: 0, horizonBlend: true,
+        projection: "equirectangular", source: MOUNTAIN_SKYBOX_PATH
       };
       return suppliedTexture;
     }

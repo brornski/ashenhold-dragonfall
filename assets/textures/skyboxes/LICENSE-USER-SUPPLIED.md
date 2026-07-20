@@ -16,6 +16,14 @@ The project owner supplied `moon skybox.zip` on July 20, 2026 and explicitly req
 
 Ashenhold ships the single 2048 x 1024 equirectangular panorama under the project owner's authorization. The image is renamed for its runtime role and is otherwise unmodified; the redundant cubemap faces and layout reference are not shipped. If upstream authorship or licensing information becomes available, update this notice and `ATTRIBUTIONS.md` before the next release.
 
+## Sky-Sunder Peaks graveyard skybox
+
+Runtime file: `skysunder-graveyard-skybox.jpg`
+
+The project owner supplied `graveyard skybox.jpg` on July 20, 2026 and explicitly requested that it replace the Sky-Sunder Peaks biome sky. The standalone image did not include original author, source URL, copyright, or license metadata.
+
+Ashenhold ships the unmodified 1280 x 640 equirectangular panorama under the project owner's authorization. The image is renamed for its runtime role. If upstream authorship or licensing information becomes available, update this notice and `ATTRIBUTIONS.md` before the next release.
+
 ## Drowned Coast skybox
 
 Runtime file: `drowned-coast-skybox-2k.png`

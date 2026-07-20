@@ -97,7 +97,8 @@ async function boot(context, diagnostics, suffix) {
             && ((biome === "desert" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/ember-dunes-sandsky-2k.png")
               || (biome === "moon" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/moonfall-moonsky-2k.png")
               || (biome === "shore" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/drowned-coast-skybox-2k.png")
-              || (biome === "snowy" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/frostbound-skyline-2k.png"))))
+              || (biome === "snowy" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/frostbound-skyline-2k.png")
+              || (biome === "mountains" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/skysunder-graveyard-skybox.jpg"))))
           && zoneSnapshot.world.skyProfile.horizonBlend && zoneSnapshot.world.skyProfile.environmentMap,
         desertSandskybox: biome !== "desert" || (zoneSnapshot.world.skyProfile.id === "ember-dust"
           && zoneSnapshot.world.skyProfile.signature === "ember-dust:sandskybox-2k-v1"
@@ -115,6 +116,10 @@ async function boot(context, diagnostics, suffix) {
           && zoneSnapshot.world.skyProfile.signature === "frozen-aurora:snowline-2k-v1"
           && zoneSnapshot.world.skyProfile.projection === "equirectangular"
           && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/frostbound-skyline-2k.png"),
+        skysunderGraveyardSkybox: biome !== "mountains" || (zoneSnapshot.world.skyProfile.id === "high-altitude"
+          && zoneSnapshot.world.skyProfile.signature === "high-altitude:graveyard-skybox-v1"
+          && zoneSnapshot.world.skyProfile.projection === "equirectangular"
+          && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/skysunder-graveyard-skybox.jpg"),
         stylizedWaterPinned: zoneSnapshot.world.water.style === "cortiz-anime-voronoi"
           && zoneSnapshot.world.water.source === STYLIZED_WATER_SOURCE
           && zoneSnapshot.world.water.textureFree && zoneSnapshot.world.water.sameOriginRequests === 0,

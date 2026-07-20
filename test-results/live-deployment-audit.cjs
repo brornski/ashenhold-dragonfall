@@ -140,7 +140,7 @@ function inspectWorldOverrides(source) {
 }
 
 async function run() {
-  const [root, app, worldOverrides, monster, warden, normal, desertSkybox, moonSkybox, shoreSkybox, snowySkybox, manifest, ...moduleResponses] = await Promise.all([
+  const [root, app, worldOverrides, monster, warden, normal, desertSkybox, moonSkybox, shoreSkybox, snowySkybox, mountainSkybox, manifest, ...moduleResponses] = await Promise.all([
     request("/"),
     request("/app.js"),
     request("/world-overrides.js"),
@@ -151,6 +151,7 @@ async function run() {
     request("/assets/textures/skyboxes/moonfall-moonsky-2k.png"),
     request("/assets/textures/skyboxes/drowned-coast-skybox-2k.png"),
     request("/assets/textures/skyboxes/frostbound-skyline-2k.png"),
+    request("/assets/textures/skyboxes/skysunder-graveyard-skybox.jpg"),
     request("/manifest.json"),
     ...multiplayerModules.map(([, path]) => request(path))
   ]);
@@ -198,6 +199,7 @@ async function run() {
     moonSkybox200: moonSkybox.status === 200 && Number(moonSkybox.headers["content-length"] || moonSkybox.body.length) > 900000,
     drownedCoastSkybox200: shoreSkybox.status === 200 && Number(shoreSkybox.headers["content-length"] || shoreSkybox.body.length) > 800000,
     frostboundSkybox200: snowySkybox.status === 200 && Number(snowySkybox.headers["content-length"] || snowySkybox.body.length) > 700000,
+    skysunderSkybox200: mountainSkybox.status === 200 && Number(mountainSkybox.headers["content-length"] || mountainSkybox.body.length) > 140000,
     manifest200: manifest.status === 200 && /Ashenhold/.test(manifest.body),
     secureOrigin: baseUrl.protocol === "https:",
     forbiddenFiles404: forbidden.every((result) => result.status === 404),

@@ -79,7 +79,9 @@ The previous Quaternius Warrior asset remains preserved in the repository under 
 - Runtime assets: `assets/textures/skyboxes/drowned-coast-skybox-2k.png` and `assets/textures/skyboxes/frostbound-skyline-2k.png`.
 - Source archives: `drowned coast skybox.zip` and `snowbound skyline.zip`, supplied by the project owner for inclusion in Ashenhold.
 - The unmodified 2048 x 1024 panoramas replace only the Drowned Coast and Frostbound Wilds generated skies; redundant cubemap faces and layout references are not shipped.
-- None of the four supplied archives included original author or license metadata. Local provenance and authorization notice: `assets/textures/skyboxes/LICENSE-USER-SUPPLIED.md`.
+- Runtime asset: `assets/textures/skyboxes/skysunder-graveyard-skybox.jpg`.
+- Source image: `graveyard skybox.jpg`, supplied by the project owner for Sky-Sunder Peaks. The unmodified 1280 x 640 equirectangular panorama replaces only that region's generated sky.
+- None of the five supplied sky sources included original author or license metadata. Local provenance and authorization notice: `assets/textures/skyboxes/LICENSE-USER-SUPPLIED.md`.
 
 ## Generated tundra grass
 
