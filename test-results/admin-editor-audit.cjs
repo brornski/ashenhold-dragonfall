@@ -12,6 +12,28 @@ function check(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+function vectorDistance(a, b) {
+  if (!a || !b) return Infinity;
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function vectorLength(value) {
+  if (!value) return Infinity;
+  return Math.hypot(value.x, value.y, value.z);
+}
+
+function directionDot(a, b) {
+  const aLength = vectorLength(a);
+  const bLength = vectorLength(b);
+  if (!Number.isFinite(aLength) || !Number.isFinite(bLength) || aLength <= 0 || bLength <= 0) return -1;
+  return (a.x * b.x + a.y * b.y + a.z * b.z) / (aLength * bLength);
+}
+
+function angleDistance(a, b) {
+  const delta = (a - b) % (Math.PI * 2);
+  return Math.abs(delta > Math.PI ? delta - Math.PI * 2 : delta < -Math.PI ? delta + Math.PI * 2 : delta);
+}
+
 async function waitForBridge() {
   const deadline = Date.now() + 12000;
   while (Date.now() < deadline) {
@@ -278,6 +300,204 @@ async function stopBridgeProcess(bridge) {
     check(runtime.report.valid && runtime.undoWorked && runtime.redoWorked, "Validation or editor history failed.");
     check(runtime.publicApi.join(",") === "snapshot,modelCatalog,multiplayerSnapshot", "Normal public game API contract changed.");
 
+    check(runtime.before.mode === "freecam", "Forge must boot directly into freecam mode.");
+    check(await admin.locator("#adminModeFreecam").getAttribute("aria-pressed") === "true", "Freecam toolbar state was not active at boot.");
+
+    const pointerTarget = await admin.evaluate(() => {
+      const api = window.__ASHENHOLD_ADMIN__;
+      const modelSlot = api.modelCatalog().some((entry) => entry.id === "crateBig") ? "crateBig" : api.modelCatalog()[0].id;
+      const created = api.addModel(modelSlot);
+      if (!created) return null;
+      const transformed = api.setTransform(created.id, {
+        position: { x: 240, y: 90, z: 240 },
+        rotationY: 0,
+        scale: { x: 4, y: 4, z: 4 }
+      });
+      api.select(null);
+      return transformed;
+    });
+    check(pointerTarget && pointerTarget.id, "Could not create an isolated freecam pointer target.");
+
+    await admin.locator("#adminCollapse").dispatchEvent("click");
+    await admin.waitForTimeout(120);
+
+    async function prepareFreecamTarget(id, selected) {
+      return admin.evaluate(async ({ entityId, shouldSelect }) => {
+        const api = window.__ASHENHOLD_ADMIN__;
+        api.controls.setPaused(true);
+        api.controls.clearInput();
+        api.controls.setMode("freecam");
+        api.select(null);
+        api.focus(entityId);
+        if (shouldSelect) {
+          api.select(entityId);
+          api.setTransformMode("translate");
+        }
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const point = shouldSelect ? api.projectGizmo("x") : api.projectEntity(entityId);
+        const element = point && document.elementFromPoint(point.clientX, point.clientY);
+        return {
+          point,
+          blockedByEditor: Boolean(element && element.closest && element.closest(".ashenhold-admin")),
+          pickedAxis: shouldSelect && point ? api.pickGizmo(point.clientX, point.clientY) : null,
+          info: api.info(),
+          entity: api.getEntity(entityId),
+          documentEntry: api.getDocument().entities[entityId]
+        };
+      }, { entityId: id, shouldSelect: Boolean(selected) });
+    }
+
+    const clickBefore = await prepareFreecamTarget(pointerTarget.id, false);
+    check(clickBefore.point?.inViewport && !clickBefore.blockedByEditor, "Projected freecam selection target was not exposed in the viewport.");
+    await admin.mouse.move(clickBefore.point.clientX, clickBefore.point.clientY);
+    await admin.mouse.down({ button: "left" });
+    await admin.waitForTimeout(55);
+    await admin.mouse.up({ button: "left" });
+    await admin.waitForFunction((id) => window.__ASHENHOLD_ADMIN__.info().selectedId === id, pointerTarget.id);
+    const clickAfter = await admin.evaluate((id) => ({
+      info: window.__ASHENHOLD_ADMIN__.info(),
+      entity: window.__ASHENHOLD_ADMIN__.getEntity(id),
+      documentEntry: window.__ASHENHOLD_ADMIN__.getDocument().entities[id]
+    }), pointerTarget.id);
+    check(clickAfter.info.mode === "freecam" && clickAfter.info.selectedId === pointerTarget.id, "A short left click did not select the entity while retaining freecam.");
+    check(vectorDistance(clickBefore.info.camera.position, clickAfter.info.camera.position) < .01
+      && directionDot(clickBefore.info.camera.forward, clickAfter.info.camera.forward) > .99999, "A short selection click moved or rotated freecam.");
+    check(clickAfter.info.history.length === clickBefore.info.history.length
+      && JSON.stringify(clickAfter.entity.transform) === JSON.stringify(clickBefore.entity.transform)
+      && JSON.stringify(clickAfter.documentEntry) === JSON.stringify(clickBefore.documentEntry), "A short selection click mutated the entity or editor history.");
+
+    const leftDragBefore = await prepareFreecamTarget(pointerTarget.id, false);
+    await admin.mouse.move(leftDragBefore.point.clientX, leftDragBefore.point.clientY);
+    await admin.mouse.down({ button: "left" });
+    await admin.mouse.move(leftDragBefore.point.clientX + 72, leftDragBefore.point.clientY + 30, { steps: 5 });
+    await admin.mouse.up({ button: "left" });
+    await admin.waitForTimeout(40);
+    const leftDragAfter = await admin.evaluate((id) => ({
+      info: window.__ASHENHOLD_ADMIN__.info(),
+      entity: window.__ASHENHOLD_ADMIN__.getEntity(id),
+      documentEntry: window.__ASHENHOLD_ADMIN__.getDocument().entities[id]
+    }), pointerTarget.id);
+    check(leftDragAfter.info.mode === "freecam" && leftDragAfter.info.selectedId === null, "A left look-drag selected an entity or exited freecam.");
+    check(directionDot(leftDragBefore.info.camera.forward, leftDragAfter.info.camera.forward) < .999
+      && vectorDistance(leftDragBefore.info.camera.position, leftDragAfter.info.camera.position) < .01, "A left drag did not rotate freecam in place.");
+    check(leftDragAfter.info.history.length === leftDragBefore.info.history.length
+      && JSON.stringify(leftDragAfter.entity.transform) === JSON.stringify(leftDragBefore.entity.transform)
+      && JSON.stringify(leftDragAfter.documentEntry) === JSON.stringify(leftDragBefore.documentEntry), "A left look-drag transformed the pointed entity.");
+    const leftReleased = leftDragAfter.info.camera;
+    await admin.mouse.move(leftDragBefore.point.clientX + 105, leftDragBefore.point.clientY + 55, { steps: 2 });
+    await admin.waitForTimeout(40);
+    const afterReleasedMove = await admin.evaluate(() => window.__ASHENHOLD_ADMIN__.info());
+    check(directionDot(leftReleased.forward, afterReleasedMove.camera.forward) > .999999
+      && !afterReleasedMove.controls.dragActive, "Pointer release left freecam look or transform capture active.");
+
+    const rightDragBefore = await prepareFreecamTarget(pointerTarget.id, false);
+    await admin.mouse.move(rightDragBefore.point.clientX, rightDragBefore.point.clientY);
+    await admin.mouse.down({ button: "right" });
+    await admin.mouse.move(rightDragBefore.point.clientX - 58, rightDragBefore.point.clientY + 24, { steps: 5 });
+    await admin.mouse.up({ button: "right" });
+    await admin.waitForTimeout(40);
+    const rightDragAfter = await admin.evaluate(() => window.__ASHENHOLD_ADMIN__.info());
+    check(rightDragAfter.mode === "freecam" && rightDragAfter.selectedId === null, "A right look-drag selected an entity or exited freecam.");
+    check(directionDot(rightDragBefore.info.camera.forward, rightDragAfter.camera.forward) < .999
+      && vectorDistance(rightDragBefore.info.camera.position, rightDragAfter.camera.position) < .01, "A right drag did not rotate freecam in place.");
+
+    const gizmoBefore = await prepareFreecamTarget(pointerTarget.id, true);
+    check(gizmoBefore.point?.inViewport && !gizmoBefore.blockedByEditor && gizmoBefore.pickedAxis === "x", "Projected X gizmo handle was not reliably pickable.");
+    await admin.mouse.move(gizmoBefore.point.clientX, gizmoBefore.point.clientY);
+    await admin.mouse.down({ button: "left" });
+    await admin.waitForTimeout(20);
+    const gizmoDuring = await admin.evaluate(() => window.__ASHENHOLD_ADMIN__.info());
+    check(gizmoDuring.controls.dragActive && gizmoDuring.controls.dragId === pointerTarget.id
+      && gizmoDuring.controls.dragMode === "translate" && gizmoDuring.controls.dragAxis === "x", "Real pointer input did not begin the projected X gizmo drag.");
+    await admin.mouse.move(gizmoBefore.point.clientX + 90, gizmoBefore.point.clientY, { steps: 5 });
+    await admin.mouse.up({ button: "left" });
+    await admin.waitForTimeout(50);
+    const gizmoAfter = await admin.evaluate((id) => ({
+      info: window.__ASHENHOLD_ADMIN__.info(),
+      entity: window.__ASHENHOLD_ADMIN__.getEntity(id),
+      documentEntry: window.__ASHENHOLD_ADMIN__.getDocument().entities[id]
+    }), pointerTarget.id);
+    check(Math.abs(gizmoAfter.entity.transform.position.x - gizmoBefore.entity.transform.position.x) >= .5
+      && Math.abs(gizmoAfter.entity.transform.position.y - gizmoBefore.entity.transform.position.y) < .001
+      && Math.abs(gizmoAfter.entity.transform.position.z - gizmoBefore.entity.transform.position.z) < .001, "Real X gizmo drag did not apply a snapped X-only transform.");
+    check(gizmoAfter.info.mode === "freecam" && gizmoAfter.info.selectedId === pointerTarget.id
+      && !gizmoAfter.info.controls.dragActive, "Gizmo completion did not retain freecam selection or release the drag.");
+    check(gizmoAfter.info.history.length === gizmoBefore.info.history.length + 1
+      && Math.abs(gizmoAfter.documentEntry.position.x - gizmoAfter.entity.transform.position.x) < .001, "Gizmo transform did not commit exactly one persistent history state.");
+    check(vectorDistance(gizmoBefore.info.camera.position, gizmoAfter.info.camera.position) < .01
+      && directionDot(gizmoBefore.info.camera.forward, gizmoAfter.info.camera.forward) > .99999, "Gizmo dragging rotated or moved freecam.");
+
+    const handoffBefore = await admin.evaluate(async (id) => {
+      const api = window.__ASHENHOLD_ADMIN__;
+      const testApi = window.__ASHENHOLD_TEST__;
+      api.controls.setMode("select");
+      const surface = testApi.prepareSlideSurface("downhill");
+      const slideStarted = Boolean(surface && testApi.startPreparedSlide("downhill"));
+      testApi.jump();
+      const seededMotion = api.info().warden;
+      api.controls.setMode("freecam");
+      api.focus(id);
+      api.controls.clearInput();
+      api.controls.setInput("shift", true);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { surface, slideStarted, seededMotion, info: api.info() };
+    }, pointerTarget.id);
+    check(handoffBefore.slideStarted && handoffBefore.seededMotion.velocityY > 10
+      && vectorLength(handoffBefore.seededMotion.airMomentum) > 5, "Could not seed nonzero Warden traversal motion before the freecam handoff.");
+    check(handoffBefore.info.mode === "freecam" && handoffBefore.info.controls.activeInputs.join(",") === "shift", "Freecam handoff input-reset precondition was not established.");
+    const handoffSource = handoffBefore.info.camera;
+    await admin.locator("#adminModeSelect").click();
+    await admin.waitForFunction(() => window.__ASHENHOLD_ADMIN__.info().mode === "select");
+    const handoffImmediate = await admin.evaluate(() => window.__ASHENHOLD_ADMIN__.info());
+    check(Math.abs(handoffImmediate.warden.position.x - handoffSource.position.x) < .02
+      && Math.abs(handoffImmediate.warden.position.y - handoffSource.position.y) < .02
+      && Math.abs(handoffImmediate.warden.position.z - handoffSource.position.z) < .02, "Returning to the Warden did not use the exact freecam XYZ position.");
+    check(Math.abs(handoffImmediate.warden.velocityY) < .000001
+      && vectorLength(handoffImmediate.warden.airMomentum) < .000001
+      && vectorLength(handoffImmediate.warden.groundMomentum) < .000001
+      && !handoffImmediate.warden.grounded && !handoffImmediate.warden.moving
+      && !handoffImmediate.warden.sliding && handoffImmediate.warden.slideSpeed === 0
+      && !handoffImmediate.warden.sprinting && !handoffImmediate.warden.superSprinting
+      && !handoffImmediate.warden.sprintLatch && !handoffImmediate.warden.superSprintLatch
+      && handoffImmediate.warden.dodgeTime === 0, "Freecam-to-Warden handoff retained traversal velocity or movement state.");
+    check(handoffImmediate.controls.activeInputs.length === 0 && !handoffImmediate.controls.dragActive, "Freecam-to-Warden handoff retained admin input or drag state.");
+    const handoffSettledA = await admin.evaluate(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return window.__ASHENHOLD_ADMIN__.info();
+    });
+    await admin.waitForTimeout(160);
+    const handoffSettledB = await admin.evaluate(() => window.__ASHENHOLD_ADMIN__.info());
+    check(vectorDistance(handoffSettledA.camera.position, handoffSettledB.camera.position) < .02
+      && directionDot(handoffSettledA.camera.forward, handoffSettledB.camera.forward) > .99999
+      && vectorDistance(handoffImmediate.warden.position, handoffSettledB.warden.position) < .001, "The camera or paused Warden drifted after the freecam handoff.");
+    check(angleDistance(handoffSettledB.camera.gameplayYaw, handoffSource.freecamYaw) < .005
+      && Math.abs(handoffSettledB.camera.gameplayPitch - handoffSource.freecamPitch) < .005
+      && directionDot(handoffSettledB.camera.forward, handoffSource.forward) > .9999, "The Warden camera did not preserve the freecam view direction.");
+
+    const freecamAudit = {
+      targetId: pointerTarget.id,
+      click: {
+        cameraTravel: vectorDistance(clickBefore.info.camera.position, clickAfter.info.camera.position),
+        directionDot: directionDot(clickBefore.info.camera.forward, clickAfter.info.camera.forward)
+      },
+      leftDrag: { directionDot: directionDot(leftDragBefore.info.camera.forward, leftDragAfter.info.camera.forward) },
+      rightDrag: { directionDot: directionDot(rightDragBefore.info.camera.forward, rightDragAfter.camera.forward) },
+      gizmo: {
+        deltaX: gizmoAfter.entity.transform.position.x - gizmoBefore.entity.transform.position.x,
+        historyDelta: gizmoAfter.info.history.length - gizmoBefore.info.history.length
+      },
+      handoff: {
+        source: handoffSource.position,
+        warden: handoffImmediate.warden.position,
+        placementError: vectorDistance(handoffSource.position, handoffImmediate.warden.position),
+        settledCameraDrift: vectorDistance(handoffSettledA.camera.position, handoffSettledB.camera.position),
+        viewDirectionDot: directionDot(handoffSettledB.camera.forward, handoffSource.forward)
+      }
+    };
+
+    await admin.locator("#adminExpand").dispatchEvent("click");
+    await admin.waitForTimeout(80);
+
     await admin.locator('[data-admin-tab="appearance"]').dispatchEvent("click");
     await admin.waitForSelector("#adminApplyColor");
     await admin.locator('[data-admin-tab="world"]').dispatchEvent("click");
@@ -379,9 +599,17 @@ async function stopBridgeProcess(bridge) {
         safeDecorativeLifecycle: true, gameplayLifecycleGuardrails: true, gameplayStatePreserved: true,
         treelessDesert: true, enemyTuning: true, history: true, dataOnlyExport: true,
         ordinaryUrlReadOnly: true, ordinaryUrlSkipsEditorAssets: true, productionOverridesApplied: true,
-        productionGameplayLifecycle: true, cleanDiagnostics: true
+        productionGameplayLifecycle: true, cleanDiagnostics: true,
+        defaultFreecam: true, freecamShortClickSelects: true, freecamShortClickStable: true,
+        freecamLeftDragLooksWithoutPicking: true, freecamRightDragLooks: true, freecamPointerReleaseClean: true,
+        freecamGizmoTransform: true, freecamGizmoRetainsMode: true,
+        freecamWardenExactHandoff: true, freecamWardenMotionReset: true,
+        freecamWardenInputReset: true, freecamWardenCameraStable: true
       },
-      metrics: { entities: runtime.entities, modelSlots: runtime.modelSlots, categories: runtime.categories, bridgeBranch: session.branch }
+      metrics: {
+        entities: runtime.entities, modelSlots: runtime.modelSlots, categories: runtime.categories,
+        bridgeBranch: session.branch, freecam: freecamAudit
+      }
     }, null, 2));
   } finally {
     if (browser) await browser.close().catch(() => {});
