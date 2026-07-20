@@ -27,7 +27,7 @@ jobs:
       - name: Assemble runtime-only site
         run: |
           mkdir -p _site
-          cp index.html styles.css app.js manifest.json _site/
+          cp index.html styles.css app.js manifest.json multiplayer-client.js multiplayer-avatars.js multiplayer-game.js multiplayer-ui.js _site/
           cp -R assets _site/assets
           touch _site/.nojekyll
 

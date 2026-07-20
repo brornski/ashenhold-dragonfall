@@ -1,4 +1,4 @@
-# Ashenhold: Dragonfall - release 5.5 world developer handoff
+# Ashenhold: Dragonfall - release 5.5 developer handoff
 
 Updated July 19, 2026. This is the source-of-truth engineering handoff for the static browser release at https://brornski.github.io/ashenhold-dragonfall/.
 
@@ -23,9 +23,14 @@ Never use `file://`; GLTF, texture, and font loading require an HTTP origin.
 
 | Path | Responsibility |
 | --- | --- |
-| `index.html` | Semantic shell, premium title deck, HUD, overlays, touch controls, local vendor script order |
-| `styles.css` | Responsive UI, animation, accessibility states, biome grading, 844x390 compact layout |
-| `app.js` | Renderer, deterministic world generation, collisions, AI, combat, progression, persistence, audio, public/test APIs |
+| `index.html` | Semantic shell, premium title/party deck, public socket metadata, HUD, overlays, touch controls, script order |
+| `styles.css` | Responsive UI, party states, animation, accessibility, biome grading, 844x390 compact layout |
+| `app.js` | Renderer, deterministic world generation, collisions, living AI, combat, progression, persistence, co-op adapter, public/test APIs |
+| `multiplayer-client.js` | Protocol 1 WebSocket client, reconnect, latency, state/event tracks, interpolation |
+| `multiplayer-avatars.js` | Procedural animated remote-Warden renderer and nameplates |
+| `multiplayer-game.js` | Party client/game adapter coordinator and synchronization lifecycle |
+| `multiplayer-ui.js` | Solo/Host/Join title flow, invite links, roster, status, and in-game party HUD |
+| `multiplayer-server/` | Node/Express/WebSocket authoritative room service, Vercel entry points, and service tests |
 | `assets/vendor/` | Local Three.js r128, GLTFLoader, SkeletonUtils, and notices |
 | `assets/models/` | Local Kenney, KayKit, and Quaternius model packs |
 | `assets/textures/` | Local terrain, sky, and six biome PBR sets |
@@ -34,22 +39,61 @@ Never use `file://`; GLTF, texture, and font loading require an HTTP origin.
 | `.github/workflows/pages.yml` | Runtime-only GitHub Pages artifact and deployment |
 | `vercel.json` | Optional legacy/custom-host security and cache headers |
 
-The runtime is one closure in `app.js`. There is no backend, login, analytics, payment, cloud save, multiplayer, or anti-cheat layer. All runtime requests must remain on the page origin.
+The gameplay runtime remains one closure in `app.js`, with narrow adapter calls into four classic browser modules. There is no client bundler, login, analytics, payment, cloud save, matchmaking, chat, durable room database, or anti-cheat guarantee. Runtime assets and non-party requests remain same-origin; the sole external exception is the opt-in secure production WebSocket documented below.
 
 Runtime states are `loading`, `title`, `playing`, `paused`, `skills`, `resolving`, and `ended`. `#game[data-state]` mirrors the state for CSS and accessibility behavior.
 
 ## Boot order
 
-1. Parse query flags and validate progression, active-run, and realm envelopes.
-2. Select the current biome and deterministic seed.
-3. Build the 12-branch/66-node skill graph.
-4. Initialize WebGL, adaptive quality, camera, fog, light, and the audio facade.
-5. Load the active biome's local textures and model catalog.
-6. Generate terrain, road, forts, wilderness, imported world props, ascent structures, runes, settlements, chests, signature biome props, and atmosphere.
-7. Create the Warden, register strongholds, spawn garrisons/dragons, and build landmarks.
-8. Enter the responsive title state and offer Continue only when an active run matches layout version 7.
+1. Load local Three.js/loader vendors, then `multiplayer-client.js`, `multiplayer-avatars.js`, `multiplayer-game.js`, `multiplayer-ui.js`, and finally `app.js`.
+2. Build the title party controller in Solo mode without opening a socket.
+3. Parse query flags and validate progression, active-run, and realm envelopes.
+4. Select the current biome and deterministic seed.
+5. Build the 12-branch/66-node skill graph.
+6. Initialize WebGL, adaptive quality, camera, fog, light, audio, and the optional co-op adapter.
+7. Load the active biome's local textures and measured model catalog.
+8. Generate terrain, road, forts, forest, infrastructure, settlements, chests, ascent structures, runes, signature props, and atmosphere.
+9. Create the Warden, register strongholds, spawn garrisons/dragons, and build landmarks.
+10. Enter the responsive title state and offer Continue only when an active run matches layout version 7. Host/Join must connect before entering a shared realm.
 
-The title deck reads live realm data: biome, seed, Warden level, and stronghold count. It has independent Continue/New Realm actions and collapses into a compact landscape presentation without covering the canvas.
+The title deck reads live realm data: biome, seed, Warden level, and stronghold count. It has independent Continue/New Realm actions plus Solo/Host/Join states. Name/code fields, connection status, roster, session controls, and the in-game room/latency HUD must be keyboard reachable, announce status changes, honor `[hidden]`, and remain usable at 844x390.
+
+## Co-op architecture and security
+
+Release 5.5 supports a host plus one to three guests. A host creates a six-character room for the current biome/seed; an invite uses `?room=CODE&autojoin=1`. Guests reload onto the host's deterministic realm when needed. Only the host may register the world or start it. Host succession chooses the earliest connected Warden after the 60-second reconnect grace expires.
+
+The browser layers are intentionally separate:
+
+1. `multiplayer-ui.js` owns consent and party presentation. Solo never calls `WebSocket`.
+2. `multiplayer-client.js` speaks protocol 1, sends player frames at no more than 20 Hz, interpolates remote tracks over 110 ms, pings, and retries dropped rooms with bounded backoff.
+3. `multiplayer-game.js` applies snapshots/events through the adapter exposed by `app.js`.
+4. `multiplayer-avatars.js` renders remote Wardens; it disposes generated geometry, materials, textures, and nameplates on removal.
+5. `multiplayer-server/core.mjs` owns room revisions, connected players, ground-enemy AI/damage, per-player chest claims, taming, stronghold clears, and host changes. The host supplies the deterministic world/navigation envelope and bounded dragon transforms.
+
+The public endpoint is configured by:
+
+```html
+<meta name="ashenhold-multiplayer-url" content="wss://multiplayer-server-weld.vercel.app/api/ws">
+```
+
+That `wss://` connection is the only approved cross-origin runtime request. No bearer token, service credential, private key, or privileged URL may appear in the static client. Room codes identify an invitation but provide no authentication or privacy boundary. The socket carries the chosen display name, a transient client ID, realm/position/combat state, and room gameplay events; never add progression envelopes, local-storage contents, or secrets to those payloads. Plain `ws://` is permitted only for a loopback development override.
+
+Server commands:
+
+```powershell
+Set-Location multiplayer-server
+npm ci
+npm test
+npm start
+```
+
+Local service: `ws://127.0.0.1:8787/ws`. The release meta tag wins over the automatic localhost fallback, so set `localStorage["ashenhold.multiplayer.serverUrl"]` to that URL and reload while developing; remove the key afterward. Remote protocol smoke:
+
+```powershell
+npm run test:remote -- wss://multiplayer-server-weld.vercel.app/api/ws
+```
+
+Rooms are process-memory only, hold at most four connected Wardens, expire after 30 idle minutes, and retain disconnected players for 60 seconds. Server restarts or serverless instance replacement discard rooms. Progression and active-run saves remain local to each browser; there is no account, matchmaking, room password, cloud save, chat, cross-instance room routing guarantee, or anti-cheat guarantee.
 
 ## Realm generation
 
@@ -126,6 +170,19 @@ If `PHOENIX OATH` is owned and Second Wind has been consumed, the next actual st
 
 The conquest HUD shows cleared/total, percentage fill, and the nearest uncleared location. Cleared location markers dim on the minimap. At quest stage 3, `currentObjective()` points to the nearest uncleared stronghold. Full victory requires `questStage === 3 && strongholds.every(cleared)`; neither boss-first nor strongholds-first ordering can bypass the other requirement.
 
+## Living garrison AI
+
+Ground defenders no longer acquire the Warden globally at spawn. Each seeded garrison member receives a role and home behavior:
+
+- gate sentries and courtyard guards hold authored posts
+- tower lookouts trade a narrower post for longer sight
+- patrol guards and beasts traverse two to four seeded walkable points
+- reserves and heavy defenders protect the interior until alerted
+
+The state machine covers guard, patrol, suspicious, combat, search, and return behavior. Vision uses role-specific range/cone buildup, height bounds, and obstruction checks. Movement noise can raise suspicion without line of sight; confirmed threats share alerts only with nearby unobstructed allies. Combat chooses attack, strafe, pressure, or home return while maintaining local separation.
+
+Stronghold navigation is a bounded, collider-aware local grid with deterministic path requests. Actors repath when blocked, respect their home leash, recover from invalid positions by searching nearby rings, and return to their role post after losing the target. Far visibility culling must not reset AI state or break deterministic stronghold membership. `garrisonAIDebug()`, perception/alert/path/separation/leash probes, and stuck recovery are test-only diagnostics.
+
 ## Relic chests and permanent power
 
 Every fort, ascent, and POI chest has a deterministic `powerUp` selected from:
@@ -190,6 +247,12 @@ The sprint animation overlay, FOV, time scale, streaks, and storm effects consum
 | Stormstride | 1 | +25% super speed and a lightning AoE trail every 0.25 seconds |
 
 At capstone, super sprint reaches about +130% before relic and bonded-creature bonuses. Movement substeps are therefore a functional requirement, not merely a polish feature.
+
+## Contextual motion and direct skills
+
+`Control` is contextual. On a usable downhill grade it enters a collision-aware slide, aligns momentum with descent, accelerates within a bounded speed, lowers the Warden pose, and carries horizontal momentum into a slide jump. On flat ground or uphill, the same input retains the existing super-sprint contract. Releasing input, losing a valid surface, colliding, or exhausting the slide returns cleanly to ordinary locomotion.
+
+Airborne presentation is phase-driven (`jump`, `rise`, `apex`, `fall`, `land`, `grounded`). Sprint flags and run animation drop while airborne, the additive pose distinguishes rise/fall and landing, and residual air momentum decays without bypassing `movePlayer()` collision checks. The desktop Skills control is labeled with `K`; touch layouts receive dedicated Skills and Slide controls. Both must remain reachable and legible at 844x390.
 
 ## Creature taming and companions
 
@@ -263,7 +326,7 @@ Compatibility fields `weaponLevel` and `weaponXp` are still written. Loading mig
 
 ### Active run
 
-Local-storage key: `ashenhold-active-run-v1`. Payload version: 1; layout version: 6.
+Local-storage key: `ashenhold-active-run-v1`. Payload version: 1; layout version: 7.
 
 It stores realm/seed, player transform and combat resources, run skills, quest/boss state, discovery cells, landmarks, runes, chest IDs, dead dragons, cleared stronghold IDs, handled tamed-member spawn keys, up to two companions, and deterministic encounter RNG. Old envelopes with a `director.rngState` can contribute only an RNG fallback; wave/director state is no longer written or consumed.
 
@@ -287,14 +350,16 @@ Animated models must be cloned safely through `SkeletonUtils`. Mixers are advanc
 
 ## Public and test APIs
 
-Normal pages expose only read-only methods:
+The normal `window.ashenholdGame` surface exposes only read-only methods:
 
 - `window.ashenholdGame.snapshot()`
 - `window.ashenholdGame.modelCatalog()`
 
 The snapshot includes realm, player/progression, relic bonuses, companions/Bonded Pace, stronghold summary/list, quest, route reports, POIs, asset density, canonical model dimensions, forest LOD/culling counts, infrastructure density, sky signature, capture-flag totals, model slots, spawn failures, collision-relevant position, sprint latches, renderer counts, and quality.
 
-Only `?test` exposes mutating `window.__ASHENHOLD_TEST__` helpers. Important 5.4 additions are:
+The separately loaded multiplayer modules expose `window.AshenholdMultiplayer`, `window.AshenholdRemoteWardens`, `window.AshenholdCoopRuntime`, and the live `window.AshenholdParty` controller. These are protocol/presentation boundaries, not permission to expose test mutations or raw save data. The game snapshot's co-op summary is diagnostic and must not include credentials or private payloads.
+
+Only `?test` exposes mutating `window.__ASHENHOLD_TEST__` helpers. Important 5.4/5.5 additions are:
 
 - `strongholdDebug()` and `clearStronghold(id)`
 - `prepareNearestTame()` and expanded `enemyDebug()`
@@ -303,6 +368,9 @@ Only `?test` exposes mutating `window.__ASHENHOLD_TEST__` helpers. Important 5.4
 - `chestPositions()` with deterministic `powerUp`
 - `modelCatalog()` and `skillSchema()`
 - `modelScaleRegistry()`, `forestDebug()`, `infrastructureDebug()`, `skyDebug()`, and `captureFlagDebug()`
+- `garrisonAIDebug()` plus perception, alert, navigation, separation, leash, and stuck-recovery probes
+- chest-interaction and slide-surface/collision preparation probes for contextual motion
+- co-op snapshot/event hooks used by the deterministic two-browser harness
 - active-run write/read and progression migration helpers
 
 Never expose those mutations on a normal production URL.
@@ -314,6 +382,8 @@ Install once in `test-results/` or use the workstation cache described in `AGENT
 ```powershell
 $env:ASHENHOLD_BASE='http://127.0.0.1:4173/'
 node test-results\e2e-smoke.cjs
+node test-results\ai-garrison-audit.cjs
+node test-results\motion-regression.cjs
 node test-results\production-audit.cjs
 node test-results\accessibility-audit.cjs
 node test-results\payload-audit.cjs
@@ -321,9 +391,20 @@ node test-results\payload-audit.cjs
 
 The deterministic smoke covers title boot, local models/PBR, combat roles, runes/souls, permanent chest power, stronghold rewards/victory, taming, base/capstone sprint, hysteresis, collision recovery, routes/POIs, camera, minimap, mobile-safe state, and clean browser diagnostics.
 
+`npm run ai` covers seeded garrison roles/posts, patrols, partial/full perception, noise, shared alerts, state transitions, local paths, separation, home leashes, culling continuity, and recovery. `npm run motion` covers strict chest interaction, visible Skills access, airborne phases, slope-gated sliding, slide acceleration/collision/jump momentum, flat/uphill super sprint, touch controls, and diagnostics. `npm run multiplayer` is the two-browser Host/Join convergence audit for realm alignment, remote Wardens, authoritative events, HUD state, reconnect, and Solo no-connect behavior.
+
 The production audit covers the biome/seed matrix, geometry and roster divergence, model density, 8+ POIs, 12+ strongholds with garrisons, progression migration/restore, combat timing, high-level garrison scaling, taming, sprint capstone, unified victory, 844x390 controls, and console/HTTP cleanliness.
 
-Accessibility scans desktop title/gameplay/skills and mobile gameplay. Serious/critical violations block. Payload audit requires boot below 60 seconds, cold active-biome transfer below 18 MB, same-origin-only requests, and clean diagnostics. The July 19 local 5.4 result was 845 ms, 16.47 MB, 133 resources, and no diagnostics.
+Accessibility scans desktop title/party/gameplay/skills and 844x390 gameplay. Serious/critical violations block. Payload audit requires boot below 60 seconds, cold active-biome transfer below 18 MB, clean diagnostics, and no external browser request except an explicitly initiated connection to the exact approved `wss://` party endpoint. Solo must produce no socket request. Historical 5.4 timing is not a 5.5 pass; record fresh results for this release.
+
+The service gate is separate because it installs production server dependencies:
+
+```powershell
+Set-Location multiplayer-server
+npm ci
+npm test
+npm run test:remote -- wss://multiplayer-server-weld.vercel.app/api/ws
+```
 
 ## GitHub Pages deployment
 
@@ -331,7 +412,7 @@ The primary release workflow follows GitHub's Pages artifact model:
 
 1. merge tested work to `main`
 2. GitHub Actions checks out `main`
-3. the workflow assembles `_site` from `index.html`, `styles.css`, `app.js`, `manifest.json`, and `assets/`
+3. the workflow assembles `_site` from `index.html`, `styles.css`, `app.js`, `manifest.json`, all four multiplayer browser modules, and `assets/`
 4. `actions/upload-pages-artifact` uploads only that runtime tree
 5. `actions/deploy-pages` publishes it to the `github-pages` environment
 
@@ -345,7 +426,7 @@ node test-results\live-deployment-audit.cjs
 node test-results\e2e-smoke.cjs
 ```
 
-Verify root/title, layout marker 7, active GLTF, biome normal map, manifest, excluded docs/tests/tools, same-origin browser requests, and a full stronghold victory. GitHub Pages does not expose Vercel's configurable response headers; the live audit applies provider-appropriate checks.
+Verify root/title/party states, layout marker 7, active GLTF, biome normal map, manifest, all four multiplayer modules, excluded docs/tests/server/tools, exact socket metadata, no external requests in Solo, the approved secure socket after opt-in, two-client room convergence, and a full stronghold victory. GitHub Pages does not expose Vercel's configurable response headers; the live audit applies provider-appropriate checks.
 
 ## Safe extension patterns
 
@@ -359,14 +440,15 @@ Changing terrain or structures requires checking safe start/keep/fort foundation
 
 ## Honest limitations
 
-Ashenhold 5.4 is a polished static browser game, not a large-studio native production.
+Ashenhold 5.5 is a browser game with an optional lightweight room service, not a large-studio native production.
 
 - Three.js r128 is old and an upgrade needs a separate import/render regression pass.
-- Ground enemies use local obstacle whiskers and home leashes, not a full navmesh.
+- Ground enemies use bounded per-stronghold navigation grids and local steering, not a whole-world navmesh.
 - Dragons are procedural rather than skeletal.
 - Companions use lightweight follow/attack behavior and are not a commandable party system.
-- Saves are browser/device local and player-editable.
-- No cloud backend, multiplayer, leaderboard, localization pipeline, or remapping UI exists.
+- Saves and permanent progression are browser/device local and player-editable, including during co-op.
+- Co-op rooms are unauthenticated, memory-only, capped at four Wardens, and lost on service restart/instance replacement; there is no matchmaking, durable recovery, chat, cloud save, or anti-cheat guarantee.
+- No leaderboard, localization pipeline, or remapping UI exists.
 - Automated software-rendered WebGL cannot replace real GPU, thermal, controller, screen-reader, and long-session memory QA.
 
-Highest-value future work: a modern Three.js migration, navmesh/pathfinding, skeletal dragons, mesh LODs, gamepad/remapping/accessibility settings, companion commands, and an opt-in authenticated cloud save only when backend scope is explicitly authorized.
+Highest-value future work: a modern Three.js migration, whole-world navigation, skeletal dragons, mesh LODs, gamepad/remapping/accessibility settings, companion commands, authenticated/private rooms with durable shared state, and opt-in cloud save only when backend scope is explicitly authorized.
