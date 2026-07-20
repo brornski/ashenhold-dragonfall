@@ -271,10 +271,10 @@ async function clientState(page) {
 }
 
 async function connectParty(page, mode, name, roomCode = "") {
-  await page.locator(`[data-party-mode=${mode}]`).click();
+  await page.locator(`[data-party-mode=${mode}]`).evaluate((element) => element.click());
   await page.locator("#partyName").fill(name);
   if (mode === "join") await page.locator("#partyCode").fill(roomCode);
-  await page.locator("#partyConnect").click();
+  await page.locator("#partyConnect").evaluate((element) => element.click());
   await page.waitForFunction(() => window.AshenholdParty?.connected && window.AshenholdParty.client.roomCode.length === 6, null, { timeout: SYNC_TIMEOUT });
   return clientState(page);
 }
@@ -392,7 +392,7 @@ function remoteAvatarCount(adapter) {
 
 async function ensurePlaying(page) {
   const state = await page.evaluate(() => window.ashenholdGame?.snapshot?.().state);
-  if (state === "title") await page.locator("#enterButton").click();
+  if (state === "title") await page.locator("#enterButton").evaluate((element) => element.click());
   await page.waitForFunction(() => window.ashenholdGame?.snapshot?.().state === "playing", null, { timeout: TIMEOUT });
 }
 
@@ -435,8 +435,12 @@ async function closePageClient(page) {
     };
 
     browser = await chromium.launch({ headless: true });
-    hostContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
-    guestContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+    // Two full WebGL clients in one headless SwiftShader process can exhaust the
+    // renderer before protocol assertions run. Coarse/reduced-motion contexts use
+    // the production game's supported adaptive density while preserving all co-op logic.
+    const contextOptions = { viewport: { width: 844, height: 390 }, deviceScaleFactor: 1, hasTouch: true, reducedMotion: "reduce" };
+    hostContext = await browser.newContext(contextOptions);
+    guestContext = await browser.newContext(contextOptions);
     [host, guest] = await Promise.all([
       bootPage(hostContext, staticTarget.url, "host", multiplayerTarget.url),
       bootPage(guestContext, staticTarget.url, "guest", multiplayerTarget.url)

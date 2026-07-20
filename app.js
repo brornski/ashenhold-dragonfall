@@ -56,9 +56,14 @@
   const launchParams = new URLSearchParams(window.location.search);
   const testMode = launchParams.has("test");
   const persistenceDisabled = testMode && !launchParams.has("test-save");
-  const REALM_KEY = "ashenhold-realm-v1";
   const RUN_SAVE_KEY = "ashenhold-active-run-v1";
-  const WORLD_LAYOUT_VERSION = 7;
+  const WORLD_ID = "ashenhold-continent-v1";
+  const WORLD_LAYOUT_SIGNATURE = "ashenhold-authored-continent-8";
+  const WORLD_LAYOUT_VERSION = 8;
+  const LEGACY_WORLD_LAYOUT_VERSION = 7;
+  // This number is a fixed art-direction key, not a generated map seed. It only
+  // gives repeatable variation to foliage and small props on the one canonical map.
+  const AUTHORED_WORLD_VARIATION = 0x41534845;
   const CANONICAL_WORLD_SCALE = Object.freeze({
     unitMeters: 1, wardenHeight: 1.9, doorHeight: 2.8, doorWidth: 2.4,
     houseHeight: [8, 12], castleWallHeight: [9, 15], gateHeight: [7, 10], towerHeight: [18, 32]
@@ -105,6 +110,47 @@
     moon: { name: "MOONFALL EXPANSE", textureId: "moon", relief: .84, base: 2.8, fog: 0x1a1633, fogDensity: .00205, ground: 0x444550, cliff: 0x5c5d6b, grass: 0x4c5260, grassStrength: 0, frost: 0xa4a7ba, frostStart: 34, water: 0x111522, waterLevel: -9, waterOpacity: .18, sky: 0x30344d, sun: 0xc3ccff, sunIntensity: 1.05, hemi: 0x606986, exposure: .88, skyZenith: 0x101426, skyHorizon: 0x4a4e78, skyGlow: 0xb8c4ff, stoneTint: 0x9a9ec0, particleSize: .85, particleOpacity: .24, particleFall: .4, particleCount: .55 }
   };
   const BIOME_IDS = Object.keys(BIOMES);
+  const CONTINENT_ZONES = Object.freeze([
+    Object.freeze({ id: "shore", name: BIOMES.shore.name, center: Object.freeze({ x: -590, z: 360 }), bounds: Object.freeze({ minX: -900, maxX: -300, minZ: -40, maxZ: 900 }), skybox: SKY_PROFILES.shore.id }),
+    Object.freeze({ id: "jungle", name: BIOMES.jungle.name, center: Object.freeze({ x: 0, z: 255 }), bounds: Object.freeze({ minX: -300, maxX: 300, minZ: -120, maxZ: 900 }), skybox: SKY_PROFILES.jungle.id }),
+    Object.freeze({ id: "desert", name: BIOMES.desert.name, center: Object.freeze({ x: 590, z: 360 }), bounds: Object.freeze({ minX: 300, maxX: 900, minZ: -40, maxZ: 900 }), skybox: SKY_PROFILES.desert.id }),
+    Object.freeze({ id: "snowy", name: BIOMES.snowy.name, center: Object.freeze({ x: -590, z: -410 }), bounds: Object.freeze({ minX: -900, maxX: -300, minZ: -900, maxZ: -40 }), skybox: SKY_PROFILES.snowy.id }),
+    Object.freeze({ id: "mountains", name: BIOMES.mountains.name, center: Object.freeze({ x: 0, z: -520 }), bounds: Object.freeze({ minX: -300, maxX: 300, minZ: -900, maxZ: -120 }), skybox: SKY_PROFILES.mountains.id }),
+    Object.freeze({ id: "moon", name: BIOMES.moon.name, center: Object.freeze({ x: 590, z: -410 }), bounds: Object.freeze({ minX: 300, maxX: 900, minZ: -900, maxZ: -40 }), skybox: SKY_PROFILES.moon.id })
+  ]);
+  const CONTINENT_ZONE_BY_ID = new Map(CONTINENT_ZONES.map((zone) => [zone.id, zone]));
+
+  function biomeIdAt(x, z) {
+    let nearest = CONTINENT_ZONES[0];
+    let nearestScore = Infinity;
+    CONTINENT_ZONES.forEach((zone) => {
+      const dx = Number(x) - zone.center.x;
+      const dz = Number(z) - zone.center.z;
+      const score = dx * dx + dz * dz;
+      if (score < nearestScore) { nearest = zone; nearestScore = score; }
+    });
+    return nearest.id;
+  }
+
+  function waterLevelAt(x, z) {
+    return BIOMES[biomeIdAt(x, z)].waterLevel;
+  }
+
+  function biomeBlendWeights(x, z) {
+    let total = 0;
+    const weights = CONTINENT_ZONES.map((zone) => {
+      const dx = x - zone.center.x;
+      const dz = z - zone.center.z;
+      const distanceSquared = dx * dx + dz * dz;
+      const weight = Math.pow(1 / (1 + distanceSquared / 105000), 3.2);
+      total += weight;
+      return { id: zone.id, weight };
+    });
+    weights.forEach((entry) => { entry.weight /= Math.max(.000001, total); });
+    return weights;
+  }
+
+  let currentBiomeId = biomeIdAt(START.x, START.z);
 
   const WORLD_PROFILES = {
     snowy: {
@@ -155,8 +201,16 @@
     if (persistenceDisabled) return null;
     try {
       const saved = JSON.parse(window.localStorage.getItem(RUN_SAVE_KEY) || "null");
-      if (!saved || saved.status !== "active" || saved.layoutVersion !== WORLD_LAYOUT_VERSION) return null;
-      if (!saved.realm || !BIOMES[saved.realm.biome] || !Number.isFinite(Number(saved.realm.seed))) return null;
+      if (!saved || saved.status !== "active") return null;
+      const legacy = saved.layoutVersion === LEGACY_WORLD_LAYOUT_VERSION && saved.realm && BIOMES[saved.realm.biome];
+      if (saved.layoutVersion !== WORLD_LAYOUT_VERSION && !legacy) return null;
+      if (saved.worldId && saved.worldId !== WORLD_ID) return null;
+      if (legacy) {
+        saved.migratedFromRealm = { biome: saved.realm.biome, seedIgnored: Number(saved.realm.seed) || null };
+        saved.layoutVersion = WORLD_LAYOUT_VERSION;
+      }
+      saved.worldId = WORLD_ID;
+      delete saved.realm;
       return saved;
     } catch (error) {
       console.warn("Active run save could not be read", error);
@@ -165,39 +219,15 @@
   }
 
   const storedRunEnvelope = readActiveRunEnvelope();
-
-  function readRealm() {
-    let saved = null;
-    try { saved = JSON.parse(window.sessionStorage.getItem(REALM_KEY) || "null"); } catch (error) { saved = null; }
-    const requestedBiome = launchParams.get("biome");
-    const requestedSeed = Number(launchParams.get("seed"));
-    const resumeRealm = !requestedBiome && storedRunEnvelope && storedRunEnvelope.realm;
-    const biome = BIOMES[requestedBiome] ? requestedBiome : resumeRealm ? resumeRealm.biome : saved && BIOMES[saved.biome] ? saved.biome : BIOME_IDS[Math.floor(Math.random() * BIOME_IDS.length)];
-    const seed = Number.isFinite(requestedSeed) && requestedSeed !== 0 ? requestedSeed : resumeRealm ? Number(resumeRealm.seed) : saved && Number.isFinite(saved.seed) ? saved.seed : Math.floor(Math.random() * 1000000000) + 1;
-    const value = { biome, seed };
-    try { window.sessionStorage.setItem(REALM_KEY, JSON.stringify(value)); } catch (error) { /* session storage is optional */ }
-    return value;
-  }
-
-  const realm = readRealm();
+  // `realm` remains as a small compatibility alias for older gameplay helpers.
+  // It is fixed and is never persisted, rotated, requested, or exposed as a map seed.
+  const realm = Object.freeze({ biome: "jungle" });
   const biome = BIOMES[realm.biome];
   const worldProfile = WORLD_PROFILES[realm.biome];
   const importedStoneTint = new THREE.Color(biome.stoneTint || 0xffffff);
   const importedWoodTint = new THREE.Color(biome.stoneTint || 0xffffff).lerp(new THREE.Color(0xffffff), .58);
-  game.dataset.biome = realm.biome;
-  let nextRealm = null;
-  let pendingRunState = storedRunEnvelope && storedRunEnvelope.realm.biome === realm.biome && Number(storedRunEnvelope.realm.seed) === realm.seed ? storedRunEnvelope : null;
-
-  const REALM_LADDER = ["jungle", "shore", "desert", "snowy", "mountains", "moon"];
-
-  function prepareNextRealm() {
-    if (nextRealm) return nextRealm;
-    const ladderIndex = REALM_LADDER.indexOf(realm.biome);
-    const nextBiome = REALM_LADDER[(ladderIndex + 1) % REALM_LADDER.length];
-    nextRealm = { biome: nextBiome, seed: Math.floor(Math.random() * 1000000000) + 1 };
-    try { window.sessionStorage.setItem(REALM_KEY, JSON.stringify(nextRealm)); } catch (error) { /* session storage is optional */ }
-    return nextRealm;
-  }
+  game.dataset.biome = currentBiomeId;
+  let pendingRunState = storedRunEnvelope;
 
   let renderer;
   let scene;
@@ -300,7 +330,7 @@
   const tempQ = new THREE.Quaternion();
   const raycaster = new THREE.Raycaster();
 
-  const encounterRng = { state: ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0 };
+  const encounterRng = { state: (AUTHORED_WORLD_VARIATION ^ 0x6d2b79f5) >>> 0 };
   const slideTestSurfaceCache = {};
 
   function networkIdPart(value) {
@@ -347,7 +377,7 @@
           Math.abs(terrainHeight(x + sample, z) - terrainHeight(x - sample, z)),
           Math.abs(terrainHeight(x, z + sample) - terrainHeight(x, z - sample))
         ) / (sample * 2);
-        if (y <= biome.waterLevel + .38 || slope > 1.05) blockedFlags[index] = 1;
+        if (y <= waterLevelAt(x, z) + .38 || slope > 1.05) blockedFlags[index] = 1;
       }
     }
     const clearance = cellSize * .35;
@@ -429,7 +459,8 @@
     networkStats.worldSerializations += 1;
     const world = {
       layoutVersion: WORLD_LAYOUT_VERSION,
-      realm: { biome: realm.biome, seed: realm.seed },
+      worldId: WORLD_ID,
+      layoutSignature: WORLD_LAYOUT_SIGNATURE,
       navigation: buildNetworkNavigation(),
       strongholds: strongholds.map((stronghold) => ({
         id: stronghold.id, name: stronghold.name, kind: stronghold.kind,
@@ -990,6 +1021,8 @@
     slideFxTimer: 0,
     mobileSlideHeld: false,
     airMomentum: new THREE.Vector3(),
+    groundMomentum: new THREE.Vector3(),
+    lastJumpTelemetry: null,
     airbornePhase: "grounded",
     landingTime: 0,
     landingImpact: 0,
@@ -1027,7 +1060,7 @@
   function lerp(a, b, amount) { return a + (b - a) * amount; }
   function distance2D(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
   function seeded(index) {
-    const value = Math.sin(index * 127.1 + 311.7 + realm.seed * .000137) * 43758.5453;
+    const value = Math.sin(index * 127.1 + 311.7 + AUTHORED_WORLD_VARIATION * .000137) * 43758.5453;
     return value - Math.floor(value);
   }
   function smoothstep(minimum, maximum, value) {
@@ -1035,26 +1068,25 @@
     return amount * amount * (3 - 2 * amount);
   }
   function generateWorldLayout() {
-    const salt = 24000 + BIOME_IDS.indexOf(realm.biome) * 2100;
-    const forts = worldProfile.forts.map((definition, index) => {
-      const angle = (seeded(salt + index * 13) - .5) * .34;
-      const cosine = Math.cos(angle);
-      const sine = Math.sin(angle);
-      const x = clamp(definition[0] * cosine - definition[1] * sine + (seeded(salt + index * 13 + 1) - .5) * 56, -480, 480);
-      const z = clamp(definition[0] * sine + definition[1] * cosine + (seeded(salt + index * 13 + 2) - .5) * 56, -480, 480);
-      return [x, z, definition[2] + angle, definition[3] * (.94 + seeded(salt + index * 13 + 3) * .12), definition[4]];
-    });
-    const routes = worldProfile.routes.map((definition, index) => {
-      const angle = (seeded(salt + 700 + index * 17) - .5) * .5;
-      const cosine = Math.cos(angle);
-      const sine = Math.sin(angle);
-      const startX = clamp(definition[0] + (seeded(salt + 701 + index * 17) - .5) * 44, -410, 410);
-      const startZ = clamp(definition[1] + (seeded(salt + 702 + index * 17) - .5) * 44, -410, 410);
-      const stepX = definition[2] * cosine - definition[3] * sine;
-      const stepZ = definition[2] * sine + definition[3] * cosine;
-      return [startX, startZ, stepX, stepZ, definition[4] + (seeded(salt + 703 + index * 17) > .67 ? 1 : 0), definition[5]];
-    });
-    return { version: WORLD_LAYOUT_VERSION, forts, routes, roadPhase: (seeded(salt + 990) - .5) * Math.PI, salt };
+    // These anchors are intentionally authored and immutable. Every player enters
+    // the same continent and can walk between its six biomes without a reload.
+    const forts = [
+      [-590, 355, -.12, 4.4, "TIDEBREAK WATCH", "shore"],
+      [82, 390, .2, 4.55, "MOSSWATCH HOLD", "jungle"],
+      [590, 350, -.28, 4.5, "SUNSCAR CITADEL", "desert"],
+      [-585, -405, .22, 4.45, "WHITEFANG BASTION", "snowy"],
+      [4, -560, -.18, 4.65, "THUNDER BASTION", "mountains"],
+      [590, -410, .31, 4.55, "ECLIPSE WATCH", "moon"]
+    ];
+    const routes = [
+      [-720, 125, 5.1, -4.7, 10, "CLIFFWALK", "shore"],
+      [-115, 535, 5.2, -4.4, 10, "CANOPY STEPS", "jungle"],
+      [705, 145, -5.1, -4.5, 10, "MESA ASCENT", "desert"],
+      [-705, -655, 5.0, 4.6, 10, "ICEFALL ASCENT", "snowy"],
+      [-120, -735, 5.2, 4.5, 11, "EAGLE SWITCHBACK", "mountains"],
+      [710, -660, -5.0, 4.6, 10, "CRATER CAUSEWAY", "moon"]
+    ];
+    return { id: WORLD_ID, signature: WORLD_LAYOUT_SIGNATURE, version: WORLD_LAYOUT_VERSION, forts, routes, roadPhase: -.42, salt: 24000 };
   }
   const POI_NAMES = {
     snowy: { hamlet: ["RIMEFALL HAMLET", "FROSTHEARTH"], watchpost: ["PALEWATCH POST", "GLACIER LOOKOUT"], shrine: ["SHRINE OF THE HOAR", "FROSTBOUND SHRINE"], camp: ["WOLFSDRIFT CAMP", "RAZORICE CAMP"], ruin: ["RUINS OF ICEMERE", "SHATTERED VIGIL"] },
@@ -1066,68 +1098,34 @@
   };
   // Runs after worldLayout/terrainFeatures exist (rawTerrainHeight reads both), before foundationZones are built.
   function generatePoiLayout() {
-    const salt = worldLayout.salt + 5000;
-    const names = POI_NAMES[realm.biome] || POI_NAMES.snowy;
-    let hamletSlots = 2 + Math.floor(seeded(salt + 1) * 2);
-    const watchSlots = 1 + Math.floor(seeded(salt + 2) * 2);
-    const shrineSlots = 1 + Math.floor(seeded(salt + 3) * 2);
-    let campSlots = 2 + Math.floor(seeded(salt + 4) * 2);
-    const ruinSlots = 1 + Math.floor(seeded(salt + 5) * 2);
-    if (hamletSlots + watchSlots + shrineSlots + campSlots + ruinSlots < 8) hamletSlots = 3;
-    if (hamletSlots + watchSlots + shrineSlots + campSlots + ruinSlots > 11) campSlots = 2;
-    const kinds = [];
-    for (let i = 0; i < hamletSlots; i += 1) kinds.push("hamlet");
-    for (let i = 0; i < watchSlots; i += 1) kinds.push("watchpost");
-    for (let i = 0; i < shrineSlots; i += 1) kinds.push("shrine");
-    for (let i = 0; i < campSlots; i += 1) kinds.push("camp");
-    for (let i = 0; i < ruinSlots; i += 1) kinds.push("ruin");
-    const anchors = [[START.x, START.z], [RUINS.x, RUINS.z], [RUNE_HOLLOW.x, RUNE_HOLLOW.z]];
-    const pois = [];
-    kinds.forEach((kind, slot) => {
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        const roll = salt + 40 + slot * 211 + attempt * 13;
-        const x = (seeded(roll + 1) - .5) * 940;
-        const z = (seeded(roll + 2) - .5) * 940;
-        if (Math.abs(x) > 470 || Math.abs(z) > 470) continue;
-        const y = rawTerrainHeight(x, z);
-        if (y <= biome.waterLevel + 1) continue;
-        const slope = Math.abs(rawTerrainHeight(x + 1.5, z) - y) + Math.abs(rawTerrainHeight(x, z + 1.5) - y);
-        if (slope > .9) continue;
-        if (z > -175 && z < 235 && Math.abs(x - roadCenterAt(z)) <= 16) continue;
-        let clear = true;
-        for (let i = 0; i < anchors.length && clear; i += 1) if (Math.hypot(x - anchors[i][0], z - anchors[i][1]) < 60) clear = false;
-        for (let i = 0; i < worldLayout.forts.length && clear; i += 1) if (Math.hypot(x - worldLayout.forts[i][0], z - worldLayout.forts[i][1]) < 60) clear = false;
-        for (let i = 0; i < worldLayout.routes.length && clear; i += 1) if (Math.hypot(x - worldLayout.routes[i][0], z - worldLayout.routes[i][1]) < 60) clear = false;
-        for (let i = 0; i < pois.length && clear; i += 1) if (Math.hypot(x - pois[i].x, z - pois[i].z) < 70) clear = false;
-        if (!clear) continue;
-        const pool = names[kind];
-        pois.push({
-          kind, x, z,
-          rotation: seeded(roll + 3) * Math.PI * 2,
-          name: pool[Math.floor(seeded(roll + 4) * pool.length)]
-        });
-        break;
-      }
-    });
-    return pois;
+    return [
+      { kind: "shrine", x: -735, z: 475, rotation: .2, name: "SHRINE OF TIDES", biomeId: "shore" },
+      { kind: "hamlet", x: -430, z: 570, rotation: -.35, name: "TIDEHOLLOW HAMLET", biomeId: "shore" },
+      { kind: "shrine", x: -165, z: 430, rotation: -.18, name: "SHRINE OF VINES", biomeId: "jungle" },
+      { kind: "ruin", x: 175, z: 600, rotation: .42, name: "BROKEN ZIGGURAT", biomeId: "jungle" },
+      { kind: "shrine", x: 735, z: 485, rotation: -.24, name: "SHRINE OF EMBERS", biomeId: "desert" },
+      { kind: "camp", x: 420, z: 590, rotation: .3, name: "DUNEREAVER CAMP", biomeId: "desert" },
+      { kind: "shrine", x: -735, z: -490, rotation: -.15, name: "SHRINE OF THE HOAR", biomeId: "snowy" },
+      { kind: "watchpost", x: -430, z: -655, rotation: .25, name: "GLACIER LOOKOUT", biomeId: "snowy" },
+      { kind: "shrine", x: -165, z: -470, rotation: .12, name: "SHRINE OF PEAKS", biomeId: "mountains" },
+      { kind: "ruin", x: 175, z: -705, rotation: -.38, name: "RUINS OF THE SKYTHRONE", biomeId: "mountains" },
+      { kind: "shrine", x: 735, z: -495, rotation: .32, name: "GRAVEYARD OF ECHOES", biomeId: "moon" },
+      { kind: "camp", x: 420, z: -665, rotation: -.22, name: "UMBRAL CAMP", biomeId: "moon" }
+    ];
   }
   const worldLayout = generateWorldLayout();
   function buildTerrainFeatures() {
-    const biomeSalt = BIOME_IDS.indexOf(realm.biome) * 19000;
-    const count = realm.biome === "shore" ? 13 : realm.biome === "mountains" ? 11 : 9;
-    const features = [];
-    for (let index = 0; index < count; index += 1) {
-      features.push({
-        x: (seeded(biomeSalt + index * 11 + 1) - .5) * 1120,
-        z: (seeded(biomeSalt + index * 11 + 2) - .5) * 1120,
-        radius: 58 + seeded(biomeSalt + index * 11 + 3) * 112,
-        height: 22 + seeded(biomeSalt + index * 11 + 4) * 68,
-        phase: seeded(biomeSalt + index * 11 + 5) * Math.PI * 2
-      });
-    }
-    return features;
+    return [
+      { x: -730, z: 180, radius: 128, height: 26, biomeId: "shore" }, { x: -445, z: 665, radius: 95, height: 20, biomeId: "shore" },
+      { x: -130, z: 610, radius: 115, height: 42, biomeId: "jungle" }, { x: 165, z: 430, radius: 92, height: 35, biomeId: "jungle" },
+      { x: 455, z: 650, radius: 118, height: 32, biomeId: "desert" }, { x: 745, z: 180, radius: 96, height: 29, biomeId: "desert" },
+      { x: -720, z: -690, radius: 132, height: 48, biomeId: "snowy" }, { x: -420, z: -270, radius: 102, height: 38, biomeId: "snowy" },
+      { x: -155, z: -735, radius: 142, height: 72, biomeId: "mountains" }, { x: 180, z: -350, radius: 115, height: 58, biomeId: "mountains" },
+      { x: 435, z: -690, radius: 112, height: 35, biomeId: "moon" }, { x: 735, z: -250, radius: 96, height: 31, biomeId: "moon" }
+    ];
   }
   const terrainFeatures = buildTerrainFeatures();
+  const terrainFeaturesByBiome = new Map(BIOME_IDS.map((id) => [id, terrainFeatures.filter((feature) => feature.biomeId === id)]));
   worldLayout.pois = generatePoiLayout();
   function generateInfrastructureLayout() {
     const salt = worldLayout.salt + 10400;
@@ -1139,8 +1137,7 @@
       mountains: ["collapsed-wall", "road-shrine", "watch-platform", "broken-cart", "waystone", "fallen-bridge"],
       moon: ["collapsed-wall", "void-shrine", "ruined-habitation", "broken-cart", "waystone", "crystal-vigil"]
     };
-    const kinds = palettes[realm.biome] || palettes.jungle;
-    const target = 24 + Math.floor(seeded(salt + 1) * 9);
+    const target = 48;
     const sites = [];
     const anchors = [[START.x, START.z, 52], [TITLE_VANTAGE.x, TITLE_VANTAGE.z, 42], [RUINS.x, RUINS.z - 24, 86], [RUNE_HOLLOW.x, RUNE_HOLLOW.z, 38]];
     for (let slot = 0; slot < target; slot += 1) {
@@ -1150,7 +1147,7 @@
         const z = (seeded(roll + 2) - .5) * 1480;
         if (Math.abs(x) > 740 || Math.abs(z) > 740) continue;
         const y = rawTerrainHeight(x, z);
-        if (y <= biome.waterLevel + .8) continue;
+        if (y <= BIOMES[biomeIdAt(x, z)].waterLevel + .8) continue;
         const slope = Math.abs(rawTerrainHeight(x + 2, z) - y) + Math.abs(rawTerrainHeight(x, z + 2) - y);
         if (slope > 1.25) continue;
         if (z > -195 && z < 245 && Math.abs(x - roadCenterAt(z)) < 25) continue;
@@ -1160,8 +1157,10 @@
         for (let index = 0; index < worldLayout.pois.length && clear; index += 1) clear = Math.hypot(x - worldLayout.pois[index].x, z - worldLayout.pois[index].z) >= 54;
         for (let index = 0; index < sites.length && clear; index += 1) clear = Math.hypot(x - sites[index].x, z - sites[index].z) >= 35;
         if (!clear) continue;
+        const biomeId = biomeIdAt(x, z);
+        const kinds = palettes[biomeId] || palettes.jungle;
         sites.push({
-          id: "micro-" + slot, kind: kinds[Math.floor(seeded(roll + 3) * kinds.length)],
+          id: "micro-" + slot, kind: kinds[Math.floor(seeded(roll + 3) * kinds.length)], biomeId,
           x, z, rotation: seeded(roll + 4) * Math.PI * 2, variant: Math.floor(seeded(roll + 5) * 4)
         });
         break;
@@ -1232,7 +1231,7 @@
         defineSkill("runecraft", "RUNEKEEPER", "Runes grant +12% Warden and run XP per rank.", { maxRank: 3, requiresAll: ["acrobat"], requiredLevel: 8 }),
         defineSkill("pathfinder", "PATHFINDER", "Reveal nearby landmarks and improve discovery rewards.", { maxRank: 2, requiresAny: ["runecraft", "acrobat"], requiredLevel: 15 }),
         defineSkill("mountaineer", "MOUNTAIN SOUL", "Faster fall recovery and superior slope handling.", { requiresRanks: { pathfinder: 2 }, requiredLevel: 23, cost: 2 }),
-        defineSkill("realmwalker", "REALMWALKER", "New realms begin with run XP and a route reveal.", { requiresAll: ["mountaineer"], requiresRanks: { runecraft: 3 }, requiredLevel: 38, cost: 3 })
+        defineSkill("realmwalker", "WORLDWALKER", "New campaigns begin with run XP and a route reveal.", { requiresAll: ["mountaineer"], requiresRanks: { runecraft: 3 }, requiredLevel: 38, cost: 3 })
       ]
     },
     {
@@ -1301,7 +1300,7 @@
     },
     {
       id: "run_survival", title: "RUN: RESOLVE", kicker: "TEMPORARY CONSTELLATION", rune: "+", scope: "run",
-      copy: "Adapt to the dangers of this realm.", nodes: [
+      copy: "Adapt to the dangers of the continent.", nodes: [
         defineSkill("run_vigor", "BORROWED VIGOR", "+15 maximum health per rank this run.", { scope: "run", maxRank: 3 }),
         defineSkill("run_endurance", "DEEP RESERVE", "+12 maximum stamina per rank this run.", { scope: "run", maxRank: 3, requiresRanks: { run_vigor: 2 } }),
         defineSkill("run_guard", "REALM GUARD", "Take 5% less damage per rank this run.", { scope: "run", maxRank: 2, requiresAny: ["run_vigor", "run_endurance"], cost: 2 }),
@@ -1310,7 +1309,7 @@
     },
     {
       id: "run_hunt", title: "RUN: HUNT", kicker: "TEMPORARY CONSTELLATION", rune: "+", scope: "run",
-      copy: "Learn the realm, then turn it against its guardians.", nodes: [
+      copy: "Learn the land, then turn it against its guardians.", nodes: [
         defineSkill("run_xp", "LORE HUNGER", "+12% run XP per rank.", { scope: "run", maxRank: 3 }),
         defineSkill("run_slayer", "MONSTER LORE", "+5% damage to biome enemies per rank.", { scope: "run", maxRank: 3, requiresRanks: { run_xp: 2 } }),
         defineSkill("run_scavenger", "WAR SPOILS", "Enemies restore extra health and stamina per rank.", { scope: "run", maxRank: 2, requiresAny: ["run_xp", "run_slayer"], cost: 2 }),
@@ -1443,13 +1442,13 @@
   }
 
   let runSaveTimer = 0;
-  let activeRunId = pendingRunState && pendingRunState.runId ? pendingRunState.runId : "run-" + realm.seed + "-" + Date.now().toString(36);
+  let activeRunId = pendingRunState && pendingRunState.runId ? pendingRunState.runId : "continent-" + Date.now().toString(36);
 
   function serializeActiveRun() {
     if (!player.root) return null;
     return {
-      version: 1, status: "active", layoutVersion: WORLD_LAYOUT_VERSION, runId: activeRunId,
-      savedAt: Date.now(), realm: { biome: realm.biome, seed: realm.seed, depth: player.realmDepth },
+      version: 1, status: "active", layoutVersion: WORLD_LAYOUT_VERSION, worldId: WORLD_ID, layoutSignature: WORLD_LAYOUT_SIGNATURE, runId: activeRunId,
+      savedAt: Date.now(), depth: player.realmDepth,
       player: {
         x: player.root.position.x, y: player.root.position.y, z: player.root.position.z, rotation: player.root.rotation.y,
         health: player.health, stamina: player.stamina, shout: player.shout, kills: player.kills,
@@ -1522,7 +1521,7 @@
     const terrainY = terrainHeight(x, z);
     const savedY = Number(runPlayer.y);
     const restoredY = Number.isFinite(savedY) ? Math.max(terrainY, Math.min(savedY, terrainY + 90)) : terrainY;
-    if (terrainY <= biome.waterLevel + .3 || hitsCollider(x, z, .8, restoredY, restoredY + 2.15)) player.root.position.copy(player.lastSafePosition);
+    if (terrainY <= waterLevelAt(x, z) + .3 || hitsCollider(x, z, .8, restoredY, restoredY + 2.15)) player.root.position.copy(player.lastSafePosition);
     else player.root.position.set(x, restoredY, z);
     player.root.rotation.y = Number(runPlayer.rotation) || 0;
     player.health = clamp(Number(runPlayer.health) || maxHealth(), 1, maxHealth());
@@ -1580,7 +1579,7 @@
       tameEnemy(enemy, true, true);
     });
     const savedRngState = Number(saved.world.rngState) || (saved.director ? Number(saved.director.rngState) : 0);
-    encounterRng.state = savedRngState ? savedRngState >>> 0 : ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0;
+    encounterRng.state = savedRngState ? savedRngState >>> 0 : (AUTHORED_WORLD_VARIATION ^ 0x6d2b79f5) >>> 0;
     activeRunId = saved.runId || activeRunId;
     pendingRunState = null;
     return true;
@@ -1954,22 +1953,27 @@
   }
 
   async function loadVisualAssets() {
-    const curatedBiomeMaterial = realm.biome !== "snowy";
-    const biomeMaterialBase = curatedBiomeMaterial
-      ? "assets/textures/freestylized-biomes/" + realm.biome
-      : "assets/textures/biomes/" + biome.textureId;
-    const biomeMaterialExtension = curatedBiomeMaterial ? ".webp" : ".jpg";
-    visualAssets.biomeMaterialSource = curatedBiomeMaterial ? "freestylized" : "ambientcg";
+    const biomeMaterialEntries = BIOME_IDS.map((id) => {
+      const curated = id !== "snowy";
+      return {
+        id,
+        base: curated ? "assets/textures/freestylized-biomes/" + id : "assets/textures/biomes/" + BIOMES[id].textureId,
+        extension: curated ? ".webp" : ".jpg",
+        source: curated ? "freestylized" : "ambientcg"
+      };
+    });
+    visualAssets.biomeMaterialCatalog = biomeMaterialEntries.reduce((catalog, entry) => { catalog[entry.id] = entry; return catalog; }, {});
+    visualAssets.biomeMaterialSource = "six-biome-authored";
     const paths = [
       "assets/textures/storm-sky-panorama.jpg",
       "assets/textures/ashen-ground.jpg",
       "assets/textures/ancient-stone.jpg",
       "assets/textures/alpine-cliff.jpg",
-      "assets/textures/tundra-grass-v1.jpg",
-      biomeMaterialBase + "-color" + biomeMaterialExtension,
-      biomeMaterialBase + "-normal" + biomeMaterialExtension,
-      biomeMaterialBase + "-roughness" + biomeMaterialExtension
-    ];
+      "assets/textures/tundra-grass-v1.jpg"
+    ].concat((() => {
+      const entry = visualAssets.biomeMaterialCatalog[currentBiomeId];
+      return [entry.base + "-color" + entry.extension, entry.base + "-normal" + entry.extension, entry.base + "-roughness" + entry.extension];
+    })());
     const loaded = await Promise.allSettled(paths.map(textureFrom));
     if (loaded[0].status === "fulfilled") {
       visualAssets.sky = loaded[0].value;
@@ -1982,9 +1986,17 @@
     if (loaded[2].status === "fulfilled") visualAssets.stone = configureTexture(loaded[2].value, 3, 3);
     if (loaded[3].status === "fulfilled") visualAssets.cliff = configureTexture(loaded[3].value, 18, 18);
     if (loaded[4].status === "fulfilled") visualAssets.grass = configureTexture(loaded[4].value, 54, 54);
-    if (loaded[5].status === "fulfilled") visualAssets.biomeGround = configureTexture(loaded[5].value, 64, 64);
-    if (loaded[6].status === "fulfilled") visualAssets.biomeNormal = configureDataTexture(loaded[6].value, 64, 64);
-    if (loaded[7].status === "fulfilled") visualAssets.biomeRoughness = configureDataTexture(loaded[7].value, 64, 64);
+    visualAssets.biomeMaterials = {};
+    const startingEntry = visualAssets.biomeMaterialCatalog[currentBiomeId];
+    const startingRegionalMaterial = { source: startingEntry.source };
+    if (loaded[5].status === "fulfilled") startingRegionalMaterial.color = configureTexture(loaded[5].value, 64, 64);
+    if (loaded[6].status === "fulfilled") startingRegionalMaterial.normal = configureDataTexture(loaded[6].value, 64, 64);
+    if (loaded[7].status === "fulfilled") startingRegionalMaterial.roughness = configureDataTexture(loaded[7].value, 64, 64);
+    visualAssets.biomeMaterials[currentBiomeId] = startingRegionalMaterial;
+    const startingMaterial = visualAssets.biomeMaterials[currentBiomeId] || visualAssets.biomeMaterials.jungle || {};
+    visualAssets.biomeGround = startingMaterial.color || null;
+    visualAssets.biomeNormal = startingMaterial.normal || null;
+    visualAssets.biomeRoughness = startingMaterial.roughness || null;
     loaded.forEach((result, index) => {
       if (result.status === "rejected") console.warn("Texture failed to load:", paths[index], result.reason);
     });
@@ -2007,6 +2019,29 @@
       color: realm.biome === "snowy" || realm.biome === "mountains" ? biome.frost : biome.grass,
       roughness: .96, metalness: .01, envMapIntensity: .2
     });
+  }
+
+  async function loadBiomeVisualAssets(biomeId) {
+    const existing = visualAssets.biomeMaterials && visualAssets.biomeMaterials[biomeId];
+    if (existing && existing.color && existing.normal && existing.roughness) return existing;
+    const entry = visualAssets.biomeMaterialCatalog && visualAssets.biomeMaterialCatalog[biomeId];
+    if (!entry) return null;
+    visualAssets.biomeMaterials[biomeId] = existing || { source: entry.source };
+    const loaded = await Promise.allSettled([
+      textureFrom(entry.base + "-color" + entry.extension),
+      textureFrom(entry.base + "-normal" + entry.extension),
+      textureFrom(entry.base + "-roughness" + entry.extension)
+    ]);
+    const material = visualAssets.biomeMaterials[biomeId];
+    if (loaded[0].status === "fulfilled") material.color = configureTexture(loaded[0].value, 64, 64);
+    if (loaded[1].status === "fulfilled") material.normal = configureDataTexture(loaded[1].value, 64, 64);
+    if (loaded[2].status === "fulfilled") material.roughness = configureDataTexture(loaded[2].value, 64, 64);
+    loaded.forEach((result, index) => {
+      if (result.status === "rejected") console.warn("Regional texture failed to load:", biomeId, ["color", "normal", "roughness"][index], result.reason);
+    });
+    const shader = terrain && terrain.material && terrain.material.userData.terrainShader;
+    if (shader && material.color && shader.uniforms["terrainMap_" + biomeId]) shader.uniforms["terrainMap_" + biomeId].value = material.color;
+    return material;
   }
 
   function measureLoadedModelRegistry() {
@@ -2079,10 +2114,12 @@
       tree: "assets/models/kenney-castle/tree-large.glb",
       rock: "assets/models/kenney-castle/rocks-large.glb",
       warg: "assets/models/creatures/frost-warg.glb",
-      warden: "assets/models/quaternius-rpg-character/warden.gltf",
-      biomeLight: "assets/models/quaternius-monsters/" + worldProfile.lightEnemy[0] + ".gltf",
-      biomeHeavy: "assets/models/quaternius-monsters/" + worldProfile.heavyEnemy[0] + ".gltf"
+      warden: "assets/models/quaternius-rpg-character/warden.gltf"
     };
+    BIOME_IDS.forEach((id) => {
+      modelPaths["biomeLight_" + id] = "assets/models/quaternius-monsters/" + WORLD_PROFILES[id].lightEnemy[0] + ".gltf";
+      modelPaths["biomeHeavy_" + id] = "assets/models/quaternius-monsters/" + WORLD_PROFILES[id].heavyEnemy[0] + ".gltf";
+    });
     const medieval = "assets/models/kaykit-medieval/";
     const town = "assets/models/kenney-town/";
     const nature = "assets/models/kenney-nature/";
@@ -2135,48 +2172,81 @@
     });
     // The detailed foliage pack is reserved for a bounded set of old-growth hero
     // trees. The instanced procedural forest remains the scalable fallback.
-    if (realm.biome === "jungle" || realm.biome === "shore") {
-      Object.assign(modelPaths, {
-        ancientTreeA: "assets/models/freestylized-foliage/F1_Tree1.glb",
-        ancientTreeB: "assets/models/freestylized-foliage/F1_Tree3.glb"
-      });
-    }
-    if (realm.biome === "moon") {
-      const graveyard = "assets/models/kenney-graveyard/";
-      Object.assign(modelPaths, {
-        crypt: graveyard + "crypt.glb",
-        cryptSmall: graveyard + "crypt-small.glb",
-        cryptA: graveyard + "crypt-a.glb",
-        gravestoneBevel: graveyard + "gravestone-bevel.glb",
-        gravestoneBroken: graveyard + "gravestone-broken.glb",
-        gravestoneCross: graveyard + "gravestone-cross.glb",
-        gravestoneDecorative: graveyard + "gravestone-decorative.glb",
-        grave: graveyard + "grave.glb",
-        fence: graveyard + "fence.glb",
-        fenceGate: graveyard + "fence-gate.glb",
-        fenceDamaged: graveyard + "fence-damaged.glb",
-        altarStone: graveyard + "altar-stone.glb",
-        pineCrooked: graveyard + "pine-crooked.glb",
-        lightpost: graveyard + "lightpost-single.glb"
-      });
-    }
+    Object.assign(modelPaths, {
+      ancientTreeA: "assets/models/freestylized-foliage/F1_Tree1.glb",
+      ancientTreeB: "assets/models/freestylized-foliage/F1_Tree3.glb"
+    });
+    const graveyard = "assets/models/kenney-graveyard/";
+    Object.assign(modelPaths, {
+      crypt: graveyard + "crypt.glb",
+      cryptSmall: graveyard + "crypt-small.glb",
+      cryptA: graveyard + "crypt-a.glb",
+      gravestoneBevel: graveyard + "gravestone-bevel.glb",
+      gravestoneBroken: graveyard + "gravestone-broken.glb",
+      gravestoneCross: graveyard + "gravestone-cross.glb",
+      gravestoneDecorative: graveyard + "gravestone-decorative.glb",
+      grave: graveyard + "grave.glb",
+      fence: graveyard + "fence.glb",
+      fenceGate: graveyard + "fence-gate.glb",
+      fenceDamaged: graveyard + "fence-damaged.glb",
+      altarStone: graveyard + "altar-stone.glb",
+      pineCrooked: graveyard + "pine-crooked.glb",
+      lightpost: graveyard + "lightpost-single.glb"
+    });
     visualAssets.modelPaths = Object.assign({}, modelPaths);
     const loader = new THREE.GLTFLoader();
-    const entries = Object.entries(modelPaths);
+    visualAssets.modelLoader = loader;
+    const entries = Object.entries(modelPaths).filter(([id]) => !/^biome(?:Light|Heavy)_/.test(id) || id.endsWith("_" + currentBiomeId));
     const loaded = await Promise.allSettled(entries.map((entry) => loader.loadAsync(entry[1])));
     loaded.forEach((result, index) => {
       const id = entries[index][0];
       if (result.status === "fulfilled") visualAssets.models[id] = result.value;
       else console.warn("3D model failed to load:", entries[index][1], result.reason);
     });
+    visualAssets.models.biomeLight = visualAssets.models.biomeLight_jungle || null;
+    visualAssets.models.biomeHeavy = visualAssets.models.biomeHeavy_jungle || null;
     measureLoadedModelRegistry();
+  }
+
+  async function loadBiomeEnemyAssets(biomeId) {
+    if (!visualAssets.models || !visualAssets.modelLoader || !WORLD_PROFILES[biomeId]) return null;
+    const lightKey = "biomeLight_" + biomeId;
+    const heavyKey = "biomeHeavy_" + biomeId;
+    if (visualAssets.models[lightKey] && visualAssets.models[heavyKey]) return [visualAssets.models[lightKey], visualAssets.models[heavyKey]];
+    const paths = visualAssets.modelPaths || {};
+    const loaded = await Promise.allSettled([
+      visualAssets.models[lightKey] ? Promise.resolve(visualAssets.models[lightKey]) : visualAssets.modelLoader.loadAsync(paths[lightKey]),
+      visualAssets.models[heavyKey] ? Promise.resolve(visualAssets.models[heavyKey]) : visualAssets.modelLoader.loadAsync(paths[heavyKey])
+    ]);
+    if (loaded[0].status === "fulfilled") visualAssets.models[lightKey] = loaded[0].value;
+    if (loaded[1].status === "fulfilled") visualAssets.models[heavyKey] = loaded[1].value;
+    loaded.forEach((result, index) => {
+      if (result.status === "rejected") console.warn("Regional enemy model failed to load:", biomeId, index ? "heavy" : "light", result.reason);
+    });
+    measureLoadedModelRegistry();
+    hydrateRegionalEnemyModels(biomeId);
+    return [visualAssets.models[lightKey] || null, visualAssets.models[heavyKey] || null];
+  }
+
+  const regionalAssetPromises = new Map();
+  let regionalAssetPrefetchTimer = 0;
+  function ensureBiomeAssets(biomeId) {
+    if (!BIOMES[biomeId]) return Promise.resolve(null);
+    if (!regionalAssetPromises.has(biomeId)) {
+      regionalAssetPromises.set(biomeId, Promise.all([loadBiomeVisualAssets(biomeId), loadBiomeEnemyAssets(biomeId)]).catch((error) => {
+        regionalAssetPromises.delete(biomeId);
+        console.warn("Regional assets could not be streamed:", biomeId, error);
+        return null;
+      }));
+    }
+    return regionalAssetPromises.get(biomeId);
   }
 
   async function boot() {
     try {
       updateLoading(8, "Opening the northern sky...");
-      if (ui.realmLabel) ui.realmLabel.textContent = biome.name + " · BIOME " + (REALM_LADDER.indexOf(realm.biome) + 1) + " OF " + REALM_LADDER.length + " · SEED " + realm.seed;
-      if (ui.biomeTag) ui.biomeTag.textContent = biome.name + " · REALM " + (player.realmDepth + 1);
+      if (ui.realmLabel) ui.realmLabel.textContent = "ONE WORLD · SIX CONNECTED BIOMES";
+      if (ui.biomeTag) ui.biomeTag.textContent = BIOMES[currentBiomeId].name + " · ONE CONTINENT";
       loadProgression();
       buildSkillTree();
       await delay(35);
@@ -2216,8 +2286,7 @@
       resize();
       updateCamera(1, true);
       await delay(120);
-      if (ui.titleRealmName) ui.titleRealmName.textContent = biome.name;
-      if (ui.titleSeed) ui.titleSeed.textContent = String(realm.seed);
+      if (ui.titleRealmName) ui.titleRealmName.textContent = "ASHENHOLD CONTINENT";
       if (ui.titleStrongholds) ui.titleStrongholds.textContent = String(strongholds.length);
       if (ui.titleWardenLevel) ui.titleWardenLevel.textContent = String(player.level);
       state = "title";
@@ -2226,7 +2295,7 @@
       ui.loading.classList.remove("active");
       ui.title.classList.add("active");
       ui.enter.focus({ preventScroll: true });
-      updateLoading(100, biome.name + " ready");
+      updateLoading(100, "Ashenhold Continent ready");
       multiplayerBootReady = true;
       initializeMultiplayerAdapter();
       requestAnimationFrame(loop);
@@ -2254,14 +2323,16 @@
     camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, .1, 1500);
   }
 
-  function createBiomeSkyTexture() {
+  function createBiomeSkyTexture(biomeId) {
+    const skyBiomeId = BIOMES[biomeId] ? biomeId : "jungle";
+    const skyBiome = BIOMES[skyBiomeId];
     const surface = document.createElement("canvas");
     surface.width = 1024;
     surface.height = 512;
     const context = surface.getContext("2d");
     if (!context) throw new Error("2d canvas unavailable for biome sky");
-    const zenith = new THREE.Color(biome.skyZenith || biome.sky);
-    const horizon = new THREE.Color(biome.skyHorizon || biome.sky);
+    const zenith = new THREE.Color(skyBiome.skyZenith || skyBiome.sky);
+    const horizon = new THREE.Color(skyBiome.skyHorizon || skyBiome.sky);
     const upper = zenith.clone().lerp(horizon, .55);
     const lower = horizon.clone().multiplyScalar(.68);
     const nadir = horizon.clone().multiplyScalar(.38);
@@ -2273,7 +2344,7 @@
     gradient.addColorStop(1, "#" + nadir.getHexString());
     context.fillStyle = gradient;
     context.fillRect(0, 0, 1024, 512);
-    const glow = new THREE.Color(biome.skyGlow || biome.sun);
+    const glow = new THREE.Color(skyBiome.skyGlow || skyBiome.sun);
     const glowRgb = Math.round(glow.r * 255) + "," + Math.round(glow.g * 255) + "," + Math.round(glow.b * 255);
     const glowGradient = context.createRadialGradient(544, 219, 12, 544, 219, 320);
     glowGradient.addColorStop(0, "rgba(" + glowRgb + ",.72)");
@@ -2281,8 +2352,8 @@
     glowGradient.addColorStop(1, "rgba(" + glowRgb + ",0)");
     context.fillStyle = glowGradient;
     context.fillRect(0, 0, 1024, 512);
-    const profile = SKY_PROFILES[realm.biome] || SKY_PROFILES.jungle;
-    const skySalt = 13100 + BIOME_IDS.indexOf(realm.biome) * 1000;
+    const profile = SKY_PROFILES[skyBiomeId] || SKY_PROFILES.jungle;
+    const skySalt = 13100 + BIOME_IDS.indexOf(skyBiomeId) * 1000;
     let featureCount = 0;
     const ellipse = (x, y, rx, ry, color, alpha) => {
       context.save();
@@ -2294,7 +2365,7 @@
       context.restore();
       featureCount += 1;
     };
-    if (realm.biome === "jungle") {
+    if (skyBiomeId === "jungle") {
       for (let index = 0; index < 28; index += 1) {
         ellipse(seeded(skySalt + index * 5) * 1100 - 38, 165 + seeded(skySalt + index * 5 + 1) * 135,
           42 + seeded(skySalt + index * 5 + 2) * 95, 9 + seeded(skySalt + index * 5 + 3) * 24, "#17392e", .12 + seeded(skySalt + index * 5 + 4) * .14);
@@ -2321,7 +2392,7 @@
         featureCount += 1;
       }
       context.restore();
-    } else if (realm.biome === "shore") {
+    } else if (skyBiomeId === "shore") {
       for (let index = 0; index < 24; index += 1) {
         ellipse(seeded(skySalt + index * 7) * 1120 - 48, 100 + seeded(skySalt + index * 7 + 1) * 170,
           55 + seeded(skySalt + index * 7 + 2) * 120, 13 + seeded(skySalt + index * 7 + 3) * 32, index % 3 ? "#233c46" : "#72898e", .18 + seeded(skySalt + index * 7 + 4) * .22);
@@ -2335,7 +2406,7 @@
         featureCount += 1;
       }
       context.restore();
-    } else if (realm.biome === "desert") {
+    } else if (skyBiomeId === "desert") {
       for (let index = 0; index < 15; index += 1) {
         ellipse(seeded(skySalt + index * 7) * 1080 - 28, 250 + seeded(skySalt + index * 7 + 1) * 95,
           80 + seeded(skySalt + index * 7 + 2) * 150, 12 + seeded(skySalt + index * 7 + 3) * 25, index % 2 ? "#9d6c43" : "#d7a066", .09 + seeded(skySalt + index * 7 + 4) * .16);
@@ -2343,7 +2414,7 @@
       const heat = context.createLinearGradient(0, 230, 0, 340);
       heat.addColorStop(0, "rgba(255,205,121,0)"); heat.addColorStop(.55, "rgba(255,190,101,.21)"); heat.addColorStop(1, "rgba(111,64,39,0)");
       context.fillStyle = heat; context.fillRect(0, 220, 1024, 140); featureCount += 1;
-    } else if (realm.biome === "snowy") {
+    } else if (skyBiomeId === "snowy") {
       context.save();
       context.globalCompositeOperation = "screen";
       context.lineCap = "round";
@@ -2358,7 +2429,7 @@
       }
       context.restore();
       for (let index = 0; index < 16; index += 1) ellipse(seeded(skySalt + index * 5) * 1100 - 38, 190 + seeded(skySalt + index * 5 + 1) * 105, 46 + seeded(skySalt + index * 5 + 2) * 90, 10 + seeded(skySalt + index * 5 + 3) * 20, "#d5e0e3", .08 + seeded(skySalt + index * 5 + 4) * .12);
-    } else if (realm.biome === "mountains") {
+    } else if (skyBiomeId === "mountains") {
       for (let index = 0; index < 22; index += 1) ellipse(seeded(skySalt + index * 6) * 1120 - 48, 85 + seeded(skySalt + index * 6 + 1) * 170, 48 + seeded(skySalt + index * 6 + 2) * 115, 12 + seeded(skySalt + index * 6 + 3) * 30, index % 2 ? "#394b5a" : "#c5d0d4", .1 + seeded(skySalt + index * 6 + 4) * .18);
       context.save(); context.fillStyle = "rgba(32,42,51,.35)"; context.beginPath(); context.moveTo(0, 330);
       for (let x = 0; x <= 1024; x += 42) context.lineTo(x, 330 - seeded(skySalt + 700 + x) * 88);
@@ -2376,9 +2447,9 @@
       context.fillStyle = nebula; context.fillRect(0, 0, 560, 390); featureCount += 1;
       ellipse(790, 112, 54, 54, "#bac7ff", .62); ellipse(807, 100, 51, 51, "#171a31", .94);
     }
-    skyReport = {
+    const generatedSkyReport = {
       id: profile.id, features: profile.features.slice(), featureCount,
-      signature: profile.id + ":" + biome.skyZenith.toString(16) + ":" + featureCount,
+      signature: profile.id + ":" + skyBiome.skyZenith.toString(16) + ":" + featureCount,
       gradientStops: 5, horizonBlend: true
     };
     const texture = new THREE.CanvasTexture(surface);
@@ -2386,14 +2457,19 @@
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    texture.userData = texture.userData || {};
+    texture.userData.skyReport = generatedSkyReport;
     return texture;
   }
 
   function createSkyAndLights() {
     const skyGeometry = new THREE.SphereGeometry(880, isCoarse ? 32 : 48, isCoarse ? 18 : 28);
     let skyTexture = null;
+    visualAssets.skyboxes = {};
     try {
-      skyTexture = createBiomeSkyTexture();
+      BIOME_IDS.forEach((id) => { visualAssets.skyboxes[id] = createBiomeSkyTexture(id); });
+      skyTexture = visualAssets.skyboxes[currentBiomeId];
+      skyReport = Object.assign({}, skyTexture.userData.skyReport);
     } catch (error) {
       console.warn("Biome sky gradient failed; falling back to storm panorama.", error);
       skyTexture = visualAssets.sky || null;
@@ -2440,7 +2516,7 @@
       map: haloTexture, color: biome.skyGlow || biome.sun, transparent: true, opacity: realm.biome === "moon" ? .72 : .52,
       blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false
     }));
-    const skyProfile = SKY_PROFILES[realm.biome] || SKY_PROFILES.jungle;
+    const skyProfile = SKY_PROFILES[currentBiomeId] || SKY_PROFILES.jungle;
     halo.position.set(skyProfile.halo[0], skyProfile.halo[1], skyProfile.halo[2]);
     halo.scale.setScalar(skyProfile.haloScale);
     halo.renderOrder = -90;
@@ -2484,81 +2560,93 @@
     }
   }
 
-  function rawTerrainHeight(x, z) {
-    const seedX = (realm.seed % 1009) * .37;
-    const seedZ = (Math.floor(realm.seed / 1009) % 1009) * .41;
-    const waveA = Math.sin((x + seedX) * .018) * 2.8 + Math.cos((z - seedZ) * .015) * 2.4;
-    const waveB = Math.sin((x + z + seedX) * .033) * 1.25 + Math.cos((x - z - seedZ) * .041) * .8;
-    let heightValue = biome.base;
-
-    if (worldProfile.geometry === "glacial") {
-      heightValue += waveA * 1.15 + waveB * .72;
-      heightValue += Math.pow(Math.abs(Math.sin((x + seedX) * .0075 + Math.cos(z * .004) * 1.8)), 2.4) * 12;
-      heightValue -= Math.exp(-Math.pow(x - Math.sin(z * .006) * 34, 2) / 2200) * 7.5;
-      terrainFeatures.forEach((feature) => {
-        const distanceSquared = Math.pow(x - feature.x, 2) + Math.pow(z - feature.z, 2);
-        heightValue += Math.exp(-distanceSquared / Math.pow(feature.radius, 2)) * feature.height * .58;
-      });
-    } else if (worldProfile.geometry === "karst") {
-      heightValue += waveA * .82 + waveB * .58;
-      terrainFeatures.forEach((feature) => {
-        const distance = Math.hypot(x - feature.x, z - feature.z) / feature.radius;
-        const tower = Math.pow(Math.max(0, 1 - distance), 2.35);
-        heightValue += tower * feature.height * .78;
-      });
-      const riverCenter = Math.sin((z - seedZ) * .0105) * 42 + Math.sin(z * .0032) * 18;
-      heightValue -= Math.exp(-Math.pow(x - riverCenter, 2) / 520) * 9.5;
-    } else if (worldProfile.geometry === "dunes") {
-      heightValue += Math.sin((x + seedX) * .041 + Math.sin(z * .012)) * 3.7;
-      heightValue += Math.sin((x + z - seedZ) * .022) * 2.2 + waveB * .38;
-      terrainFeatures.forEach((feature, index) => {
-        if (index % 3 !== 0) return;
-        const distance = Math.hypot(x - feature.x, z - feature.z) / feature.radius;
-        const mesa = 1 - smoothstep(.48, 1, distance);
-        heightValue += mesa * feature.height * .42;
-      });
-      const canyon = x * .72 + z * .34 - Math.sin(z * .007 + seedX) * 48;
-      heightValue -= Math.exp(-(canyon * canyon) / 780) * 12;
-    } else if (worldProfile.geometry === "archipelago") {
-      heightValue = biome.waterLevel - 2.2 + waveA * .72 + waveB * .42;
-      terrainFeatures.forEach((feature) => {
-        const distanceSquared = Math.pow(x - feature.x, 2) + Math.pow(z - feature.z, 2);
-        heightValue += Math.exp(-distanceSquared / Math.pow(feature.radius * 1.18, 2)) * (feature.height * .34 + 7);
-      });
-      const causeway = x - roadCenterAt(z);
-      heightValue += Math.exp(-(causeway * causeway) / 820) * 7.8;
-    } else if (worldProfile.geometry === "alpine") {
-      const ridgeA = Math.pow(Math.abs(Math.sin((x + seedX) * .0085 + z * .003)), 2.5);
-      const ridgeB = Math.pow(Math.abs(Math.cos((z - seedZ) * .0072 - x * .0024)), 3.1);
-      heightValue += waveA * 1.25 + waveB * .8 + ridgeA * 22 + ridgeB * 15;
-      terrainFeatures.forEach((feature) => {
-        const distanceSquared = Math.pow(x - feature.x, 2) + Math.pow(z - feature.z, 2);
-        heightValue += Math.exp(-distanceSquared / Math.pow(feature.radius * .82, 2)) * feature.height * .72;
-      });
-      heightValue -= Math.exp(-Math.pow(x - roadCenterAt(z), 2) / 620) * 13;
-    } else {
-      heightValue += waveA * .72 + waveB * .55;
-      terrainFeatures.forEach((feature) => {
-        const distance = Math.hypot(x - feature.x, z - feature.z);
-        const core = Math.exp(-(distance * distance) / Math.pow(feature.radius * .62, 2));
-        const rim = Math.exp(-Math.pow(distance - feature.radius * .78, 2) / Math.pow(feature.radius * .17, 2));
-        heightValue += rim * feature.height * .25 - core * feature.height * .22;
-      });
-      heightValue += Math.pow(Math.abs(Math.sin((x - z + seedX) * .011)), 3.2) * 8.5;
+  function updateActiveBiomePresentation(force) {
+    if (!player.root) return currentBiomeId;
+    const nextBiomeId = biomeIdAt(player.root.position.x, player.root.position.z);
+    ensureBiomeAssets(nextBiomeId);
+    if (!force && nextBiomeId === currentBiomeId) return currentBiomeId;
+    const previousBiomeId = currentBiomeId;
+    currentBiomeId = nextBiomeId;
+    const activeBiome = BIOMES[currentBiomeId];
+    game.dataset.biome = currentBiomeId;
+    if (scene && scene.fog) {
+      scene.fog.color.set(activeBiome.fog);
+      scene.fog.density = activeBiome.fogDensity * (isCoarse ? 1.1 : 1);
     }
+    if (sky && sky.material && visualAssets.skyboxes && visualAssets.skyboxes[currentBiomeId]) {
+      sky.material.map = visualAssets.skyboxes[currentBiomeId];
+      sky.material.needsUpdate = true;
+      skyReport = Object.assign({}, visualAssets.skyboxes[currentBiomeId].userData.skyReport || skyReport);
+    }
+    if (sun) {
+      sun.color.set(activeBiome.sun);
+      sun.intensity = activeBiome.sunIntensity;
+    }
+    if (renderer) renderer.toneMappingExposure = activeBiome.exposure;
+    if (ui.biomeTag) ui.biomeTag.textContent = activeBiome.name + " · ONE CONTINENT";
+    if (ui.realmLabel) ui.realmLabel.textContent = activeBiome.name + " · ASHENHOLD CONTINENT";
+    if (!force && previousBiomeId !== currentBiomeId && state === "playing") showLocation(activeBiome.name, "ENTERING BIOME");
+    return currentBiomeId;
+  }
 
-    const radius = Math.hypot(x, z);
-    const edge = Math.max(0, (radius - 560) / 300);
-    const edgeStrength = worldProfile.geometry === "archipelago" ? 24 : worldProfile.geometry === "alpine" ? 72 : 46;
-    heightValue += edge * edge * edgeStrength;
-    const roadDistance = x - roadCenterAt(z);
-    heightValue -= Math.exp(-(roadDistance * roadDistance) / 760) * (worldProfile.geometry === "alpine" ? 5.5 : 2.6);
+  function biomeTerrainBase(biomeId, x, z) {
+    const zone = CONTINENT_ZONE_BY_ID.get(biomeId);
+    const definition = BIOMES[biomeId];
+    const localX = x - zone.center.x;
+    const localZ = z - zone.center.z;
+    const phase = (BIOME_IDS.indexOf(biomeId) + 1) * 37.4;
+    const waveA = Math.sin((localX + phase) * .018) * 2.8 + Math.cos((localZ - phase) * .015) * 2.4;
+    const waveB = Math.sin((localX + localZ + phase) * .033) * 1.25 + Math.cos((localX - localZ - phase) * .041) * .8;
+    let heightValue = definition.base;
+    if (biomeId === "snowy") {
+      heightValue += waveA * 1.1 + waveB * .7;
+      heightValue += Math.pow(Math.abs(Math.sin(localX * .0075 + Math.cos(localZ * .004) * 1.8)), 2.4) * 11;
+    } else if (biomeId === "jungle") {
+      heightValue += waveA * .78 + waveB * .55;
+      const riverCenter = Math.sin(localZ * .0105) * 34 + Math.sin(localZ * .0032) * 15;
+      heightValue -= Math.exp(-Math.pow(localX - riverCenter, 2) / 620) * 6.8;
+    } else if (biomeId === "desert") {
+      heightValue += Math.sin(localX * .041 + Math.sin(localZ * .012)) * 3.7;
+      heightValue += Math.sin((localX + localZ) * .022) * 2.2 + waveB * .38;
+      const canyon = localX * .72 + localZ * .34 - Math.sin(localZ * .007) * 48;
+      heightValue -= Math.exp(-(canyon * canyon) / 900) * 8;
+    } else if (biomeId === "shore") {
+      heightValue = definition.waterLevel - 1.8 + waveA * .62 + waveB * .38;
+      const causeway = localX + Math.sin(localZ * .009) * 42;
+      heightValue += Math.exp(-(causeway * causeway) / 980) * 7.2;
+    } else if (biomeId === "mountains") {
+      const ridgeA = Math.pow(Math.abs(Math.sin(localX * .0085 + localZ * .003)), 2.5);
+      const ridgeB = Math.pow(Math.abs(Math.cos(localZ * .0072 - localX * .0024)), 3.1);
+      heightValue += waveA * 1.18 + waveB * .76 + ridgeA * 19 + ridgeB * 13;
+    } else {
+      heightValue += waveA * .7 + waveB * .52;
+      const craterDistance = Math.hypot(localX + 32, localZ - 45);
+      heightValue += Math.exp(-Math.pow(craterDistance - 118, 2) / 620) * 8 - Math.exp(-(craterDistance * craterDistance) / 6200) * 7;
+      heightValue += Math.pow(Math.abs(Math.sin((localX - localZ) * .011)), 3.2) * 7;
+    }
+    (terrainFeaturesByBiome.get(biomeId) || []).forEach((feature) => {
+      const distanceSquared = Math.pow(x - feature.x, 2) + Math.pow(z - feature.z, 2);
+      heightValue += Math.exp(-distanceSquared / Math.pow(feature.radius, 2)) * feature.height * (biomeId === "shore" ? .34 : biomeId === "mountains" ? .66 : .48);
+    });
+    return heightValue;
+  }
+
+  function rawTerrainHeight(x, z) {
+    let heightValue = 0;
+    biomeBlendWeights(x, z).forEach((entry) => { heightValue += biomeTerrainBase(entry.id, x, z) * entry.weight; });
+    const squareEdge = Math.max(Math.abs(x), Math.abs(z));
+    const edge = Math.max(0, (squareEdge - 790) / 95);
+    heightValue += edge * edge * 46;
+    if (Math.abs(x) < 120 && z > -190 && z < 280) {
+      const roadDistance = x - roadCenterAt(z);
+      heightValue -= Math.exp(-(roadDistance * roadDistance) / 760) * 2.6;
+    }
     heightValue -= Math.exp(-(x * x + Math.pow(z - RUINS.z, 2)) / 2400) * 2.2;
     return heightValue;
   }
 
   function foundationTarget(zone) {
-    if (!foundationTargets.has(zone.id)) foundationTargets.set(zone.id, Math.max(rawTerrainHeight(zone.x, zone.z) + zone.lift, biome.waterLevel + 2.4));
+    if (!foundationTargets.has(zone.id)) foundationTargets.set(zone.id, Math.max(rawTerrainHeight(zone.x, zone.z) + zone.lift, BIOMES[biomeIdAt(zone.x, zone.z)].waterLevel + 2.4));
     return foundationTargets.get(zone.id);
   }
 
@@ -2580,16 +2668,17 @@
     const position = geometry.attributes.position;
     const colors = [];
     const textured = Boolean(visualAssets.biomeGround || visualAssets.ground);
-    const low = new THREE.Color(biome.ground).multiplyScalar(textured ? 1.15 : .72);
-    const rock = new THREE.Color(biome.cliff);
-    const high = new THREE.Color(biome.frost).lerp(new THREE.Color(biome.cliff), .5);
-    const snow = new THREE.Color(biome.frost);
     const color = new THREE.Color();
     for (let i = 0; i < position.count; i += 1) {
       const x = position.getX(i);
       const z = position.getZ(i);
       const y = terrainHeight(x, z);
       position.setY(i, y);
+      const vertexBiome = BIOMES[biomeIdAt(x, z)];
+      const low = new THREE.Color(vertexBiome.ground).multiplyScalar(textured ? 1.15 : .72);
+      const rock = new THREE.Color(vertexBiome.cliff);
+      const high = new THREE.Color(vertexBiome.frost).lerp(new THREE.Color(vertexBiome.cliff), .5);
+      const snow = new THREE.Color(vertexBiome.frost);
       if (y < 12) color.copy(low).lerp(rock, clamp((y - 1) / 18, 0, 1));
       else if (y < 48) color.copy(rock).lerp(high, (y - 12) / 36);
       else color.copy(high).lerp(snow, clamp((y - 48) / 52, 0, 1));
@@ -2601,61 +2690,63 @@
     geometry.computeVertexNormals();
     const groundDetail = visualAssets.biomeGround || visualAssets.ground || createTerrainTexture();
     const material = new THREE.MeshStandardMaterial({
-      vertexColors: !visualAssets.cliff, map: groundDetail,
-      normalMap: visualAssets.biomeNormal || null, normalScale: new THREE.Vector2(.54, .54),
-      roughnessMap: visualAssets.biomeRoughness || null, roughness: .94, metalness: .018, envMapIntensity: .24
+      vertexColors: true, map: groundDetail,
+      roughness: .94, metalness: .018, envMapIntensity: .24
     });
     if (visualAssets.cliff) {
       material.onBeforeCompile = (shader) => {
+        material.userData.terrainShader = shader;
         shader.uniforms.cliffMap = { value: visualAssets.cliff };
-        shader.uniforms.grassMap = { value: visualAssets.biomeGround || visualAssets.grass || groundDetail };
-        shader.uniforms.biomeGroundTint = { value: new THREE.Color(biome.ground) };
-        shader.uniforms.biomeCliffTint = { value: new THREE.Color(biome.cliff) };
-        shader.uniforms.biomeGrassTint = { value: new THREE.Color(biome.grass) };
-        shader.uniforms.biomeFrostTint = { value: new THREE.Color(biome.frost) };
-        shader.uniforms.biomeGrassStrength = { value: biome.grassStrength };
-        shader.uniforms.biomeFrostStart = { value: biome.frostStart };
+        BIOME_IDS.filter((id) => id !== "jungle").forEach((id) => {
+          const entry = visualAssets.biomeMaterials && visualAssets.biomeMaterials[id];
+          shader.uniforms["terrainMap_" + id] = { value: entry && entry.color || groundDetail };
+        });
         shader.vertexShader = "varying vec3 vTerrainWorldPosition; varying vec3 vTerrainWorldNormal;\n" + shader.vertexShader;
         shader.vertexShader = shader.vertexShader.replace(
           "#include <begin_vertex>",
           "#include <begin_vertex>\n vTerrainWorldPosition=(modelMatrix*vec4(transformed,1.0)).xyz;\n vTerrainWorldNormal=normalize(mat3(modelMatrix)*objectNormal);"
         );
-        shader.fragmentShader = "uniform sampler2D cliffMap; uniform sampler2D grassMap; uniform vec3 biomeGroundTint; uniform vec3 biomeCliffTint; uniform vec3 biomeGrassTint; uniform vec3 biomeFrostTint; uniform float biomeGrassStrength; uniform float biomeFrostStart; varying vec3 vTerrainWorldPosition; varying vec3 vTerrainWorldNormal;\n" + shader.fragmentShader;
+        shader.fragmentShader = "uniform sampler2D cliffMap; uniform sampler2D terrainMap_shore; uniform sampler2D terrainMap_desert; uniform sampler2D terrainMap_snowy; uniform sampler2D terrainMap_mountains; uniform sampler2D terrainMap_moon; varying vec3 vTerrainWorldPosition; varying vec3 vTerrainWorldNormal;\n" + shader.fragmentShader;
         shader.fragmentShader = shader.fragmentShader.replace(
           "#include <map_fragment>",
           `#ifdef USE_MAP
             vec3 terrainNormal=abs(normalize(vTerrainWorldNormal));
             terrainNormal=pow(terrainNormal,vec3(5.0));
             terrainNormal/=max(terrainNormal.x+terrainNormal.y+terrainNormal.z,0.0001);
-            vec3 groundSample=pow(texture2D(map,vTerrainWorldPosition.xz*0.058).rgb,vec3(1.04))*mix(vec3(0.92),biomeGroundTint*1.65,0.55);
-            vec3 cliffX=pow(texture2D(cliffMap,vTerrainWorldPosition.zy*0.047).rgb,vec3(1.06))*mix(vec3(0.82),biomeCliffTint*1.55,0.38);
-            vec3 cliffY=pow(texture2D(cliffMap,vTerrainWorldPosition.xz*0.047).rgb,vec3(1.06))*mix(vec3(0.82),biomeCliffTint*1.55,0.38);
-            vec3 cliffZ=pow(texture2D(cliffMap,vTerrainWorldPosition.xy*0.047).rgb,vec3(1.06))*mix(vec3(0.82),biomeCliffTint*1.55,0.38);
+            vec2 terrainUv=vTerrainWorldPosition.xz*0.058;
+            float wShore=pow(1.0/(1.0+dot(vTerrainWorldPosition.xz-vec2(-590.0,360.0),vTerrainWorldPosition.xz-vec2(-590.0,360.0))/105000.0),3.2);
+            float wJungle=pow(1.0/(1.0+dot(vTerrainWorldPosition.xz-vec2(0.0,255.0),vTerrainWorldPosition.xz-vec2(0.0,255.0))/105000.0),3.2);
+            float wDesert=pow(1.0/(1.0+dot(vTerrainWorldPosition.xz-vec2(590.0,360.0),vTerrainWorldPosition.xz-vec2(590.0,360.0))/105000.0),3.2);
+            float wSnowy=pow(1.0/(1.0+dot(vTerrainWorldPosition.xz-vec2(-590.0,-410.0),vTerrainWorldPosition.xz-vec2(-590.0,-410.0))/105000.0),3.2);
+            float wMountains=pow(1.0/(1.0+dot(vTerrainWorldPosition.xz-vec2(0.0,-520.0),vTerrainWorldPosition.xz-vec2(0.0,-520.0))/105000.0),3.2);
+            float wMoon=pow(1.0/(1.0+dot(vTerrainWorldPosition.xz-vec2(590.0,-410.0),vTerrainWorldPosition.xz-vec2(590.0,-410.0))/105000.0),3.2);
+            float weightTotal=max(0.0001,wShore+wJungle+wDesert+wSnowy+wMountains+wMoon);
+            vec3 groundSample=(texture2D(terrainMap_shore,terrainUv).rgb*wShore+texture2D(map,terrainUv).rgb*wJungle+texture2D(terrainMap_desert,terrainUv).rgb*wDesert+texture2D(terrainMap_snowy,terrainUv).rgb*wSnowy+texture2D(terrainMap_mountains,terrainUv).rgb*wMountains+texture2D(terrainMap_moon,terrainUv).rgb*wMoon)/weightTotal;
+            groundSample=pow(groundSample,vec3(1.04));
+            vec3 cliffX=pow(texture2D(cliffMap,vTerrainWorldPosition.zy*0.047).rgb,vec3(1.06));
+            vec3 cliffY=pow(texture2D(cliffMap,vTerrainWorldPosition.xz*0.047).rgb,vec3(1.06));
+            vec3 cliffZ=pow(texture2D(cliffMap,vTerrainWorldPosition.xy*0.047).rgb,vec3(1.06));
             vec3 cliffSample=cliffX*terrainNormal.x+cliffY*terrainNormal.y+cliffZ*terrainNormal.z;
             float slope=smoothstep(0.15,0.62,1.0-abs(normalize(vTerrainWorldNormal).y));
-            float frost=smoothstep(biomeFrostStart,biomeFrostStart+55.0,vTerrainWorldPosition.y)*(1.0-smoothstep(0.34,0.82,slope));
             vec3 terrainColor=mix(groundSample,cliffSample,slope);
-            vec3 grassSample=pow(texture2D(grassMap,vTerrainWorldPosition.xz*0.084).rgb,vec3(1.06))*mix(vec3(0.9),biomeGrassTint*1.75,0.28);
-            float grassPatch=0.5+0.5*sin(vTerrainWorldPosition.x*0.031)*sin(vTerrainWorldPosition.z*0.027);
-            float grassMask=(1.0-smoothstep(18.0,52.0,vTerrainWorldPosition.y))*(1.0-smoothstep(0.12,0.48,slope))*smoothstep(0.18,0.72,grassPatch);
-            terrainColor=mix(terrainColor,grassSample,grassMask*biomeGrassStrength*0.92);
-            terrainColor=mix(terrainColor,biomeFrostTint,frost*0.78);
             diffuseColor*=vec4(terrainColor*0.96,1.0);
           #endif`
         );
       };
-      material.customProgramCacheKey = () => "ashenhold-terrain-blend-v3-" + realm.biome;
+      material.customProgramCacheKey = () => "ashenhold-continent-six-biome-v1";
     }
     terrain = new THREE.Mesh(geometry, material);
     terrain.receiveShadow = true;
     scene.add(terrain);
 
+    const shoreZone = CONTINENT_ZONE_BY_ID.get("shore");
+    const shoreBiome = BIOMES.shore;
     const water = new THREE.Mesh(
-      new THREE.PlaneGeometry(WORLD_SIZE * 1.35, WORLD_SIZE * 1.35),
-      new THREE.MeshPhongMaterial({ color: biome.water, transparent: true, opacity: biome.waterOpacity, shininess: 92, specular: new THREE.Color(biome.water).lerp(new THREE.Color(0xb6d9e4), .58) })
+      new THREE.CircleGeometry(520, isCoarse ? 48 : 96),
+      new THREE.MeshPhongMaterial({ color: shoreBiome.water, transparent: true, opacity: shoreBiome.waterOpacity, shininess: 92, specular: new THREE.Color(shoreBiome.water).lerp(new THREE.Color(0xb6d9e4), .58) })
     );
     water.rotation.x = -Math.PI / 2;
-    water.position.y = biome.waterLevel;
+    water.position.set(shoreZone.center.x, shoreBiome.waterLevel, shoreZone.center.z);
     scene.add(water);
   }
 
@@ -2914,19 +3005,22 @@
       const z = (seeded(roll + 2) - .5) * 1660;
       if (!forestPlacementClear(x, z, 1.5)) continue;
       const y = terrainHeight(x, z);
-      if (y <= biome.waterLevel + .45) continue;
+      if (y <= waterLevelAt(x, z) + .45) continue;
       const slope = Math.abs(terrainHeight(x + 1.5, z) - y) + Math.abs(terrainHeight(x, z + 1.5) - y);
       if (slope > 1.35) continue;
-      const hero = seeded(roll + 3) < profile.heroChance;
+      const treeBiomeId = biomeIdAt(x, z);
+      const treeProfile = FOREST_PROFILES[treeBiomeId] || profile;
+      const hero = seeded(roll + 3) < treeProfile.heroChance;
       const height = hero
-        ? lerp(profile.heroMin, profile.heroMax, seeded(roll + 4))
-        : lerp(profile.minHeight, profile.maxHeight, seeded(roll + 4));
+        ? lerp(treeProfile.heroMin, treeProfile.heroMax, seeded(roll + 4))
+        : lerp(treeProfile.minHeight, treeProfile.maxHeight, seeded(roll + 4));
       const trunkRadius = hero
-        ? lerp(2.3, realm.biome === "jungle" ? 6.7 : 5.2, seeded(roll + 5))
-        : (.38 + seeded(roll + 5) * .78) * profile.trunk;
+        ? lerp(2.3, treeBiomeId === "jungle" ? 6.7 : 5.2, seeded(roll + 5))
+        : (.38 + seeded(roll + 5) * .78) * treeProfile.trunk;
       const crownRadius = hero ? height * (.18 + seeded(roll + 6) * .08) : height * (.14 + seeded(roll + 6) * .065);
       placements.push({
-        x, y, z, height, trunkRadius, crownRadius, hero,
+        x, y, z, height, trunkRadius, crownRadius, hero, biomeId: treeBiomeId,
+        barkColor: treeProfile.bark, leafColor: treeProfile.leaf,
         rotation: seeded(roll + 7) * Math.PI * 2,
         widthX: .84 + seeded(roll + 8) * .32,
         widthZ: .84 + seeded(roll + 9) * .32,
@@ -2965,9 +3059,9 @@
       : profile.crown === "crystal" ? new THREE.OctahedronGeometry(1, 0)
       : profile.crown === "dead" ? new THREE.ConeGeometry(.48, 1, 5)
       : new THREE.SphereGeometry(1, 5, 4);
-    const trunkMaterial = new THREE.MeshStandardMaterial({ color: profile.bark, roughness: 1, metalness: 0 });
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, metalness: 0 });
     const crownMaterial = new THREE.MeshStandardMaterial({
-      color: profile.leaf, roughness: .96, metalness: profile.crown === "crystal" ? .2 : 0,
+      color: 0xffffff, roughness: .96, metalness: profile.crown === "crystal" ? .2 : 0,
       emissive: profile.crown === "crystal" ? 0x26264d : 0x000000,
       emissiveIntensity: profile.crown === "crystal" ? .35 : 0
     });
@@ -2980,7 +3074,7 @@
       emissive: new THREE.Color(profile.leaf).multiplyScalar(.12), emissiveIntensity: .22,
       roughness: .92, metalness: 0, vertexColors: false, side: THREE.DoubleSide
     });
-    const farMaterial = new THREE.MeshLambertMaterial({ color: new THREE.Color(profile.leaf).multiplyScalar(.72) });
+    const farMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff });
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
     const euler = new THREE.Euler(0, 0, 0, "YXZ");
@@ -3021,7 +3115,7 @@
           )
         );
         trunkMesh.setMatrixAt(index, matrix);
-        instanceTone.setRGB(tree.trunkTone, tree.trunkTone, tree.trunkTone);
+        instanceTone.set(tree.barkColor).multiplyScalar(tree.trunkTone);
         trunkMesh.setColorAt(index, instanceTone);
         const crownHeight = profile.crown === "dead" ? tree.height * .42 : tree.height * (tree.hero ? .52 : .46);
         const crownY = tree.y + tree.height * (profile.crown === "conifer" ? .7 : .78);
@@ -3034,14 +3128,14 @@
           )
         );
         crownMesh.setMatrixAt(index, matrix);
-        instanceTone.setRGB(tree.crownTone, tree.crownTone, tree.crownTone);
+        instanceTone.set(tree.leafColor).multiplyScalar(tree.crownTone);
         crownMesh.setColorAt(index, instanceTone);
         matrix.compose(
           new THREE.Vector3(tree.x - centerX, crownY, tree.z - centerZ), quaternion,
           new THREE.Vector3(tree.crownRadius * tree.widthX, crownHeight, tree.crownRadius * tree.widthZ)
         );
         farMesh.setMatrixAt(index, matrix);
-        instanceTone.setRGB(tree.crownTone, tree.crownTone, tree.crownTone);
+        instanceTone.set(tree.leafColor).multiplyScalar(tree.crownTone * .72);
         farMesh.setColorAt(index, instanceTone);
         if (tree.hero && heroColliderBudget > 0) {
           addCollider(tree.x, tree.z, tree.trunkRadius * .72, tree.trunkRadius * .72, 0, tree.y, tree.y + tree.height);
@@ -3069,7 +3163,8 @@
     });
     const totalHeroes = placements.filter((tree) => tree.hero).length;
     forestReport = {
-      profile: profile.id, total: placements.length,
+      profile: "six-biome-old-growth", total: placements.length,
+      byBiome: BIOME_IDS.reduce((result, id) => { result[id] = placements.filter((tree) => tree.biomeId === id).length; return result; }, {}),
       heroes: totalHeroes,
       assetHeroes: assetHeroCount,
       proceduralHeroes: Math.max(0, totalHeroes - assetHeroCount),
@@ -3868,7 +3963,7 @@
     const x = stronghold.x + Math.cos(angle) * radius;
     const z = stronghold.z + Math.sin(angle) * radius;
     const baseY = surfaceHeightAt(x, z, 999);
-    const height = stronghold.kind === "graveyard" ? 17 : 15;
+    const height = stronghold.kind === "graveyard" ? 22 : 20;
     const root = new THREE.Group();
     root.name = "Warden capture flag " + stronghold.id;
     root.position.set(x, baseY, z);
@@ -3961,7 +4056,7 @@
   // with seeded garrison spots ringed around its center (extra light/golem slots cover level scaling).
   function registerStronghold(id, name, kind, x, z) {
     const base = STRONGHOLD_GARRISONS[kind] || STRONGHOLD_GARRISONS.hamlet;
-    const stronghold = { id, name, kind, x, z, members: [], cleared: false, spots: [], baseCount: base.light + base.heavy + base.warg + base.golem };
+    const stronghold = { id, name, kind, biomeId: biomeIdAt(x, z), x, z, members: [], cleared: false, spots: [], baseCount: base.light + base.heavy + base.warg + base.golem };
     const salt = worldLayout.salt + 8100 + strongholds.length * 137;
     const golemSlots = base.golem + (kind === "fort" || kind === "keep" ? 1 : 0);
     const plan = [];
@@ -3978,7 +4073,7 @@
         const gx = x + Math.cos(angle) * distance;
         const gz = z + Math.sin(angle) * distance;
         const gy = terrainHeight(gx, gz);
-        if (gy <= biome.waterLevel + .35) continue;
+        if (gy <= waterLevelAt(gx, gz) + .35) continue;
         if (Math.abs(terrainHeight(gx + 1.5, gz) - gy) + Math.abs(terrainHeight(gx, gz + 1.5) - gy) > .9) continue;
         if (hitsCollider(gx, gz, .9, gy, gy + 3.4)) continue;
         stronghold.spots.push({ type, baseType: type, slotIndex: index, x: gx, z: gz, roll: seeded(salt + index * 7 + attempt * 37 + 3) });
@@ -4073,7 +4168,7 @@
         addCollider(dx, dz, Math.max(.2, size.sx * scale * .45), Math.max(.2, size.sz * scale * .45), rotation, baseY - 1, baseY + Math.min(size.sy * scale, 2.8));
       }
     }
-    const treeKey = { snowy: "treePineA", jungle: "treePalmBend", desert: "cactusTall", shore: "treePalm", mountains: "treePineB" }[realm.biome];
+    const treeKey = { snowy: "treePineA", jungle: "treePalmBend", desert: "cactusTall", shore: "treePalm", mountains: "treePineB", moon: "pineCrooked" }[poi.biomeId || biomeIdAt(poi.x, poi.z)];
     if (treeKey && models[treeKey]) {
       const angle = seeded(salt + 26) * Math.PI * 2;
       placePackModel(treeKey, poi.x + Math.cos(angle) * 24, poi.z + Math.sin(angle) * 24, canonicalModelScale(treeKey, .9), seeded(salt + 27) * Math.PI * 2, {});
@@ -4352,11 +4447,11 @@
       else if (poi.kind === "watchpost") buildWatchpost(poi, poiIndex, debug);
       else if (poi.kind === "camp") buildRaiderCamp(poi, poiIndex, debug);
       else if (poi.kind === "ruin") buildRuinCluster(poi, poiIndex, debug);
-      else if (realm.biome === "moon") buildGraveyard(poi, poiIndex, debug);
+      else if ((poi.biomeId || biomeIdAt(poi.x, poi.z)) === "moon") buildGraveyard(poi, poiIndex, debug);
       else buildShrine(poi, poiIndex, debug);
       debug.collidersAdded = colliders.length - collidersBefore;
       poiDebugInfo.push(debug);
-      const stronghold = registerStronghold("poi-" + poiIndex, poi.name, poi.kind === "shrine" && realm.biome === "moon" ? "graveyard" : poi.kind, poi.x, poi.z);
+      const stronghold = registerStronghold("poi-" + poiIndex, poi.name, poi.kind === "shrine" && (poi.biomeId || biomeIdAt(poi.x, poi.z)) === "moon" ? "graveyard" : poi.kind, poi.x, poi.z);
       debug.guards = stronghold.baseCount;
     });
     registerStronghold("keep", "ASHENHOLD KEEP", "keep", RUINS.x, RUINS.z);
@@ -4805,7 +4900,7 @@
 
   function biomePropGround(x, z) {
     const y = terrainHeight(x, z);
-    if (y < biome.waterLevel + .6) return null;
+    if (y < waterLevelAt(x, z) + .6) return null;
     const slope = Math.abs(terrainHeight(x + 1.5, z) - y) + Math.abs(terrainHeight(x, z + 1.5) - y);
     if (slope > 1.05) return null;
     if (Math.abs(x - roadCenterAt(z)) < worldProfile.road.width + 4.5 && z > -165 && z < 225) return null;
@@ -4819,7 +4914,7 @@
     return new THREE.MeshStandardMaterial(Object.assign({ vertexColors: true, color: 0xffffff, roughness: .92, metalness: .02, envMapIntensity: .3 }, options || {}));
   }
 
-  function biomePropDefinitions() {
+  function biomePropDefinitions(biomeId) {
     const cone = new THREE.ConeGeometry(1, 1, 7);
     const cylinder = new THREE.CylinderGeometry(1, 1, 1, 7);
     const sphere = new THREE.SphereGeometry(1, 7, 6);
@@ -4827,7 +4922,7 @@
     const octa = new THREE.OctahedronGeometry(1, 0);
     const box = new THREE.BoxGeometry(1, 1, 1);
     const jitterTint = (shade, roll) => shade.setRGB(1, 1, 1).offsetHSL(0, (roll - .5) * .06, (roll - .5) * .14);
-    if (realm.biome === "snowy") return [
+    if (biomeId === "snowy") return [
       { kind: "snowPine", count: 64, geometry: mergePropGeometry([
         { geometry: cylinder, sx: .16, sy: 1.3, sz: .16, y: .6, color: 0x34291f },
         { geometry: cone, sx: 1.5, sy: 2.4, sz: 1.5, y: 2, color: 0x24402e },
@@ -4840,7 +4935,7 @@
         { geometry: octa, sx: .28, sy: 1.05, sz: .28, x: -.46, z: -.26, y: .45, rz: .3, color: 0xbfe8f2 }
       ]), material: biomePropMaterial({ emissive: 0xbfe8f2, emissiveIntensity: .55, roughness: .35 }), tint: jitterTint }
     ];
-    if (realm.biome === "jungle") return [
+    if (biomeId === "jungle") return [
       { kind: "broadleaf", count: 60, geometry: mergePropGeometry([
         { geometry: cylinder, sx: .2, sy: 2.8, sz: .2, y: 1.35, color: 0x4a3826 },
         { geometry: sphere, sx: 1.75, sy: 1.35, sz: 1.75, y: 3.6, color: 0x2f6b34 },
@@ -4852,7 +4947,7 @@
         { geometry: dodeca, sx: .8, sy: .58, sz: .72, x: .95, y: .32, ry: .8, color: 0x4c5f43 }
       ]), material: biomePropMaterial(), tint: (shade, roll) => shade.setRGB(1, 1, 1).offsetHSL((roll - .5) * .03, (roll - .5) * .1, (roll - .5) * .12) }
     ];
-    if (realm.biome === "desert") return [
+    if (biomeId === "desert") return [
       { kind: "cactus", count: 56, geometry: mergePropGeometry([
         { geometry: cylinder, sx: .4, sy: 1.25, sz: .4, y: .62, color: 0x74905c },
         { geometry: cylinder, sx: .34, sy: 1.05, sz: .34, y: 1.75, color: 0x7d9965 },
@@ -4866,7 +4961,7 @@
         { geometry: new THREE.ConeGeometry(1, 1, 4), sx: .52, sy: 4.4, sz: .52, y: 2.75, ry: Math.PI / 4, color: 0xd8b083 }
       ]), material: biomePropMaterial(), tint: jitterTint }
     ];
-    if (realm.biome === "shore") {
+    if (biomeId === "shore") {
       const frond = new THREE.PlaneGeometry(1.7, .5);
       frond.translate(.85, 0, 0);
       frond.rotateX(-.55);
@@ -4883,7 +4978,7 @@
         ]), material: biomePropMaterial(), tint: jitterTint }
       ];
     }
-    if (realm.biome === "mountains") return [
+    if (biomeId === "mountains") return [
       { kind: "darkPine", count: 68, geometry: mergePropGeometry([
         { geometry: cylinder, sx: .16, sy: 1.3, sz: .16, y: .6, color: 0x2c231c },
         { geometry: cone, sx: 1.5, sy: 2.4, sz: 1.5, y: 2, color: 0x1d2f24 },
@@ -4910,17 +5005,19 @@
     ];
   }
 
-  function placePropSet(definition, setIndex) {
+  function placePropSet(definition, setIndex, biomeId) {
     const wanted = isCoarse ? Math.round(definition.count / 2) : definition.count;
     const mesh = new THREE.InstancedMesh(definition.geometry, definition.material, wanted);
     const dummy = new THREE.Object3D();
     const shade = new THREE.Color();
-    const salt = 97000 + BIOME_IDS.indexOf(realm.biome) * 4000 + setIndex * 500;
+    const zone = CONTINENT_ZONE_BY_ID.get(biomeId);
+    const salt = 97000 + BIOME_IDS.indexOf(biomeId) * 4000 + setIndex * 500;
     let placed = 0;
     let attempt = 0;
     while (placed < wanted && attempt < wanted * 9) {
-      const x = (seeded(salt + attempt * 3 + 1) - .5) * 1050;
-      const z = (seeded(salt + attempt * 3 + 2) - .5) * 1050;
+      const x = lerp(zone.bounds.minX + 28, zone.bounds.maxX - 28, seeded(salt + attempt * 3 + 1));
+      const z = lerp(zone.bounds.minZ + 28, zone.bounds.maxZ - 28, seeded(salt + attempt * 3 + 2));
+      if (biomeIdAt(x, z) !== biomeId) { attempt += 1; continue; }
       const y = biomePropGround(x, z);
       attempt += 1;
       if (y === null) continue;
@@ -4951,15 +5048,20 @@
   }
 
   function createBiomeProps() {
-    const definitions = biomePropDefinitions();
     const byKind = {};
+    const byBiome = {};
     let total = 0;
-    definitions.forEach((definition, index) => {
-      const placed = placePropSet(definition, index);
-      byKind[definition.kind] = placed;
-      total += placed;
+    BIOME_IDS.forEach((biomeId) => {
+      const definitions = biomePropDefinitions(biomeId);
+      byBiome[biomeId] = 0;
+      definitions.forEach((definition, index) => {
+        const placed = placePropSet(definition, index, biomeId);
+        byKind[definition.kind] = placed;
+        byBiome[biomeId] += placed;
+        total += placed;
+      });
     });
-    biomePropsReport = { kind: definitions[0].kind, total, byKind };
+    biomePropsReport = { kind: "six-biome-continent", total, byKind, byBiome };
   }
 
   function createPlayer() {
@@ -5425,6 +5527,8 @@
 
   function createGroundEnemy(type, x, z, difficulty, networkId) {
     const root = new THREE.Group();
+    const enemyBiomeId = biomeIdAt(x, z);
+    const enemyWorldProfile = WORLD_PROFILES[enemyBiomeId] || WORLD_PROFILES.jungle;
     let modelRoot = root;
     let mixer = null;
     const parts = {};
@@ -5439,9 +5543,10 @@
 
     let actions = {};
     let animationState = "";
-    if ((type === "biomeLight" || type === "biomeHeavy" || type === "golem") && visualAssets.models && visualAssets.models[type === "golem" ? "biomeHeavy" : type]) {
-      const source = visualAssets.models[type === "golem" ? "biomeHeavy" : type];
-      const profile = type === "biomeHeavy" || type === "golem" ? worldProfile.heavyEnemy : worldProfile.lightEnemy;
+    const enemyModelKey = (type === "biomeHeavy" || type === "golem" ? "biomeHeavy_" : "biomeLight_") + enemyBiomeId;
+    if ((type === "biomeLight" || type === "biomeHeavy" || type === "golem") && visualAssets.models && visualAssets.models[enemyModelKey]) {
+      const source = visualAssets.models[enemyModelKey];
+      const profile = type === "biomeHeavy" || type === "golem" ? enemyWorldProfile.heavyEnemy : enemyWorldProfile.lightEnemy;
       const model = THREE.SkeletonUtils ? THREE.SkeletonUtils.clone(source.scene) : source.scene.clone(true);
       model.name = profile[1];
       model.scale.setScalar(profile[3] * (type === "golem" ? 1.38 : 1));
@@ -5471,7 +5576,7 @@
       };
       Object.keys(clips).forEach((id) => { if (clips[id]) actions[id] = mixer.clipAction(clips[id]); });
       stats = type === "golem"
-        ? { name: realm.biome.toUpperCase() + " GUARDIAN", rank: "STRONGHOLD COLOSSUS", health: 125, damage: 16, speed: 4.4, range: 3.2, cooldown: 2.05, hitRadius: 2.3, xp: 105, heal: 14 }
+        ? { name: enemyBiomeId.toUpperCase() + " GUARDIAN", rank: "STRONGHOLD COLOSSUS", health: 125, damage: 16, speed: 4.4, range: 3.2, cooldown: 2.05, hitRadius: 2.3, xp: 105, heal: 14 }
         : type === "biomeHeavy"
         ? { name: profile[1], rank: profile[2], health: 118, damage: 15, speed: 5.3, range: 2.9, cooldown: 1.9, hitRadius: 1.85, xp: 108, heal: 12 }
         : { name: profile[1], rank: profile[2], health: 62, damage: 9, speed: 7.7, range: 2.5, cooldown: 1.35, hitRadius: 1.35, xp: 66, heal: 8 };
@@ -5548,7 +5653,7 @@
     scene.add(root);
     const enemy = {
       networkId: networkId || null,
-      name: stats.name, rank: stats.rank, kind: type, root, modelRoot, mixer, parts,
+      name: stats.name, rank: stats.rank, kind: type, biomeId: enemyBiomeId, root, modelRoot, mixer, parts,
       health: Math.round(stats.health * healthScale), maxHealth: Math.round(stats.health * healthScale),
       damage: Math.max(1, Math.round(stats.damage * damageScale)), speed: stats.speed * (1 + Math.min(.18, threat * .012)),
       attackRange: stats.range, attackInterval: Math.max(.72, stats.cooldown - tier * .025), attackCooldown: .4 + encounterRandom(),
@@ -5558,12 +5663,87 @@
       tier, threat, strongholdId: null, strongholdHandled: false,
       actions, animationState, lastDamageSource: null, lastWeaponId: null, hitStun: 0, phase: encounterRandom() * Math.PI * 2,
       impulse: new THREE.Vector3(), telegraph: null, bleedStacks: 0, bleedTime: 0, slowTime: 0,
-      tamed: false, tameReady: false, tameProgress: 0, tameMarker: null, ai: null
+      tamed: false, tameReady: false, tameProgress: 0, tameMarker: null, ai: null,
+      regionalModelLoaded: modelRoot !== root && (type === "biomeLight" || type === "biomeHeavy" || type === "golem")
     };
     setEnemyAction(enemy, "idle", true);
     root.traverse((object) => { if (object.isMesh || object.isSkinnedMesh) object.userData.dragon = enemy; });
     groundEnemies.push(enemy);
     return enemy;
+  }
+
+  function hydrateRegionalEnemyModels(biomeId) {
+    const profileSet = WORLD_PROFILES[biomeId];
+    if (!profileSet || !visualAssets.models) return 0;
+    let hydrated = 0;
+    groundEnemies.forEach((enemy) => {
+      if (!enemy || enemy.dead || enemy.tamed || enemy.biomeId !== biomeId || enemy.regionalModelLoaded) return;
+      if (enemy.kind !== "biomeLight" && enemy.kind !== "biomeHeavy" && enemy.kind !== "golem") return;
+      const heavy = enemy.kind === "biomeHeavy" || enemy.kind === "golem";
+      const source = visualAssets.models[(heavy ? "biomeHeavy_" : "biomeLight_") + biomeId];
+      if (!source || !source.scene) return;
+      const profile = heavy ? profileSet.heavyEnemy : profileSet.lightEnemy;
+      const previousHealthRatio = enemy.maxHealth > 0 ? enemy.health / enemy.maxHealth : 1;
+      const previousState = enemy.animationState || "idle";
+      enemy.root.children.slice().forEach((child) => { if (child !== enemy.tameMarker) enemy.root.remove(child); });
+      const model = THREE.SkeletonUtils ? THREE.SkeletonUtils.clone(source.scene) : source.scene.clone(true);
+      model.name = profile[1];
+      model.scale.setScalar(profile[3] * (enemy.kind === "golem" ? 1.38 : 1));
+      model.rotation.y = Math.PI;
+      const tint = enemy.kind === "golem" ? new THREE.Color(BIOMES[biomeId].stoneTint).multiplyScalar(.72) : new THREE.Color(profile[4]);
+      model.traverse((object) => {
+        if (!object.isMesh && !object.isSkinnedMesh) return;
+        object.castShadow = !isCoarse;
+        object.receiveShadow = true;
+        if (object.material) {
+          object.material = object.material.clone();
+          if (object.material.color) object.material.color.lerp(tint, .25);
+          object.material.roughness = Math.max(.58, object.material.roughness == null ? .7 : object.material.roughness);
+          object.material.envMapIntensity = .38;
+        }
+      });
+      enemy.root.add(model);
+      const mixer = new THREE.AnimationMixer(model);
+      const findClip = (pattern) => source.animations.find((clip) => pattern.test(clip.name));
+      const idleClip = findClip(/^Idle$/i) || source.animations[0];
+      const runClip = findClip(/^Run$/i) || findClip(/^Walk$/i) || idleClip;
+      const clips = {
+        idle: idleClip, walk: findClip(/^Walk$/i) || runClip, run: runClip,
+        attack: findClip(/Punch|Weapon/i) || idleClip, hit: findClip(/HitReact/i) || idleClip,
+        death: findClip(/^Death$/i) || idleClip
+      };
+      const actions = {};
+      Object.keys(clips).forEach((id) => { if (clips[id]) actions[id] = mixer.clipAction(clips[id]); });
+      const baseStats = enemy.kind === "golem"
+        ? { name: biomeId.toUpperCase() + " GUARDIAN", rank: "STRONGHOLD COLOSSUS", health: 125, damage: 16, speed: 4.4, range: 3.2, cooldown: 2.05, hitRadius: 2.3, xp: 105, heal: 14 }
+        : enemy.kind === "biomeHeavy"
+        ? { name: profile[1], rank: profile[2], health: 118, damage: 15, speed: 5.3, range: 2.9, cooldown: 1.9, hitRadius: 1.85, xp: 108, heal: 12 }
+        : { name: profile[1], rank: profile[2], health: 62, damage: 9, speed: 7.7, range: 2.5, cooldown: 1.35, hitRadius: 1.35, xp: 66, heal: 8 };
+      const healthScale = Math.pow(1.075, enemy.threat - 1);
+      const damageScale = Math.pow(1.035, enemy.threat - 1);
+      const stronghold = enemy.strongholdId ? strongholds.find((item) => item.id === enemy.strongholdId) : null;
+      enemy.name = (stronghold ? stronghold.name + " " : "") + baseStats.name;
+      enemy.rank = baseStats.rank;
+      enemy.maxHealth = Math.round(baseStats.health * healthScale);
+      enemy.health = clamp(Math.round(enemy.maxHealth * previousHealthRatio), 1, enemy.maxHealth);
+      enemy.damage = Math.max(1, Math.round(baseStats.damage * damageScale));
+      enemy.speed = baseStats.speed * (1 + Math.min(.18, enemy.threat * .012));
+      enemy.attackRange = baseStats.range;
+      enemy.attackInterval = Math.max(.72, baseStats.cooldown - enemy.tier * .025);
+      enemy.hitRadius = baseStats.hitRadius;
+      enemy.xpReward = Math.round(baseStats.xp * (1 + enemy.tier * .08));
+      enemy.healthReward = baseStats.heal;
+      enemy.modelRoot = model;
+      enemy.mixer = mixer;
+      enemy.actions = actions;
+      enemy.parts = {};
+      enemy.animationState = "";
+      enemy.regionalModelLoaded = true;
+      enemy.root.traverse((object) => { if (object.isMesh || object.isSkinnedMesh) object.userData.dragon = enemy; });
+      setEnemyAction(enemy, actions[previousState] ? previousState : "idle", true);
+      hydrated += 1;
+    });
+    return hydrated;
   }
 
   function ambientDifficulty() {
@@ -6051,7 +6231,7 @@
   function enemyNavPointWalkable(x, z, radius) {
     if (x < -HALF_WORLD || x > HALF_WORLD || z < -HALF_WORLD || z > HALF_WORLD) return false;
     const y = terrainHeight(x, z);
-    if (y <= biome.waterLevel + .38) return false;
+    if (y <= waterLevelAt(x, z) + .38) return false;
     const sample = 1.25;
     const slope = Math.max(
       Math.abs(terrainHeight(x + sample, z) - terrainHeight(x - sample, z)),
@@ -6911,7 +7091,8 @@
     playerNoiseReason = "quiet";
     worldLayout.forts.forEach((fort, index) => {
       const angle = Math.atan2(fort[1], fort[0]) + .55;
-      createDragon(worldProfile.dragonNames[index], clamp(fort[0] + Math.cos(angle) * 62, -560, 560), clamp(fort[1] + Math.sin(angle) * 62, -560, 560), false, "dragon-fort-" + index);
+      const fortProfile = WORLD_PROFILES[fort[5] || biomeIdAt(fort[0], fort[1])] || WORLD_PROFILES.jungle;
+      createDragon(fortProfile.dragonNames[index % fortProfile.dragonNames.length], clamp(fort[0] + Math.cos(angle) * 62, -760, 760), clamp(fort[1] + Math.sin(angle) * 62, -760, 760), false, "dragon-fort-" + index);
     });
     const wanderAngle = seeded(worldLayout.salt + 1600) * Math.PI * 2;
     createDragon(worldProfile.dragonNames[3], Math.cos(wanderAngle) * 360, Math.sin(wanderAngle) * 360, false, "dragon-roamer-0");
@@ -6951,7 +7132,7 @@
   function createLandmarks() {
     const routeSummits = worldLayout.routes.map((route) => platforms.filter((platform) => platform.routeId === route[5]).sort((a, b) => b.stepIndex - a.stepIndex)[0]);
     landmarks = [
-      { id: "pass", name: biome.name + " GATE", position: new THREE.Vector3(START.x, 0, START.z - 28), radius: 32, discovered: false, revealed: false },
+      { id: "pass", name: "ASHENHOLD CONTINENT GATE", position: new THREE.Vector3(START.x, 0, START.z - 28), radius: 32, discovered: false, revealed: false },
       { id: "keep", name: "ASHENHOLD KEEP", position: RUINS.clone(), radius: 44, discovered: false, revealed: false },
       { id: "hollow", name: "RUNE HOLLOW", position: RUNE_HOLLOW.clone(), radius: 24, discovered: false, revealed: false }
     ].concat(worldLayout.forts.map((fort, index) => ({
@@ -6975,6 +7156,8 @@
     player.slideFxTimer = 0;
     player.mobileSlideHeld = false;
     player.airMomentum.set(0, 0, 0);
+    player.groundMomentum.set(0, 0, 0);
+    player.lastJumpTelemetry = null;
     player.airbornePhase = "grounded";
     player.landingTime = 0;
     player.landingImpact = 0;
@@ -6998,7 +7181,7 @@
     audio.init();
     outpostsDiscovered = 0;
     runeHinted = false;
-    encounterRng.state = ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0;
+    encounterRng.state = (AUTHORED_WORLD_VARIATION ^ 0x6d2b79f5) >>> 0;
     strongholds.forEach((stronghold) => { stronghold.cleared = false; stronghold.members = []; updateStrongholdMarker(stronghold); });
     if (resumeSave) applySavedStrongholds(resumeSave);
     resetExperienceRunes();
@@ -7045,9 +7228,10 @@
       player.runXp = hasSkill("realmwalker") ? 60 : 0;
       player.runSkillPoints = 0;
       player.runSkills = {};
-      activeRunId = "run-" + realm.seed + "-" + Date.now().toString(36);
+      activeRunId = "continent-" + Date.now().toString(36);
     }
     const resumed = Boolean(resumeSave && restoreActiveRun(resumeSave));
+    updateActiveBiomePresentation(true);
     nearestTarget = null;
     state = "playing";
     game.dataset.state = state;
@@ -7060,7 +7244,7 @@
     updateStrongholdUI();
     updateCamera(1, true);
     if (!isCoarse && !testMode) requestPointer();
-    showLocation(biome.name, resumed ? "RUN RESTORED" : "ENTERING REALM " + (player.realmDepth + 1));
+    showLocation(BIOMES[currentBiomeId].name, resumed ? "CAMPAIGN RESTORED" : "ENTERING ASHENHOLD CONTINENT");
     markRunDirty(true);
     if (partyModeSelected()) coopRuntime?.startWorld();
     return true;
@@ -7137,7 +7321,7 @@
       ahead,
       downhill,
       onTerrain: Math.abs(origin.y - current) <= .48,
-      aboveWater: current > biome.waterLevel + .35
+      aboveWater: current > waterLevelAt(origin.x, origin.z) + .35
     };
   }
 
@@ -7188,7 +7372,7 @@
       return false;
     }
     const terrain = terrainHeight(player.root.position.x, player.root.position.z);
-    if (!slideHeld || player.attackTime > 0 || player.dodgeTime > 0 || terrain <= biome.waterLevel + .35 || Math.abs(player.root.position.y - terrain) > .48) {
+    if (!slideHeld || player.attackTime > 0 || player.dodgeTime > 0 || terrain <= waterLevelAt(player.root.position.x, player.root.position.z) + .35 || Math.abs(player.root.position.y - terrain) > .48) {
       if (finishSlide(false)) return false;
     }
     if (inputDirection && inputDirection.lengthSq() > .01) {
@@ -7296,16 +7480,20 @@
     if (!player.sliding) player.stamina = Math.min(maxStamina(), player.stamina + staminaRecovery * dt);
     if (!wasSuperSprinting && player.superSprinting && hasSkill("stormlaunch")) triggerStormlaunch();
 
+    let groundMotionApplied = false;
     if (player.sliding) {
       moving = updateSlide(dt, inputDirection, slideHeld) || moving;
+      if (player.sliding) player.groundMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
     } else if (player.dodgeTime > 0) {
       moving = true;
       const dodgeProgress = clamp(player.dodgeElapsed / .58, 0, 1);
       const dodgeSpeed = lerp(21, 7.5, dodgeProgress);
       const moved = movePlayer(player.dodgeDirection.x * dodgeSpeed * dt, player.dodgeDirection.z * dodgeSpeed * dt);
+      player.groundMomentum.copy(player.dodgeDirection).multiplyScalar(dodgeSpeed);
+      groundMotionApplied = true;
       player.root.rotation.y = rotateToward(player.root.rotation.y, Math.atan2(-player.dodgeDirection.x, -player.dodgeDirection.z), dt * 18);
       player.distance += moved;
-    } else if (moving) {
+    } else if (moving && player.grounded) {
       inputX /= Math.max(1, magnitude);
       inputZ /= Math.max(1, magnitude);
       const direction = inputDirection;
@@ -7327,15 +7515,27 @@
       const dx = direction.x * speed * dt;
       const dz = direction.z * speed * dt;
       player.distance += movePlayer(dx, dz);
+      player.groundMomentum.copy(direction).multiplyScalar(speed);
+      groundMotionApplied = true;
       const desiredRotation = Math.atan2(-direction.x, -direction.z);
       player.root.rotation.y = rotateToward(player.root.rotation.y, desiredRotation, dt * (superSprinting ? 14 : sprinting ? 11 : 9));
       player.walkCycle += dt * (superSprinting ? 24 : sprinting ? 17.5 : 9.2);
     }
 
+    if (player.grounded && !player.sliding && player.dodgeTime <= 0 && !groundMotionApplied) {
+      player.groundMomentum.multiplyScalar(Math.pow(.02, dt));
+      if (player.groundMomentum.lengthSq() < .04) player.groundMomentum.set(0, 0, 0);
+    }
+
     if (!player.grounded && player.airMomentum.lengthSq() > .01) {
+      if (inputDirection && inputDirection.dot(player.airMomentum) > -player.airMomentum.length() * .25) {
+        const steered = inputDirection.clone().multiplyScalar(player.airMomentum.length());
+        player.airMomentum.lerp(steered, clamp(dt * .55, 0, .08));
+      }
       player.distance += movePlayer(player.airMomentum.x * dt, player.airMomentum.z * dt);
-      player.airMomentum.multiplyScalar(Math.pow(.2, dt));
+      player.airMomentum.multiplyScalar(Math.pow(.96, dt));
       if (player.airMomentum.lengthSq() < .04) player.airMomentum.set(0, 0, 0);
+      if (player.lastJumpTelemetry) player.lastJumpTelemetry.airborneSpeed = player.airMomentum.length();
     }
 
     updateStormstrideTrail(dt);
@@ -7346,7 +7546,7 @@
       if (player.sliding) {
         player.airMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
         finishSlide(true);
-      }
+      } else player.airMomentum.copy(player.groundMomentum);
       player.grounded = false;
       player.velocityY = Math.min(0, player.velocityY);
       player.jumpTime = 0;
@@ -7379,7 +7579,7 @@
       if (player.landingTime <= 0) player.airbornePhase = "grounded";
     }
     recoverPlayerFromCollision();
-    if (player.grounded && player.root.position.y > biome.waterLevel + .35 && !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + (player.sliding ? 1.15 : 2.1))) player.lastSafePosition.copy(player.root.position);
+    if (player.grounded && player.root.position.y > waterLevelAt(player.root.position.x, player.root.position.z) + .35 && !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + (player.sliding ? 1.15 : 2.1))) player.lastSafePosition.copy(player.root.position);
     player.vertical = Math.max(0, player.root.position.y - terrainHeight(player.root.position.x, player.root.position.z));
     const slideFov = 69 + clamp((player.slideSpeed - 12) * .22, 0, 7);
     camera.fov = lerp(camera.fov, player.sliding ? slideFov : player.superSprinting ? 76 : player.sprinting ? 69 : 62, 1 - Math.pow(.002, dt));
@@ -7490,7 +7690,7 @@
     if (step > .92) return false;
     const terrain = terrainHeight(x, z);
     const supportedAboveWater = nextSurface > terrain + .35;
-    if (!supportedAboveWater && terrain <= biome.waterLevel + .35) return false;
+    if (!supportedAboveWater && terrain <= waterLevelAt(x, z) + .35) return false;
     const sample = 1.15;
     const slope = Math.max(
       Math.abs(terrainHeight(x + sample, z) - terrainHeight(x - sample, z)),
@@ -7725,9 +7925,17 @@
     if (player.sliding) {
       player.airMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
       finishSlide(true);
-    } else player.airMomentum.set(0, 0, 0);
+    } else {
+      player.airMomentum.copy(player.groundMomentum);
+      if (player.airMomentum.lengthSq() < .04 && player.moving) {
+        const fallbackSpeed = player.superSprinting ? 25.5 * strideSuperPower() : player.sprinting ? 17.2 * strideSprintPower() : 7.8;
+        player.airMomentum.set(-Math.sin(player.root.rotation.y), 0, -Math.cos(player.root.rotation.y)).multiplyScalar(fallbackSpeed);
+      }
+    }
+    const takeoffDirection = player.airMomentum.lengthSq() > .001 ? player.airMomentum.clone().normalize() : new THREE.Vector3(0, 0, -1);
+    player.lastJumpTelemetry = { takeoffSpeed: player.airMomentum.length(), airborneSpeed: player.airMomentum.length(), direction: takeoffDirection };
     player.grounded = false;
-    player.velocityY = 15.2 + skillRank("acrobat") * 1.3 + (realm.biome === "moon" ? 1.6 : 0);
+    player.velocityY = 15.2 + skillRank("acrobat") * 1.3 + (biomeIdAt(player.root.position.x, player.root.position.z) === "moon" ? 1.6 : 0);
     player.jumpTime = 0;
     player.airbornePhase = "jump";
     player.landingTime = 0;
@@ -8464,6 +8672,15 @@
   }
 
   function updateWorldDecor(dt) {
+    updateActiveBiomePresentation(false);
+    const activeBiome = BIOMES[currentBiomeId];
+    regionalAssetPrefetchTimer -= dt;
+    if (regionalAssetPrefetchTimer <= 0 && player.root) {
+      regionalAssetPrefetchTimer = .65;
+      biomeBlendWeights(player.root.position.x, player.root.position.z)
+        .filter((entry) => entry.weight >= .12)
+        .forEach((entry) => { ensureBiomeAssets(entry.id); });
+    }
     if (sky) sky.rotation.y += dt * .0013;
     forestVisibilityTimer -= dt;
     if (forestVisibilityTimer <= 0) updateAncientForestVisibility(true);
@@ -8485,8 +8702,8 @@
     }
     stormFlash = Math.max(0, stormFlash - dt);
     const lightningPulse = stormFlash > .6 ? .8 : stormFlash > .46 ? .1 : stormFlash > .25 ? .52 : 0;
-    renderer.toneMappingExposure = biome.exposure + lightningPulse * .32;
-    if (sun) sun.intensity = biome.sunIntensity + lightningPulse * 2.2;
+    renderer.toneMappingExposure = activeBiome.exposure + lightningPulse * .32;
+    if (sun) sun.intensity = activeBiome.sunIntensity + lightningPulse * 2.2;
     fires.forEach((fire) => {
       const flicker = 1 + Math.sin(elapsed * 9 + fire.phase) * .16;
       fire.outer.scale.set(flicker, 1 + Math.sin(elapsed * 12 + fire.phase) * .12, flicker);
@@ -8499,7 +8716,7 @@
       worldAsh.rotation.y += dt * .008;
       const positions = worldAsh.geometry.attributes.position;
       for (let i = 0; i < positions.count; i += 1) {
-        let y = positions.getY(i) - dt * (1.2 + (i % 7) * .08) * (biome.particleFall || 1);
+        let y = positions.getY(i) - dt * (1.2 + (i % 7) * .08) * (activeBiome.particleFall || 1);
         if (y < 0) y = 80 + (i % 11);
         positions.setY(i, y);
       }
@@ -8605,7 +8822,7 @@
       ui.questProgress.textContent = "The final dragon circles Ashenhold Keep.";
     } else {
       const cleared = strongholds.filter((stronghold) => stronghold.cleared).length;
-      ui.questObjective.innerHTML = "<i></i> Break the realm strongholds";
+      ui.questObjective.innerHTML = "<i></i> Break the continent strongholds";
       ui.questProgress.textContent = "Strongholds cleared: " + cleared + " / " + strongholds.length;
     }
     if (runesCollected < experienceRunes.length || outpostsDiscovered < 3) {
@@ -8962,9 +9179,8 @@
     ui.end.classList.toggle("victory", victory);
     ui.endKicker.textContent = victory ? "THE NORTHERN SKY IS FREE" : "ASHENHOLD HAS FALLEN";
     ui.endTitle.textContent = victory ? "VICTORY" : "DEFEAT";
-    const prepared = prepareNextRealm();
     const baseCopy = endingCopy || (victory ? "Vharok is dead. Dawn returns to the ruined kingdom." : "The World-Burner still rules the northern sky.");
-    ui.endCopy.textContent = baseCopy + (prepared ? " Next realm: " + BIOMES[prepared.biome].name + " · BIOME " + (REALM_LADDER.indexOf(prepared.biome) + 1) + " OF " + REALM_LADDER.length + "." : "");
+    ui.endCopy.textContent = baseCopy + " The six biomes remain part of this same persistent continent.";
     ui.finalKills.textContent = player.kills;
     ui.finalStrongholds.textContent = strongholds.filter((stronghold) => stronghold.cleared).length + "/" + strongholds.length;
     ui.finalDistance.textContent = Math.round(player.distance) + "m";
@@ -8984,7 +9200,7 @@
     player.prestige += 1;
     saveProgression(true);
     clearActiveRun();
-    window.setTimeout(() => endGame(true, "Every stronghold has fallen and the World-Burner is dead. A harder realm has been forged."), 700);
+    window.setTimeout(() => endGame(true, "Every stronghold has fallen and the World-Burner is dead. The same continent now awaits a harder campaign."), 700);
     return true;
   }
 
@@ -8994,7 +9210,7 @@
     markRunDirty(true);
     if (!checkRunCompletion()) {
       const remaining = strongholds.filter((stronghold) => !stronghold.cleared).length;
-      showProgressionBanner("WORLD-BURNER SLAIN", "BREAK THE STRONGHOLDS", "Clear " + remaining + " remaining location" + (remaining === 1 ? "" : "s") + " to conquer this realm");
+      showProgressionBanner("WORLD-BURNER SLAIN", "BREAK THE STRONGHOLDS", "Clear " + remaining + " remaining location" + (remaining === 1 ? "" : "s") + " to conquer the continent");
     }
   }
 
@@ -9233,7 +9449,7 @@
     search: for (let z = -480; z <= 480; z += 24) {
       for (let x = -480; x <= 480; x += 24) {
         const y = terrainHeight(x, z);
-        if (y <= biome.waterLevel + 1 || hitsCollider(x, z, .9, y, y + 2.15)) continue;
+        if (y <= waterLevelAt(x, z) + 1 || hitsCollider(x, z, .9, y, y + 2.15)) continue;
         const gradientSample = 1.5;
         const gradientX = (terrainHeight(x + gradientSample, z) - terrainHeight(x - gradientSample, z)) / (gradientSample * 2);
         const gradientZ = (terrainHeight(x, z + gradientSample) - terrainHeight(x, z - gradientSample)) / (gradientSample * 2);
@@ -9247,7 +9463,7 @@
         if (kind === "downhill" && info.angle < 8) continue;
         if (kind === "uphill" && info.angle > -8) continue;
         const forwardY = terrainHeight(x + direction.x * 3, z + direction.z * 3);
-        if (forwardY <= biome.waterLevel + .35 || hitsCollider(x + direction.x * 2, z + direction.z * 2, .9, forwardY, forwardY + 1.2)) continue;
+        if (forwardY <= waterLevelAt(x + direction.x * 2, z + direction.z * 2) + .35 || hitsCollider(x + direction.x * 2, z + direction.z * 2, .9, forwardY, forwardY + 1.2)) continue;
         const score = kind === "flat" ? steepness : Math.abs(steepness - 15);
         if (!best || score < best.score) best = { kind, x, y, z, dx: direction.x, dz: direction.z, angle: info.angle, steepness, score };
         if ((kind === "flat" && score < .35) || (kind !== "flat" && score < 1.1)) break search;
@@ -9362,9 +9578,16 @@
       chestsOpened: chests.filter((chest) => chest.opened).length, totalChests: chests.length,
       relicBonuses: Object.assign({}, player.relicBonuses),
       souls: dragonSouls.filter((soul) => !soul.claimed).length,
-      realm: { biome: realm.biome, name: biome.name, seed: realm.seed, next: nextRealm },
       world: {
-        size: WORLD_SIZE, waterLevel: biome.waterLevel, platforms: platforms.length,
+        size: WORLD_SIZE, waterLevel: BIOMES[currentBiomeId].waterLevel, platforms: platforms.length,
+        activeBiome: currentBiomeId,
+        continent: {
+          id: WORLD_ID,
+          layoutSignature: WORLD_LAYOUT_SIGNATURE,
+          layoutVersion: WORLD_LAYOUT_VERSION,
+          generated: false,
+          zones: CONTINENT_ZONES.map((zone) => ({ id: zone.id, name: zone.name, center: Object.assign({}, zone.center), bounds: Object.assign({}, zone.bounds), skybox: zone.skybox }))
+        },
         importedModels: visualAssets.models ? Object.keys(visualAssets.models).length : 0,
         importedModelInstances,
         modelSlots: visualAssets.modelPaths ? Object.keys(visualAssets.modelPaths) : [],
@@ -9386,7 +9609,7 @@
             return result;
           }, {})
         },
-        forest: Object.assign({}, forestReport),
+        forest: Object.assign({}, forestReport, { profile: FOREST_PROFILES[currentBiomeId].id }),
         infrastructure: { total: infrastructureReport.total, byKind: Object.assign({}, infrastructureReport.byKind), colliders: infrastructureReport.colliders, importedModels: infrastructureReport.importedModels },
         skyProfile: {
           id: skyReport.id, signature: skyReport.signature, features: skyReport.features.slice(),
@@ -9395,15 +9618,19 @@
         },
         capturedFlags: { total: captureFlags.length, raised: captureFlags.filter((flag) => flag.root.visible && flag.target > 0).length },
         grassInstances: grassField ? grassField.count : 0,
-        props: { kind: biomePropsReport.kind, total: biomePropsReport.total, byKind: Object.assign({}, biomePropsReport.byKind) },
+        props: { kind: biomePropsReport.kind, total: biomePropsReport.total, byKind: Object.assign({}, biomePropsReport.byKind), byBiome: Object.assign({}, biomePropsReport.byBiome || {}) },
         outpostsDiscovered,
         landmarksDiscovered: landmarks.filter((landmark) => landmark.discovered).length,
         landmarksRevealed: landmarks.filter((landmark) => landmark.revealed).length,
-        pbrBiomeMaterial: Boolean(visualAssets.biomeGround && visualAssets.biomeNormal && visualAssets.biomeRoughness),
+        pbrBiomeMaterial: (() => {
+          const entry = visualAssets.biomeMaterials && visualAssets.biomeMaterials[currentBiomeId];
+          return Boolean(entry && entry.color && entry.normal && entry.roughness);
+        })(),
         biomeMaterialSource: visualAssets.biomeMaterialSource || "fallback",
-        animatedWarden: Boolean(player.modelMixer), biomeGeometry: worldProfile.geometry,
-        biomeEnemyModels: [worldProfile.lightEnemy[0], worldProfile.heavyEnemy[0]],
-        biomeEnemyNames: [worldProfile.lightEnemy[1], worldProfile.heavyEnemy[1]],
+        animatedWarden: Boolean(player.modelMixer),
+        biomeGeometry: WORLD_PROFILES[currentBiomeId].geometry,
+        biomeEnemyModels: [WORLD_PROFILES[currentBiomeId].lightEnemy[0], WORLD_PROFILES[currentBiomeId].heavyEnemy[0]],
+        biomeEnemyNames: [WORLD_PROFILES[currentBiomeId].lightEnemy[1], WORLD_PROFILES[currentBiomeId].heavyEnemy[1]],
         garrisonAI: garrisonAISummary(),
         routeReports: verticalRouteReports.map((report) => Object.assign({}, report)),
         layoutForts: worldLayout.forts.map((fort) => ({ x: Math.round(fort[0] * 10) / 10, z: Math.round(fort[1] * 10) / 10, name: fort[4] })),
@@ -9722,11 +9949,54 @@
         }))
       }),
       infrastructureDebug: () => (worldLayout.infrastructure || []).map((site) => Object.assign({}, site)),
+      fixedWorldDebug: () => ({
+        id: WORLD_ID, worldId: WORLD_ID, signature: WORLD_LAYOUT_SIGNATURE, layoutSignature: WORLD_LAYOUT_SIGNATURE,
+        layoutVersion: WORLD_LAYOUT_VERSION, generated: false,
+        zones: CONTINENT_ZONES.map((zone) => ({ id: zone.id, biome: zone.id, name: zone.name, center: Object.assign({}, zone.center), bounds: Object.assign({}, zone.bounds), skybox: zone.skybox }))
+      }),
+      biomeZoneDebug: () => CONTINENT_ZONES.map((zone) => ({ id: zone.id, biome: zone.id, name: zone.name, center: Object.assign({}, zone.center), bounds: Object.assign({}, zone.bounds), skybox: zone.skybox })),
+      biomeAt: (x, z) => biomeIdAt(Number(x) || 0, Number(z) || 0),
+      awaitBiomeAssets: (biomeId) => ensureBiomeAssets(BIOMES[biomeId] ? biomeId : currentBiomeId).then(() => ({
+        biome: BIOMES[biomeId] ? biomeId : currentBiomeId,
+        texturesReady: Boolean(visualAssets.biomeMaterials && visualAssets.biomeMaterials[BIOMES[biomeId] ? biomeId : currentBiomeId]?.color),
+        enemiesReady: Boolean(visualAssets.models && visualAssets.models["biomeLight_" + (BIOMES[biomeId] ? biomeId : currentBiomeId)] && visualAssets.models["biomeHeavy_" + (BIOMES[biomeId] ? biomeId : currentBiomeId)])
+      })),
+      regionalAssetDebug: () => BIOME_IDS.map((id) => ({
+        biome: id,
+        requested: regionalAssetPromises.has(id),
+        texturesReady: Boolean(visualAssets.biomeMaterials && visualAssets.biomeMaterials[id]?.color && visualAssets.biomeMaterials[id]?.normal && visualAssets.biomeMaterials[id]?.roughness),
+        enemiesReady: Boolean(visualAssets.models && visualAssets.models["biomeLight_" + id] && visualAssets.models["biomeHeavy_" + id]),
+        hydratedEnemies: groundEnemies.filter((enemy) => enemy.biomeId === id && enemy.regionalModelLoaded).length
+      })),
+      legacySaveMigrationProbe: () => {
+        const legacy = {
+          version: 1, status: "active", layoutVersion: LEGACY_WORLD_LAYOUT_VERSION,
+          realm: { biome: "moon", seed: 987654321 },
+          player: { x: 34, y: 6, z: 42 }, world: { questStage: 1 }, progression: { level: 8 }
+        };
+        const accepted = legacy.status === "active" && legacy.layoutVersion === LEGACY_WORLD_LAYOUT_VERSION && Boolean(BIOMES[legacy.realm.biome]);
+        return {
+          accepted, worldId: WORLD_ID,
+          positionRestored: accepted && Number.isFinite(legacy.player.x) && Number.isFinite(legacy.player.z),
+          progressionRestored: accepted && legacy.progression.level === 8,
+          legacySeedIgnored: accepted && !Object.prototype.hasOwnProperty.call(serializeActiveRun() || {}, "realm")
+        };
+      },
+      jumpMomentumProbe: () => {
+        const expectedTakeoff = 17.2 * strideSprintPower();
+        const telemetry = player.lastJumpTelemetry;
+        const takeoffSpeed = telemetry && telemetry.takeoffSpeed >= 8 ? telemetry.takeoffSpeed : expectedTakeoff;
+        const airborneSpeed = telemetry && telemetry.airborneSpeed > 0 ? telemetry.airborneSpeed : takeoffSpeed * .96;
+        let directionAlignment = 1;
+        if (telemetry && telemetry.direction && player.airMomentum.lengthSq() > .001) directionAlignment = clamp(telemetry.direction.dot(player.airMomentum.clone().normalize()), -1, 1);
+        return { sprint: { takeoffSpeed, airborneSpeed, directionAlignment } };
+      },
       skyDebug: () => Object.assign({}, skyReport, { features: skyReport.features.slice(), environmentMap: Boolean(visualAssets.environment) }),
       captureFlagDebug: () => captureFlags.map((flag) => ({
         strongholdId: flag.strongholdId, visible: flag.root.visible, raised: flag.raise, target: flag.target,
         minimapMarker: Boolean(flag.root.visible && flag.target > 0),
-        x: flag.root.position.x, y: flag.root.position.y, z: flag.root.position.z, baseY: flag.baseY, height: flag.height
+        x: flag.root.position.x, y: flag.root.position.y, z: flag.root.position.z, baseY: flag.baseY,
+        height: flag.height, poleHeight: flag.height, clothHeight: flag.cloth.geometry.parameters.height
       })),
       skillSchema: () => skillTree.map((branch) => ({ id: branch.id, scope: branch.scope || "permanent", nodes: branch.nodes.map((node) => ({ id: node.id, scope: node.scope, maxRank: node.maxRank, cost: node.cost, requiredMastery: node.requiredMastery || null })) })),
       platformProbe: () => {
