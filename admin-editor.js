@@ -7,7 +7,8 @@
   const DRAFT_KEY = "ashenhold-admin-draft-v1";
   const state = {
     tab: "scene", selectedId: null, category: "All", search: "", panelCollapsed: false,
-    pointerMode: null, dragAxis: null, looking: false, lastX: 0, lastY: 0,
+    pointerMode: null, pointerId: null, dragAxis: null,
+    startX: 0, startY: 0, lastX: 0, lastY: 0,
     bridge: { connected: false, token: "", publishEnabled: false, branch: "", dirty: false },
     renderQueued: false, draftAvailable: false
   };
@@ -39,13 +40,13 @@
   shell.className = "ashenhold-admin";
   shell.innerHTML = `
     <div class="admin-modebar" role="toolbar" aria-label="Sandbox controls">
-      ${button("adminModeSelect", "Select", { icon: "◇", key: "V", pressed: true })}
-      ${button("adminModeFreecam", "Freecam", { icon: "◎", key: "F", pressed: false })}
+      ${button("adminModeSelect", "Warden", { icon: "◇", key: "V", pressed: false, title: "Return the Warden to the freecam position" })}
+      ${button("adminModeFreecam", "Freecam", { icon: "◎", key: "F", pressed: true })}
       ${button("adminModeNoclip", "Noclip", { icon: "↟", key: "N", pressed: false })}
       <i></i>
       ${button("adminToolMove", "Move", { icon: "↔", key: "G", pressed: true })}
       ${button("adminToolRotate", "Rotate", { icon: "↻", key: "R", pressed: false })}
-      ${button("adminToolScale", "Scale", { icon: "⌁", key: "S", pressed: false })}
+      ${button("adminToolScale", "Scale", { icon: "⌁", key: "X", pressed: false, title: "Scale while flying; S remains backward movement" })}
       <i></i>
       <button type="button" id="adminPauseSimulation" class="admin-sim active" aria-pressed="true"><span class="admin-pulse"></span><b>Simulation paused</b></button>
     </div>
@@ -64,7 +65,7 @@
         <button type="button" data-admin-tab="data">Publish</button>
       </nav>
       <main id="adminPanelBody" class="admin-panel-body"></main>
-      <footer class="admin-footer"><span><kbd>WASD</kbd> move</span><span><kbd>Q/E</kbd> down/up</span><span><kbd>Shift</kbd> boost</span><span><kbd>Ctrl Z</kbd> undo</span></footer>
+      <footer class="admin-footer"><span><kbd>LMB</kbd> edit/look</span><span><kbd>RMB</kbd> look</span><span><kbd>WASD</kbd> move</span><span><kbd>Q/E</kbd> down/up</span><span><kbd>Shift</kbd> boost</span><span><kbd>Ctrl Z</kbd> undo</span></footer>
     </aside>
     <button type="button" id="adminExpand" class="admin-expand" aria-label="Open Ashenhold Forge">A</button>
     <div id="adminToast" class="admin-toast" role="status" aria-live="polite"></div>
@@ -87,12 +88,16 @@
   }
 
   function setMode(mode) {
+    finishPointerInteraction();
     api.controls.setMode(mode);
     ["select", "freecam", "noclip"].forEach((id) => {
       const node = byId("adminMode" + id.charAt(0).toUpperCase() + id.slice(1));
       if (node) node.setAttribute("aria-pressed", String(id === mode));
     });
-    toast(mode === "freecam" ? "Freecam: WASD + Q/E, drag to look" : mode === "noclip" ? "Noclip: fly the Warden through geometry" : "Selection mode enabled");
+    toast(mode === "freecam"
+      ? "Freecam: click to edit · drag to look · WASD + Q/E to fly"
+      : mode === "noclip" ? "Noclip: the Warden starts at the freecam position"
+        : "Warden placed at the freecam position");
   }
 
   function setTransformMode(mode) {
@@ -592,7 +597,7 @@
     else if (key === "n") setMode("noclip");
     else if (key === "g") setTransformMode("translate");
     else if (key === "r") setTransformMode("rotate");
-    else if (key === "s" && info.mode === "select") setTransformMode("scale");
+    else if (key === "x" || (key === "s" && info.mode === "select")) setTransformMode("scale");
     else if ((key === "delete" || key === "backspace") && state.selectedId) {
       event.preventDefault();
       const item = selected();
@@ -601,7 +606,7 @@
     }
     if (["w", "a", "s", "d", "q", "e", "shift"].includes(key) && (info.mode === "freecam" || info.mode === "noclip")) {
       event.preventDefault(); event.stopImmediatePropagation(); api.controls.setInput(key, true);
-    } else if (["v", "f", "n", "g", "r"].includes(key) || (key === "s" && info.mode === "select")) {
+    } else if (["v", "f", "n", "g", "r", "x"].includes(key) || (key === "s" && info.mode === "select")) {
       event.preventDefault(); event.stopImmediatePropagation();
     }
   }
@@ -612,46 +617,67 @@
   }
 
   const viewport = document.getElementById("viewport");
+  function finishPointerInteraction(event, pickOnRelease) {
+    if (state.pointerMode === "transform") api.endDrag();
+    else if (state.pointerMode === "pick" && pickOnRelease && event) {
+      const item = api.pick(state.startX, state.startY);
+      state.selectedId = item && item.id || null;
+    }
+    if (state.pointerId != null && viewport.hasPointerCapture && viewport.hasPointerCapture(state.pointerId)) viewport.releasePointerCapture(state.pointerId);
+    state.pointerMode = null;
+    state.pointerId = null;
+    state.dragAxis = null;
+    scheduleRender();
+  }
+
   viewport.addEventListener("pointerdown", (event) => {
     if (event.target.closest && event.target.closest(".ashenhold-admin")) return;
     const info = api.info();
     event.preventDefault();
     event.stopImmediatePropagation();
-    state.lastX = event.clientX; state.lastY = event.clientY;
-    if (info.mode === "freecam" || (info.mode === "noclip" && event.button !== 0)) {
-      state.looking = true;
+    finishPointerInteraction();
+    state.startX = state.lastX = event.clientX;
+    state.startY = state.lastY = event.clientY;
+    state.pointerId = event.pointerId;
+    if ((info.mode === "freecam" || info.mode === "noclip") && event.button !== 0) {
+      state.pointerMode = "look";
       viewport.setPointerCapture(event.pointerId);
       return;
     }
-    if (event.button !== 0) return;
+    if (event.button !== 0) { state.pointerId = null; return; }
     const axis = api.pickGizmo(event.clientX, event.clientY);
-    if (axis && state.selectedId) {
+    if (axis && state.selectedId && api.beginDrag(info.transformMode, axis, event.clientX, event.clientY)) {
+      state.pointerMode = "transform";
       state.dragAxis = axis;
-      api.beginDrag(info.transformMode, axis, event.clientX, event.clientY);
-      viewport.setPointerCapture(event.pointerId);
+      api.controls.clearInput();
     } else {
-      const item = api.pick(event.clientX, event.clientY);
-      state.selectedId = item && item.id || null;
-      scheduleRender();
+      state.pointerMode = "pick";
     }
+    viewport.setPointerCapture(event.pointerId);
   }, true);
   viewport.addEventListener("pointermove", (event) => {
-    if (state.dragAxis) {
+    if (event.pointerId !== state.pointerId) return;
+    if (state.pointerMode === "transform" && state.dragAxis) {
       event.preventDefault(); event.stopImmediatePropagation(); api.drag(event.clientX, event.clientY); scheduleRender(); return;
     }
-    if (state.looking) {
+    if (state.pointerMode === "pick" && Math.hypot(event.clientX - state.startX, event.clientY - state.startY) >= 6) state.pointerMode = "look";
+    if (state.pointerMode === "look") {
       event.preventDefault(); event.stopImmediatePropagation();
       api.controls.look(event.clientX - state.lastX, event.clientY - state.lastY);
       state.lastX = event.clientX; state.lastY = event.clientY;
     }
   }, true);
   const endPointer = (event) => {
-    if (state.dragAxis) { api.endDrag(); state.dragAxis = null; scheduleRender(); }
-    state.looking = false;
-    if (viewport.hasPointerCapture && viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+    if (event.pointerId !== state.pointerId) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    finishPointerInteraction(event, true);
   };
   viewport.addEventListener("pointerup", endPointer, true);
-  viewport.addEventListener("pointercancel", endPointer, true);
+  viewport.addEventListener("pointercancel", (event) => {
+    if (event.pointerId !== state.pointerId) return;
+    finishPointerInteraction(event, false);
+  }, true);
   viewport.addEventListener("wheel", (event) => {
     if (api.info().mode !== "freecam") return;
     event.preventDefault(); event.stopImmediatePropagation();
@@ -685,7 +711,7 @@
     const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
     state.draftAvailable = Boolean(draft && draft.document && draft.worldSignature === api.info().worldSignature);
   } catch (_) {}
-  setMode("select");
+  setMode("freecam");
   setTransformMode("translate");
   renderBody();
   connectBridge();

@@ -526,7 +526,7 @@
   let adminRevision = 0;
   let adminUiLoaded = false;
   const adminControls = {
-    mode: "select", transformMode: "translate", simulationPaused: true,
+    mode: "freecam", transformMode: "translate", simulationPaused: true,
     input: new Set(), snap: { translate: 1, rotate: 15, scale: .1 },
     freecamYaw: 0, freecamPitch: 0, speed: 34, noclipReturn: null
   };
@@ -2082,6 +2082,36 @@
     return selectAdminEntity(null);
   }
 
+  function projectAdminPoint(worldPosition) {
+    if (!camera || !renderer || !worldPosition) return null;
+    camera.updateMatrixWorld();
+    const projected = worldPosition.clone().project(camera);
+    const bounds = renderer.domElement.getBoundingClientRect();
+    return {
+      clientX: bounds.left + (projected.x + 1) * bounds.width * .5,
+      clientY: bounds.top + (1 - projected.y) * bounds.height * .5,
+      inViewport: Math.abs(projected.x) <= 1 && Math.abs(projected.y) <= 1 && projected.z >= -1 && projected.z <= 1
+    };
+  }
+
+  function projectAdminEntity(id) {
+    const record = adminEntities.get(id);
+    if (!record || !record.root || !record.root.visible) return null;
+    record.root.updateWorldMatrix(true, true);
+    const center = new THREE.Vector3();
+    new THREE.Box3().setFromObject(record.root).getCenter(center);
+    return projectAdminPoint(center);
+  }
+
+  function projectAdminGizmo(axis) {
+    if (!adminGizmo || !adminGizmo.visible) return null;
+    adminGizmo.updateWorldMatrix(true, true);
+    const handles = adminGizmo.children.filter((child) => child.userData.adminAxis === axis);
+    if (!handles.length) return null;
+    handles.sort((a, b) => b.position.lengthSq() - a.position.lengthSq());
+    return projectAdminPoint(handles[0].getWorldPosition(new THREE.Vector3()));
+  }
+
   function adminProjectedAxis(record, axis) {
     const transform = adminEntityTransform(record);
     const origin = new THREE.Vector3(transform.position.x, transform.position.y, transform.position.z);
@@ -2142,10 +2172,52 @@
     return true;
   }
 
+  function handoffAdminFreecamToWarden() {
+    if (!camera || !player.root) return false;
+    const destination = camera.position.clone();
+    player.root.position.copy(destination);
+    player.root.rotation.y = adminControls.freecamYaw;
+    cameraYaw = adminControls.freecamYaw;
+    cameraPitch = clamp(adminControls.freecamPitch, -1.22, 1.22);
+    cameraReady = false;
+    keys.clear();
+    mobileMove.set(0, 0);
+    resetTraversalMotion();
+    player.vertical = 0;
+    player.velocityY = 0;
+    player.grounded = false;
+    player.moving = false;
+    player.sprinting = false;
+    player.superSprinting = false;
+    player.sprintLatch = false;
+    player.superSprintLatch = false;
+    player.stormstrideTimer = 0;
+    player.streakTimer = 0;
+    player.dodgeTime = 0;
+    player.dodgeElapsed = 0;
+    player.dodgeDirection.set(0, 0, 0);
+    player.attackTime = 0;
+    player.pendingAttack = null;
+    player.queuedWeapon = null;
+    player.airbornePhase = "fall";
+    player.jumpTime = 0;
+    lockedTarget = null;
+    nearestTarget = null;
+    restoreSprintPoseBones();
+    player.sprintPoseWeight = 0;
+    if (player.modelRoot) player.modelRoot.position.y = 0;
+    setPlayerModelAction("idle", true);
+    cameraTrauma = 0;
+    camera.fov = 62;
+    camera.updateProjectionMatrix();
+    return { x: destination.x, y: destination.y, z: destination.z };
+  }
+
   function setAdminMode(mode) {
     if (!["select", "freecam", "noclip"].includes(mode)) return adminControls.mode;
     const previousMode = adminControls.mode;
     if (previousMode === "noclip" && mode !== "noclip") exitAdminNoclip();
+    const handoff = previousMode === "freecam" && mode !== "freecam" ? handoffAdminFreecamToWarden() : false;
     if (mode === "noclip" && previousMode !== "noclip" && player.root) {
       const current = player.root.position;
       const blocked = hitsCollider(current.x, current.z, .68, current.y, current.y + 2.1);
@@ -2160,7 +2232,7 @@
       adminControls.freecamPitch = -Math.asin(clamp(direction.y, -1, 1));
     }
     if (document.pointerLockElement) document.exitPointerLock();
-    window.dispatchEvent(new CustomEvent("ashenhold:admin-mode", { detail: { mode } }));
+    window.dispatchEvent(new CustomEvent("ashenhold:admin-mode", { detail: { mode, previousMode, handoff } }));
     return mode;
   }
 
@@ -2661,6 +2733,27 @@
         simulationPaused: adminControls.simulationPaused, selectedId: adminSelectedId,
         entities: adminEntities.size, revision: adminRevision,
         history: { index: adminHistoryIndex, length: adminHistory.length },
+        camera: camera ? {
+          position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+          forward: (() => { const value = new THREE.Vector3(); camera.getWorldDirection(value); return { x: value.x, y: value.y, z: value.z }; })(),
+          gameplayYaw: cameraYaw, gameplayPitch: cameraPitch,
+          freecamYaw: adminControls.freecamYaw, freecamPitch: adminControls.freecamPitch
+        } : null,
+        warden: player.root ? {
+          position: { x: player.root.position.x, y: player.root.position.y, z: player.root.position.z },
+          lastSafePosition: { x: player.lastSafePosition.x, y: player.lastSafePosition.y, z: player.lastSafePosition.z },
+          velocityY: player.velocityY, grounded: player.grounded, airbornePhase: player.airbornePhase,
+          moving: player.moving, sprinting: player.sprinting, superSprinting: player.superSprinting,
+          sprintLatch: player.sprintLatch, superSprintLatch: player.superSprintLatch,
+          sliding: player.sliding, slideSpeed: player.slideSpeed, dodgeTime: player.dodgeTime,
+          airMomentum: { x: player.airMomentum.x, y: player.airMomentum.y, z: player.airMomentum.z },
+          groundMomentum: { x: player.groundMomentum.x, y: player.groundMomentum.y, z: player.groundMomentum.z }
+        } : null,
+        controls: {
+          activeInputs: Array.from(adminControls.input).sort(), dragActive: Boolean(adminDrag),
+          dragId: adminDrag && adminDrag.id || null, dragMode: adminDrag && adminDrag.mode || null,
+          dragAxis: adminDrag && adminDrag.axis || null
+        },
         worldSignature: WORLD_LAYOUT_SIGNATURE
       }),
       listEntities: () => Array.from(adminEntities.values()).map((record) => ({
@@ -2673,6 +2766,8 @@
       select: selectAdminEntity,
       pick: pickAdminEntity,
       pickGizmo: pickAdminGizmo,
+      projectEntity: projectAdminEntity,
+      projectGizmo: projectAdminGizmo,
       focus: focusAdminEntity,
       setTransformMode: (mode) => {
         if (["translate", "rotate", "scale"].includes(mode)) adminControls.transformMode = mode;
@@ -4031,7 +4126,7 @@
       if (adminMode) {
         startGame(false);
         adminControls.simulationPaused = true;
-        setAdminMode("select");
+        setAdminMode("freecam");
         initializeAdminMode();
       } else ui.enter.focus({ preventScroll: true });
       updateLoading(100, "Ashenhold Continent ready");
@@ -11248,6 +11343,7 @@
       else if (pointerWasLocked && state === "playing" && !suppressPointerPause && !testMode && !adminMode) pauseGame(true);
     });
     viewport.addEventListener("mousedown", (event) => {
+      if (adminMode) return;
       if (state !== "playing") return;
       if (event.button === 1) { event.preventDefault(); toggleTargetLock(); return; }
       if (event.button === 2) { event.preventDefault(); dodge(); return; }
