@@ -233,6 +233,7 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
       && !("realm" in titleSnapshot),
     pbrBiomeMaterial: titleSnapshot.world.pbrBiomeMaterial,
     animatedWarden: titleSnapshot.world.animatedWarden,
+    proceduralAssassinRun: titleSnapshot.world.proceduralRunAnimation,
     importedModels: titleSnapshot.world.importedModels >= 15,
     canonicalWorldScale: titleSnapshot.world.canonicalScale.unitMeters === 1 && titleSnapshot.world.canonicalScale.wardenHeight === 1.9 && titleSnapshot.world.canonicalScale.doorWidth >= 2.4,
     playerScaledBuildings: ["tavern", "homeA", "homeB", "ruinedHouse"].every((id) => {
@@ -305,6 +306,7 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
     poiChestsExist: initial.totalChests >= 13,
     enemyTaming: Boolean(tamingResult.prepared && tamingResult.companions.length === 1 && tamingResult.bondedPace >= .3),
     sprintPoseEngages: Boolean(superSprint.combat && superSprint.combat.sprintPose > .5),
+    proceduralAssassinRunEngages: Boolean(superSprint.combat && superSprint.combat.proceduralRunWeight > .5),
     minimapLegend: legendCount >= 10,
     dragonFacesForward: finalPlaying.dragonForwardDot == null || finalPlaying.dragonForwardDot > 0.5,
     strongholdVictory: ended.state === "ended" && ended.questStage === 3 && ended.strongholds.cleared === ended.strongholds.total,

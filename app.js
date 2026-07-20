@@ -1271,6 +1271,7 @@
     modelRoot: null,
     modelMixer: null,
     modelHasClips: false,
+    modelRunDeformer: null,
     modelActions: {},
     modelState: "",
     modelSword: null,
@@ -7451,6 +7452,71 @@
     biomePropsReport = { kind: "six-biome-continent", total, byKind, byBiome };
   }
 
+  function createWardenRunDeformer(modelRoot) {
+    if (!modelRoot) return null;
+    const uniforms = {
+      phase: { value: 0 },
+      weight: { value: 0 },
+      sprint: { value: 0 }
+    };
+    const materials = new Set();
+    modelRoot.traverse((object) => {
+      if (!object.isMesh && !object.isSkinnedMesh) return;
+      const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+      objectMaterials.filter(Boolean).forEach((material) => materials.add(material));
+    });
+    materials.forEach((material) => {
+      const previousCompile = material.onBeforeCompile;
+      material.onBeforeCompile = (shader, activeRenderer) => {
+        if (previousCompile) previousCompile.call(material, shader, activeRenderer);
+        shader.uniforms.uWardenRunPhase = uniforms.phase;
+        shader.uniforms.uWardenRunWeight = uniforms.weight;
+        shader.uniforms.uWardenSprintWeight = uniforms.sprint;
+        shader.vertexShader = shader.vertexShader.replace("#include <common>", `#include <common>
+uniform float uWardenRunPhase;
+uniform float uWardenRunWeight;
+uniform float uWardenSprintWeight;`);
+        shader.vertexShader = shader.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
+float wardenSide = position.x < 0.0 ? -1.0 : 1.0;
+float wardenStride = sin(uWardenRunPhase) * wardenSide;
+float wardenAmplitude = mix(0.42, 0.72, uWardenSprintWeight) * uWardenRunWeight;
+float wardenLegMask = (1.0 - smoothstep(-0.12, 0.12, position.y)) * smoothstep(0.055, 0.24, abs(position.x));
+float wardenLegAngle = wardenStride * wardenAmplitude;
+float wardenLegCos = cos(wardenLegAngle);
+float wardenLegSin = sin(wardenLegAngle);
+vec3 wardenLegPosition = transformed;
+float wardenLegY = wardenLegPosition.y + 0.08;
+float wardenLegZ = wardenLegPosition.z;
+wardenLegPosition.y = -0.08 + wardenLegY * wardenLegCos - wardenLegZ * wardenLegSin;
+wardenLegPosition.z = wardenLegY * wardenLegSin + wardenLegZ * wardenLegCos;
+transformed = mix(transformed, wardenLegPosition, wardenLegMask);
+float wardenKneeMask = (1.0 - smoothstep(-0.62, -0.42, position.y)) * smoothstep(0.055, 0.22, abs(position.x));
+float wardenKneeAngle = -wardenStride * mix(0.14, 0.3, uWardenSprintWeight) * uWardenRunWeight;
+float wardenKneeCos = cos(wardenKneeAngle);
+float wardenKneeSin = sin(wardenKneeAngle);
+vec3 wardenKneePosition = transformed;
+float wardenKneeY = wardenKneePosition.y + 0.52;
+float wardenKneeZ = wardenKneePosition.z;
+wardenKneePosition.y = -0.52 + wardenKneeY * wardenKneeCos - wardenKneeZ * wardenKneeSin;
+wardenKneePosition.z = wardenKneeY * wardenKneeSin + wardenKneeZ * wardenKneeCos;
+transformed = mix(transformed, wardenKneePosition, wardenKneeMask);
+float wardenArmMask = smoothstep(0.08, 0.28, position.y) * smoothstep(0.22, 0.46, abs(position.x));
+float wardenArmAngle = -wardenStride * mix(0.5, 0.82, uWardenSprintWeight) * uWardenRunWeight;
+float wardenArmCos = cos(wardenArmAngle);
+float wardenArmSin = sin(wardenArmAngle);
+vec3 wardenArmPosition = transformed;
+float wardenArmY = wardenArmPosition.y - 0.38;
+float wardenArmZ = wardenArmPosition.z;
+wardenArmPosition.y = 0.38 + wardenArmY * wardenArmCos - wardenArmZ * wardenArmSin;
+wardenArmPosition.z = wardenArmY * wardenArmSin + wardenArmZ * wardenArmCos;
+transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
+      };
+      material.customProgramCacheKey = () => "ashenhold-hooded-assassin-run-v1";
+      material.needsUpdate = true;
+    });
+    return { uniforms, blend: 0, materials: materials.size };
+  }
+
   function createPlayer() {
     const root = new THREE.Group();
     const armor = new THREE.MeshStandardMaterial({ color: 0x232b30, metalness: .72, roughness: .42 });
@@ -7622,6 +7688,7 @@
     player.modelRoot = modelRoot;
     player.modelMixer = modelMixer;
     player.modelHasClips = Boolean(source && source.animations && source.animations.length);
+    player.modelRunDeformer = modelRoot && !player.modelHasClips ? createWardenRunDeformer(modelRoot) : null;
     player.modelActions = modelActions;
     player.modelState = "";
     player.modelSword = modelSword;
@@ -10284,6 +10351,18 @@
     player.modelRoot.rotation.z = lerp(player.modelRoot.rotation.z, targetZ, settle);
   }
 
+  function updateWardenRunDeformer(dt, groundLocomotion) {
+    const deformer = player.modelRunDeformer;
+    if (!deformer) return;
+    const canStride = groundLocomotion && player.attackTime <= 0 && player.dodgeTime <= 0 && player.hitReaction <= 0;
+    const targetWeight = canStride ? (player.superSprinting ? 1 : player.sprinting ? .88 : .62) : 0;
+    const blendRate = targetWeight > deformer.blend ? .00012 : .002;
+    deformer.blend = lerp(deformer.blend, targetWeight, 1 - Math.pow(blendRate, dt));
+    deformer.uniforms.phase.value = player.walkCycle;
+    deformer.uniforms.weight.value = deformer.blend;
+    deformer.uniforms.sprint.value = player.superSprinting ? 1 : player.sprinting ? .72 : 0;
+  }
+
   function animatePlayer(dt, moving) {
     const groundLocomotion = moving && player.grounded && !player.sliding;
     const stride = groundLocomotion ? Math.sin(player.walkCycle) : 0;
@@ -10373,6 +10452,7 @@
       updateSprintPose(dt);
       updateAirborneAndSlideModelPose(dt);
       updateStaticWardenPose(dt, groundLocomotion);
+      updateWardenRunDeformer(dt, groundLocomotion);
     }
   }
 
@@ -12197,6 +12277,7 @@
         })(),
         biomeMaterialSource: visualAssets.biomeMaterialSource || "fallback",
         animatedWarden: Boolean(player.modelMixer),
+        proceduralRunAnimation: Boolean(player.modelRunDeformer && player.modelRunDeformer.materials > 0),
         biomeGeometry: WORLD_PROFILES[currentBiomeId].geometry,
         biomeEnemyModels: [WORLD_PROFILES[currentBiomeId].lightEnemy[0], WORLD_PROFILES[currentBiomeId].heavyEnemy[0]],
         biomeEnemyNames: [WORLD_PROFILES[currentBiomeId].lightEnemy[1], WORLD_PROFILES[currentBiomeId].heavyEnemy[1]],
@@ -12208,7 +12289,7 @@
       },
       combat: {
         dodging: player.dodgeTime > 0, dodgeElapsed: player.dodgeElapsed, locked: lockedTarget ? lockedTarget.name : null,
-        sprintPose: player.sprintPoseWeight || 0, sprintLatch: player.sprintLatch, superSprintLatch: player.superSprintLatch, sprintExhausted: player.sprintExhausted, secondWindReady: player.secondWindReady,
+        sprintPose: player.sprintPoseWeight || 0, proceduralRunWeight: player.modelRunDeformer?.blend || 0, sprintLatch: player.sprintLatch, superSprintLatch: player.superSprintLatch, sprintExhausted: player.sprintExhausted, secondWindReady: player.secondWindReady,
         modelAnimation: player.modelState, airbornePhase: player.airbornePhase, landingTime: player.landingTime,
         sliding: player.sliding, slideSpeed: player.slideSpeed, slideSlopeDegrees: player.slideSlopeDegrees, slideExitBlocked: player.slideExitBlocked, slideCollision: player.slideCollision,
         hitStopRemaining, threat: ambientDifficulty(), lightningArcs: effects.filter((effect) => effect.type === "lightning").length

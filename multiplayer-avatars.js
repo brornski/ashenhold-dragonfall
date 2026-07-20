@@ -55,6 +55,70 @@
     if (material?.dispose) material.dispose();
   }
 
+  function createRunDeformer(modelRoot) {
+    const uniforms = {
+      phase: { value: 0 },
+      weight: { value: 0 },
+      sprint: { value: 0 }
+    };
+    const materials = new Set();
+    modelRoot.traverse((object) => {
+      if (!object.isMesh && !object.isSkinnedMesh) return;
+      const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
+      objectMaterials.filter(Boolean).forEach((material) => materials.add(material));
+    });
+    materials.forEach((material) => {
+      const previousCompile = material.onBeforeCompile;
+      material.onBeforeCompile = (shader, activeRenderer) => {
+        if (previousCompile) previousCompile.call(material, shader, activeRenderer);
+        shader.uniforms.uWardenRunPhase = uniforms.phase;
+        shader.uniforms.uWardenRunWeight = uniforms.weight;
+        shader.uniforms.uWardenSprintWeight = uniforms.sprint;
+        shader.vertexShader = shader.vertexShader.replace("#include <common>", `#include <common>
+uniform float uWardenRunPhase;
+uniform float uWardenRunWeight;
+uniform float uWardenSprintWeight;`);
+        shader.vertexShader = shader.vertexShader.replace("#include <begin_vertex>", `#include <begin_vertex>
+float wardenSide = position.x < 0.0 ? -1.0 : 1.0;
+float wardenStride = sin(uWardenRunPhase) * wardenSide;
+float wardenAmplitude = mix(0.42, 0.72, uWardenSprintWeight) * uWardenRunWeight;
+float wardenLegMask = (1.0 - smoothstep(-0.12, 0.12, position.y)) * smoothstep(0.055, 0.24, abs(position.x));
+float wardenLegAngle = wardenStride * wardenAmplitude;
+float wardenLegCos = cos(wardenLegAngle);
+float wardenLegSin = sin(wardenLegAngle);
+vec3 wardenLegPosition = transformed;
+float wardenLegY = wardenLegPosition.y + 0.08;
+float wardenLegZ = wardenLegPosition.z;
+wardenLegPosition.y = -0.08 + wardenLegY * wardenLegCos - wardenLegZ * wardenLegSin;
+wardenLegPosition.z = wardenLegY * wardenLegSin + wardenLegZ * wardenLegCos;
+transformed = mix(transformed, wardenLegPosition, wardenLegMask);
+float wardenKneeMask = (1.0 - smoothstep(-0.62, -0.42, position.y)) * smoothstep(0.055, 0.22, abs(position.x));
+float wardenKneeAngle = -wardenStride * mix(0.14, 0.3, uWardenSprintWeight) * uWardenRunWeight;
+float wardenKneeCos = cos(wardenKneeAngle);
+float wardenKneeSin = sin(wardenKneeAngle);
+vec3 wardenKneePosition = transformed;
+float wardenKneeY = wardenKneePosition.y + 0.52;
+float wardenKneeZ = wardenKneePosition.z;
+wardenKneePosition.y = -0.52 + wardenKneeY * wardenKneeCos - wardenKneeZ * wardenKneeSin;
+wardenKneePosition.z = wardenKneeY * wardenKneeSin + wardenKneeZ * wardenKneeCos;
+transformed = mix(transformed, wardenKneePosition, wardenKneeMask);
+float wardenArmMask = smoothstep(0.08, 0.28, position.y) * smoothstep(0.22, 0.46, abs(position.x));
+float wardenArmAngle = -wardenStride * mix(0.5, 0.82, uWardenSprintWeight) * uWardenRunWeight;
+float wardenArmCos = cos(wardenArmAngle);
+float wardenArmSin = sin(wardenArmAngle);
+vec3 wardenArmPosition = transformed;
+float wardenArmY = wardenArmPosition.y - 0.38;
+float wardenArmZ = wardenArmPosition.z;
+wardenArmPosition.y = 0.38 + wardenArmY * wardenArmCos - wardenArmZ * wardenArmSin;
+wardenArmPosition.z = wardenArmY * wardenArmSin + wardenArmZ * wardenArmCos;
+transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
+      };
+      material.customProgramCacheKey = () => "ashenhold-hooded-assassin-run-v1";
+      material.needsUpdate = true;
+    });
+    return { uniforms, blend: 0, materials: materials.size };
+  }
+
   function applyLocalRotation(bone, axis, angle) {
     if (!bone || !angle) return;
     POSE_QUATERNION.setFromAxisAngle(axis, angle);
@@ -271,6 +335,7 @@
         modelRoot: null,
         modelMixer: null,
         modelHasClips: false,
+        runDeformer: null,
         modelActions: {},
         animationSet: [],
         animationState: "idle",
@@ -413,6 +478,7 @@
       warden.modelRoot = modelRoot;
       warden.modelMixer = new THREE.AnimationMixer(modelRoot);
       warden.modelHasClips = Boolean(source.animations.length);
+      warden.runDeformer = warden.modelHasClips ? null : createRunDeformer(modelRoot);
       const clip = (pattern, fallback) => source.animations.find((item) => pattern.test(item.name)) || fallback;
       const idle = clip(/^Idle_Weapon$/i, clip(/^Idle$/i, source.animations[0]));
       const walk = clip(/^Walk$/i, idle);
@@ -525,6 +591,14 @@
       if (!warden.modelRoot) return;
       const bones = warden.poseBones || {};
       const moving = ["walk", "run", "sprint", "superSprint"].includes(state);
+      if (warden.runDeformer) {
+        const targetWeight = moving ? (state === "superSprint" ? 1 : state === "sprint" ? .88 : state === "run" ? .72 : .58) : 0;
+        const blendRate = targetWeight > warden.runDeformer.blend ? .00012 : .002;
+        warden.runDeformer.blend += (targetWeight - warden.runDeformer.blend) * (1 - Math.pow(blendRate, dt));
+        warden.runDeformer.uniforms.phase.value = warden.phase;
+        warden.runDeformer.uniforms.weight.value = warden.runDeformer.blend;
+        warden.runDeformer.uniforms.sprint.value = state === "superSprint" ? 1 : state === "sprint" ? .72 : state === "run" ? .34 : 0;
+      }
       const staticBob = !warden.modelHasClips && moving ? Math.abs(Math.sin(warden.phase * 2)) * (state === "superSprint" ? .11 : state === "sprint" ? .085 : .05) : 0;
       const targetY = WARDEN_Y_OFFSET + (state === "slide" ? -.56 : state === "land" ? -.1 : 0) + staticBob;
       warden.modelRoot.position.y += (targetY - warden.modelRoot.position.y) * (1 - Math.pow(.0005, dt));
@@ -710,6 +784,8 @@
           colorSource: warden.colorSource,
           animationState: warden.animationState,
           animationSet: [...warden.animationSet],
+          proceduralRunAnimation: Boolean(warden.runDeformer && warden.runDeformer.materials > 0),
+          proceduralRunWeight: warden.runDeformer?.blend || 0,
           isolatedMaterials: Boolean(warden.materialIsolation),
           weapon: warden.weapon,
           modelScale: warden.fullModel ? WARDEN_SCALE : null,

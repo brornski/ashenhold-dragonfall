@@ -608,6 +608,7 @@ async function closePageClient(page) {
         && warden.sourcePath === "assets/models/hooded-shadow-assassin/scene.gltf" && warden.fallbackVisible === false),
       remoteWardenMaterialsIsolated: remoteWardens.length === 2 && remoteWardens.every((warden) => warden.isolatedMaterials),
       remoteWardenAnimationSetComplete: remoteWardens.length === 2 && remoteWardens.every((warden) => canonicalAnimations.every((state) => warden.animationSet?.includes(state))),
+      remoteProceduralRunAnimation: remoteWardens.length === 2 && remoteWardens.every((warden) => warden.proceduralRunAnimation),
       stableDistinctServerColors: Object.keys(joinedColors).length === 2 && new Set(Object.values(joinedColors)).size === 2
         && remoteWardens.every((warden) => warden.colorSource === "server"
           && String(warden.accentColor).toLowerCase() === String(joinedColors[warden.id]).toLowerCase())
