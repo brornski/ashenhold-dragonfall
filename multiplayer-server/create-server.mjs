@@ -19,8 +19,8 @@ export function createAshenholdServer(options = {}) {
   wss.on("connection", (socket) => {
     realmServer.attach(socket);
     socket.on("message", (data) => realmServer.receive(socket, data));
-    socket.on("close", () => realmServer.disconnect(socket));
-    socket.on("error", () => realmServer.disconnect(socket));
+    socket.on("close", (code, reason) => realmServer.disconnect(socket, { code, reason: reason?.toString() || "" }));
+    socket.on("error", () => realmServer.disconnect(socket, { code: 1006, reason: "transport error" }));
   });
   const interval = setInterval(() => realmServer.tick(), 50);
   interval.unref?.();

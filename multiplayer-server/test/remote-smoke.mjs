@@ -40,12 +40,12 @@ function createClient() {
 }
 
 const host = await createClient();
-host.send({ type: "hello", protocol: 1, clientId: `remote-host-${Date.now()}`, name: "Remote Host", create: true, biome: "jungle", seed: 555019 });
+host.send({ type: "hello", protocol: 2, clientId: `remote-host-${Date.now()}`, name: "Remote Host", create: true, biome: "jungle", seed: 555019 });
 const hostWelcome = await host.waitFor((message) => message.type === "welcome");
 assert.match(hostWelcome.roomCode, /^[A-Z2-9]{6}$/);
 
 const guest = await createClient();
-guest.send({ type: "hello", protocol: 1, clientId: `remote-guest-${Date.now()}`, name: "Remote Guest", roomCode: hostWelcome.roomCode });
+guest.send({ type: "hello", protocol: 2, clientId: `remote-guest-${Date.now()}`, name: "Remote Guest", roomCode: hostWelcome.roomCode });
 const guestWelcome = await guest.waitFor((message) => message.type === "welcome");
 assert.equal(guestWelcome.roomCode, hostWelcome.roomCode);
 

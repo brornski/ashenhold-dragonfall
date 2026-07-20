@@ -266,6 +266,21 @@
   let playerNoiseTime = 0;
   let playerNoiseReason = "quiet";
   let garrisonAIStats = { repaths: 0, stuckRecoveries: 0, alertsShared: 0 };
+  let coopRuntime = null;
+  let remoteWardenRenderer = null;
+  let networkNavigationCache = null;
+  let multiplayerBootReady = false;
+  let applyingNetworkState = false;
+  let networkBossRegistrationPending = false;
+  let networkAttackSequence = 0;
+  const networkActionNonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+  let networkLocalTransformHydratedFor = null;
+  let networkLeaveReloading = false;
+  const networkStats = {
+    worldSerializations: 0, snapshotsApplied: 0, eventsApplied: 0,
+    attacksSent: 0, chestRequests: 0, tameRequests: 0,
+    enemyFrames: 0, bossRegistrations: 0, disconnects: 0
+  };
   let outpostsDiscovered = 0;
   let runeHinted = false;
   const visualAssets = {};
@@ -278,6 +293,609 @@
 
   const encounterRng = { state: ((Number(realm.seed) || 1) ^ 0x6d2b79f5) >>> 0 };
   const slideTestSurfaceCache = {};
+
+  function networkIdPart(value) {
+    return String(value == null ? "" : value).replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+/g, "_").slice(0, 52) || "actor";
+  }
+
+  function nextNetworkActionId(label) {
+    networkAttackSequence += 1;
+    const playerSuffix = (partyController()?.client?.playerId || "warden").slice(-10);
+    return networkIdPart(playerSuffix + "-" + networkActionNonce + "-" + (label || "attack").slice(0, 12) + "-" + networkAttackSequence);
+  }
+
+  function ensureStableNetworkIds() {
+    dragons.forEach((dragon, index) => {
+      if (!dragon.networkId) dragon.networkId = dragon.boss ? "dragon-boss-vharok" : "dragon-" + networkIdPart(dragon.name) + "-" + index;
+    });
+    groundEnemies.forEach((enemy, index) => {
+      if (enemy.networkId) return;
+      enemy.networkId = enemy.spawnKey
+        ? "garrison-" + networkIdPart(enemy.spawnKey)
+        : "ground-" + networkIdPart(enemy.kind) + "-" + Math.round(enemy.root.position.x * 10) + "-" + Math.round(enemy.root.position.z * 10) + "-" + index;
+    });
+  }
+
+  function buildNetworkNavigation() {
+    if (networkNavigationCache) return networkNavigationCache;
+    const startedAt = performance.now();
+    const cellSize = 8;
+    const originX = -WORLD_SIZE / 2;
+    const originZ = -WORLD_SIZE / 2;
+    const width = Math.ceil(WORLD_SIZE / cellSize);
+    const height = Math.ceil(WORLD_SIZE / cellSize);
+    const blockedFlags = new Uint8Array(width * height);
+    const heights = new Float32Array(width * height);
+    for (let row = 0; row < height; row += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const index = row * width + column;
+        const x = originX + (column + .5) * cellSize;
+        const z = originZ + (row + .5) * cellSize;
+        const y = terrainHeight(x, z);
+        heights[index] = y;
+        const sample = 1.25;
+        const slope = Math.max(
+          Math.abs(terrainHeight(x + sample, z) - terrainHeight(x - sample, z)),
+          Math.abs(terrainHeight(x, z + sample) - terrainHeight(x, z - sample))
+        ) / (sample * 2);
+        if (y <= biome.waterLevel + .38 || slope > 1.05) blockedFlags[index] = 1;
+      }
+    }
+    const clearance = cellSize * .35;
+    colliders.forEach((box) => {
+      const cosine = Math.cos(box.rotation || 0);
+      const sine = Math.sin(box.rotation || 0);
+      const extentX = Math.abs(cosine) * box.hx + Math.abs(sine) * box.hz + clearance;
+      const extentZ = Math.abs(sine) * box.hx + Math.abs(cosine) * box.hz + clearance;
+      const firstColumn = clamp(Math.floor((box.x - extentX - originX) / cellSize), 0, width - 1);
+      const lastColumn = clamp(Math.floor((box.x + extentX - originX) / cellSize), 0, width - 1);
+      const firstRow = clamp(Math.floor((box.z - extentZ - originZ) / cellSize), 0, height - 1);
+      const lastRow = clamp(Math.floor((box.z + extentZ - originZ) / cellSize), 0, height - 1);
+      for (let row = firstRow; row <= lastRow; row += 1) {
+        for (let column = firstColumn; column <= lastColumn; column += 1) {
+          const index = row * width + column;
+          if (blockedFlags[index]) continue;
+          const y = heights[index];
+          if (y + .08 >= box.maxY - .025 || y + 3.35 <= box.minY + .025) continue;
+          const x = originX + (column + .5) * cellSize;
+          const z = originZ + (row + .5) * cellSize;
+          const dx = x - box.x;
+          const dz = z - box.z;
+          const localX = dx * cosine - dz * sine;
+          const localZ = dx * sine + dz * cosine;
+          const nearestX = clamp(localX, -box.hx, box.hx);
+          const nearestZ = clamp(localZ, -box.hz, box.hz);
+          if ((localX - nearestX) ** 2 + (localZ - nearestZ) ** 2 < clearance ** 2) blockedFlags[index] = 1;
+        }
+      }
+    });
+    const blockedRuns = [];
+    let blockedCells = 0;
+    for (let index = 0; index < blockedFlags.length;) {
+      if (!blockedFlags[index]) { index += 1; continue; }
+      const first = index;
+      while (index < blockedFlags.length && blockedFlags[index]) { blockedCells += 1; index += 1; }
+      blockedRuns.push(first, index - first);
+    }
+    networkStats.navigationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+    networkStats.navigationCells = width * height;
+    networkStats.blockedCells = blockedCells;
+    networkNavigationCache = { cellSize, width, height, originX, originZ, blockedRuns };
+    return networkNavigationCache;
+  }
+
+  function serializeNetworkEnemy(enemy) {
+    const ai = enemy.ai;
+    const home = enemy.kind === "dragon" ? enemy.home : ai ? ai.home : enemy.root.position;
+    const role = enemy.kind === "dragon" ? (enemy.boss ? "boss" : "dragon") : ai ? ai.role : "guard";
+    return {
+      id: enemy.networkId,
+      name: enemy.name,
+      kind: enemy.kind,
+      boss: Boolean(enemy.boss),
+      x: enemy.root.position.x, y: enemy.root.position.y, z: enemy.root.position.z,
+      homeX: home.x, homeZ: home.z, rotation: enemy.root.rotation.y,
+      health: enemy.health, maxHealth: enemy.maxHealth,
+      speed: enemy.speed || 7,
+      range: enemy.kind === "dragon" ? (enemy.boss ? 45 : 35) : enemy.attackRange,
+      damage: enemy.kind === "dragon" ? Math.round((enemy.boss ? 30 : 22) * (enemy.damageScale || 1)) : enemy.damage,
+      healthReward: enemy.healthReward || 6,
+      sight: enemy.kind === "dragon" ? 100 : roleSightProfile(enemy).range,
+      role,
+      patrol: enemy.kind === "dragon"
+        ? [{ x: home.x, z: home.z }]
+        : ai ? ai.patrol.map((point) => ({ x: point.x, z: point.z })) : [],
+      strongholdId: enemy.strongholdId || null,
+      state: enemy.dead ? "dead" : enemy.tamed ? "bonded" : ai ? ai.state : enemy.engaged ? "combat" : "patrol",
+      dead: Boolean(enemy.dead),
+      tamedBy: enemy.tamed && window.AshenholdParty?.client?.playerId || null,
+      tameable: isTameableEnemy(enemy) || enemy.tamed,
+      tameProgress: enemy.tameProgress || 0
+    };
+  }
+
+  function serializeNetworkWorld() {
+    const startedAt = performance.now();
+    ensureStableNetworkIds();
+    networkStats.worldSerializations += 1;
+    const world = {
+      layoutVersion: WORLD_LAYOUT_VERSION,
+      realm: { biome: realm.biome, seed: realm.seed },
+      navigation: buildNetworkNavigation(),
+      strongholds: strongholds.map((stronghold) => ({
+        id: stronghold.id, name: stronghold.name, kind: stronghold.kind,
+        x: stronghold.x, z: stronghold.z, cleared: stronghold.cleared,
+        flagRaised: Boolean(stronghold.captureFlag && stronghold.captureFlag.root.visible)
+      })),
+      enemies: dragons.concat(groundEnemies).map(serializeNetworkEnemy),
+      chests: chests.map((chest) => ({
+        id: chest.id,
+        x: chest.root.position.x, y: chest.root.position.y, z: chest.root.position.z,
+        opened: chest.opened,
+        powerUp: Object.assign({}, chest.powerUp),
+        claimedBy: chest.opened && window.AshenholdParty?.client?.playerId ? [window.AshenholdParty.client.playerId] : []
+      }))
+    };
+    networkStats.worldSerializeMs = Math.round((performance.now() - startedAt) * 10) / 10;
+    networkStats.worldBytes = new TextEncoder().encode(JSON.stringify({ type: "register_world", world })).byteLength;
+    return world;
+  }
+
+  function partyController() {
+    return window.AshenholdParty && window.AshenholdParty.client ? window.AshenholdParty : null;
+  }
+
+  function partyModeSelected() {
+    const party = partyController();
+    return Boolean(party && party.mode !== "solo");
+  }
+
+  function multiplayerConnected() {
+    const party = partyController();
+    return Boolean(party && party.multiplayer && party.client.status === "connected");
+  }
+
+  function multiplayerWorldActive() {
+    return Boolean(coopRuntime && coopRuntime.worldStartedLocally && partyModeSelected());
+  }
+
+  function multiplayerActionReady() {
+    const client = partyController()?.client;
+    return Boolean(multiplayerWorldActive() && multiplayerConnected() && client?.worldReady && client.started);
+  }
+
+  function partyStartAllowed(reason) {
+    const party = partyController();
+    if (!party || party.mode === "solo") return true;
+    if (!party.connected) {
+      party.setStatus?.("CONNECT TO A PARTY FIRST", "error");
+      showMessage("CONNECT TO A PARTY FIRST", "#e99a73");
+      return false;
+    }
+    const serverApproved = reason === "party" || reason === "reconnect";
+    if (!party.client.isHost && !party.client.started && !serverApproved) {
+      party.setStatus?.("WAITING FOR THE PARTY HOST", "waiting");
+      showMessage("WAITING FOR THE PARTY HOST", "#91a5ad");
+      return false;
+    }
+    return true;
+  }
+
+  function serializeNetworkPlayer() {
+    if (!player.root) return null;
+    return {
+      x: player.root.position.x,
+      y: player.root.position.y,
+      z: player.root.position.z,
+      rotation: player.root.rotation.y,
+      health: player.health,
+      maxHealth: maxHealth(),
+      stamina: player.stamina,
+      weapon: player.activeWeapon,
+      moving: Boolean(player.moving),
+      sprinting: Boolean(player.sprinting),
+      superSprinting: Boolean(player.superSprinting),
+      sliding: Boolean(player.sliding),
+      airborne: !player.grounded,
+      attacking: player.attackTime > 0,
+      companionCount: groundEnemies.filter(isOwnedCompanion).length,
+      noise: clamp(playerNoiseRadius / 42, 0, 1)
+    };
+  }
+
+  function registerNetworkMaxHealthUpgrade(source, count, totalAmount) {
+    if (!multiplayerActionReady() || !coopRuntime?.maxHealthUpgrade) return false;
+    let remainingAmount = Math.max(1, Math.round(Number(totalAmount) || 1));
+    let remainingCount = Math.max(1, Math.floor(Number(count) || 1));
+    let sent = false;
+    while (remainingCount > 0) {
+      const amount = Math.max(1, Math.round(remainingAmount / remainingCount));
+      sent = coopRuntime.maxHealthUpgrade(source, amount) || sent;
+      remainingAmount -= amount;
+      remainingCount -= 1;
+    }
+    if (sent) partyController()?.client?.sendPlayerState(serializeNetworkPlayer(), true);
+    return sent;
+  }
+
+  function isOwnedCompanion(enemy) {
+    return Boolean(enemy && enemy.tamed && !enemy.dead && !enemy.networkExcluded
+      && (!multiplayerWorldActive() || enemy.networkTamedBy === partyController()?.client?.playerId));
+  }
+
+  function networkEnemyById(id) {
+    if (!id) return null;
+    ensureStableNetworkIds();
+    return dragons.concat(groundEnemies).find((enemy) => enemy.networkId === id) || null;
+  }
+
+  function materializeNetworkEnemy(source) {
+    if (!source?.id) return null;
+    let enemy = networkEnemyById(source.id);
+    const sourceBoss = Boolean(source.boss || source.id === "dragon-boss-vharok");
+    if (enemy && source.kind && (enemy.kind !== source.kind || Boolean(enemy.boss) !== sourceBoss)) {
+      scene.remove(enemy.root);
+      if (enemy.kind === "dragon") dragons = dragons.filter((item) => item !== enemy);
+      else {
+        groundEnemies = groundEnemies.filter((item) => item !== enemy);
+        strongholds.forEach((stronghold) => { stronghold.members = stronghold.members.filter((item) => item !== enemy); });
+        disposeGroundEnemy(enemy);
+      }
+      enemy = null;
+    }
+    if (enemy) return enemy;
+    if (source.kind === "dragon") {
+      enemy = createDragon(source.name || "ANCIENT DRAGON", Number(source.x) || 0, Number(source.z) || 0, sourceBoss, source.id);
+      if (sourceBoss) {
+        bossSpawned = true;
+        questStage = Math.max(questStage, 2);
+      }
+    } else {
+      enemy = createGroundEnemy(source.kind || "biomeLight", Number(source.x) || 0, Number(source.z) || 0, 1, source.id);
+      enemy.name = source.name || enemy.name;
+      enemy.strongholdId = source.strongholdId || null;
+      const stronghold = strongholds.find((item) => item.id === enemy.strongholdId);
+      if (stronghold && !stronghold.members.includes(enemy)) stronghold.members.push(enemy);
+    }
+    enemy.networkMaterialized = true;
+    return enemy;
+  }
+
+  function applyNetworkStatusEffects(enemy, source, serverAt) {
+    if (!enemy || !source) return;
+    const authoritativeNow = Number(serverAt) || 0;
+    if (Object.prototype.hasOwnProperty.call(source, "slowUntil")) {
+      enemy.slowTime = Math.max(0, ((Number(source.slowUntil) || 0) - authoritativeNow) / 1000);
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "bleedUntil")) {
+      enemy.bleedTime = Math.max(0, ((Number(source.bleedUntil) || 0) - authoritativeNow) / 1000);
+      enemy.bleedStacks = enemy.bleedTime > 0 ? Math.max(1, enemy.bleedStacks || 0) : 0;
+    }
+  }
+
+  function applyNetworkEnemyState(enemy, source, localPlayerId, rewardDeath, serverAt) {
+    if (!enemy || !source) return;
+    const wasDead = enemy.dead;
+    enemy.networkId = source.id;
+    enemy.networkExcluded = false;
+    enemy.networkTamedBy = source.tamedBy || null;
+    enemy.kind = source.kind || enemy.kind;
+    enemy.boss = Boolean(source.boss || source.id === "dragon-boss-vharok");
+    enemy.name = source.name || enemy.name;
+    enemy.strongholdId = source.strongholdId || enemy.strongholdId || null;
+    enemy.maxHealth = Math.max(1, Number(source.maxHealth) || enemy.maxHealth);
+    enemy.health = clamp(Number(source.health), 0, enemy.maxHealth);
+    if (Number.isFinite(Number(source.speed))) enemy.speed = Number(source.speed);
+    if (Number.isFinite(Number(source.range))) enemy.attackRange = Number(source.range);
+    if (Number.isFinite(Number(source.damage))) enemy.damage = Number(source.damage);
+    if (Number.isFinite(Number(source.healthReward))) enemy.healthReward = Number(source.healthReward);
+    enemy.tameProgress = clamp(Number(source.tameProgress) || 0, 0, 100);
+    applyNetworkStatusEffects(enemy, source, serverAt);
+    enemy.networkState = source.state || "guard";
+    enemy.networkRole = source.role || "guard";
+    enemy.engaged = source.state === "combat";
+    enemy.strongholdHandled = Boolean(source.dead || source.tamedBy);
+    const locallyBonded = Boolean(source.tamedBy && source.tamedBy === localPlayerId);
+    if (locallyBonded && !enemy.tamed) tameEnemy(enemy, true, true);
+    if (!locallyBonded && enemy.tamed) {
+      enemy.tamed = false;
+      if (enemy.originalName) enemy.name = source.name || enemy.originalName;
+    }
+    if (!source.dead && !source.tamedBy && isTameableEnemy(enemy) && (enemy.tameProgress >= 100 || enemy.health / enemy.maxHealth <= .5)) setEnemyTameReady(enemy, true);
+    if (source.dead && !wasDead) {
+      enemy.dead = true;
+      enemy.health = 0;
+      enemy.deathTime = 0;
+      clearDragonFireTelegraph(enemy);
+      if (enemy.kind !== "dragon") {
+        clearEnemyTelegraph(enemy);
+        setEnemyAction(enemy, "death", true);
+      }
+    }
+    else if (!source.dead && wasDead) {
+      enemy.dead = false;
+      enemy.deathTime = 0;
+      if (!enemy.root.parent) scene.add(enemy.root);
+    }
+    enemy.dead = Boolean(source.dead);
+    enemy.root.visible = !enemy.dead;
+  }
+
+  function applyChestOpenedVisual(chest) {
+    if (!chest) return;
+    chest.opened = true;
+    chest.openTime = .5;
+    chest.lid.rotation.x = -1.9;
+    chest.marker.material.opacity = .12;
+    chest.lockMaterial.visible = false;
+  }
+
+  function applyNetworkSnapshot(snapshot, localPlayerId) {
+    if (!snapshot || !multiplayerWorldActive()) return false;
+    applyingNetworkState = true;
+    try {
+      networkStats.snapshotsApplied += 1;
+      ensureStableNetworkIds();
+      const authoritativeIds = new Set();
+      (snapshot.enemies || []).forEach((source) => {
+        authoritativeIds.add(source.id);
+        const enemy = materializeNetworkEnemy(source);
+        applyNetworkEnemyState(enemy, source, localPlayerId, false, snapshot.serverAt);
+        if (source.id === "dragon-boss-vharok") networkBossRegistrationPending = false;
+      });
+      dragons.concat(groundEnemies).forEach((enemy) => {
+        const registered = authoritativeIds.has(enemy.networkId);
+        const pendingBoss = enemy.boss && enemy.networkId === "dragon-boss-vharok" && networkBossRegistrationPending && partyController()?.client?.isHost;
+        enemy.networkExcluded = !registered && !pendingBoss;
+        if (enemy.networkExcluded) enemy.root.visible = false;
+        else if (!enemy.dead) enemy.root.visible = true;
+      });
+      (snapshot.strongholds || []).forEach((source) => {
+        const stronghold = strongholds.find((item) => item.id === source.id);
+        if (!stronghold) return;
+        stronghold.cleared = Boolean(source.cleared);
+        updateStrongholdMarker(stronghold);
+        setCaptureFlag(stronghold, Boolean(source.flagRaised || source.cleared), false);
+      });
+      (snapshot.chests || []).forEach((source) => {
+        const chest = chests.find((item) => item.id === source.id);
+        if (!chest) return;
+        chest.networkOpened = Boolean(source.opened);
+        chest.networkClaimed = Boolean(source.claimed);
+        if (source.opened) applyChestOpenedVisual(chest);
+      });
+      const localState = (snapshot.players || []).find((entry) => entry.id === localPlayerId);
+      if (localState?.healthInitialized) {
+        const hydrationKey = String(snapshot.roomCode || "") + ":" + String(localPlayerId || "");
+        if (networkLocalTransformHydratedFor !== hydrationKey && player.root) {
+          player.root.position.set(Number(localState.x) || 0, Number(localState.y) || 0, Number(localState.z) || 0);
+          player.root.rotation.y = Number(localState.rotation) || 0;
+          player.stamina = clamp(Number(localState.stamina), 0, maxStamina());
+          networkLocalTransformHydratedFor = hydrationKey;
+        }
+        player.health = clamp(Number(localState.health), 0, maxHealth());
+        if (player.health <= 0 && state === "playing") endGame(false, "Your Warden fell while defending the shared realm.");
+      }
+      player.dragonKills = dragons.filter((dragon) => !dragon.boss && dragon.dead && !dragon.networkExcluded).length;
+      const serverBoss = (snapshot.enemies || []).find((enemy) => enemy.boss || enemy.id === "dragon-boss-vharok");
+      if (serverBoss) {
+        bossSpawned = true;
+        questStage = serverBoss.dead ? 3 : Math.max(Math.min(questStage, 2), 2);
+      } else {
+        bossSpawned = false;
+        questStage = Math.min(questStage, 1);
+        if (player.dragonKills >= 3 && questStage >= 1 && partyController()?.client?.isHost) {
+          const localBoss = dragons.find((dragon) => dragon.networkId === "dragon-boss-vharok");
+          if (localBoss) {
+            localBoss.networkExcluded = false;
+            localBoss.root.visible = !localBoss.dead;
+            bossSpawned = true;
+            questStage = 2;
+            registerNetworkBoss(localBoss);
+          } else spawnBoss();
+        }
+      }
+      updateStrongholdUI();
+      updateQuestUI();
+      if (serverBoss?.dead) checkRunCompletion();
+      return true;
+    } finally {
+      applyingNetworkState = false;
+    }
+  }
+
+  function applyNetworkEvent(event, localPlayerId) {
+    if (!event || !multiplayerWorldActive()) return false;
+    applyingNetworkState = true;
+    try {
+      networkStats.eventsApplied += 1;
+      if (event.type === "enemy_damage") {
+        const source = partyController()?.client?.snapshot?.enemies?.find((enemy) => enemy.id === event.enemyId);
+        const enemy = networkEnemyById(event.enemyId) || materializeNetworkEnemy(source);
+        if (!enemy) return false;
+        enemy.health = clamp(Number(event.health), 0, enemy.maxHealth);
+        enemy.tameProgress = clamp(Number(event.tameProgress) || 0, 0, 100);
+        applyNetworkStatusEffects(enemy, event, event.serverAt);
+        enemy.lastDamageSource = event.playerId === localPlayerId && event.weaponCredit ? "weapon" : "network";
+        enemy.lastWeaponId = event.weaponCredit && WEAPONS[event.weapon] ? event.weapon : null;
+        if (enemy.health > 0 && isTameableEnemy(enemy) && (enemy.tameProgress >= 100 || enemy.health / enemy.maxHealth <= .5)) setEnemyTameReady(enemy);
+        if (event.playerId === localPlayerId) {
+          showHit(false);
+          audio.hit();
+          spawnCombatText(enemy.root.position, String(event.amount), event.critical ? "crit" : "hit");
+          if (event.masteryHit && WEAPONS[event.weapon]) {
+            grantWeaponXp(Math.min(Number(event.amount) || 0, enemy.maxHealth), event.weapon);
+          }
+        }
+        if (event.dead && !enemy.dead) {
+          const rewarded = event.playerId === localPlayerId;
+          killDragon(enemy, rewarded, true);
+          if (rewarded) partyController()?.client?.sendPlayerState(serializeNetworkPlayer(), true);
+        }
+        return true;
+      }
+      if (event.type === "player_hit" && event.playerId === localPlayerId) {
+        damagePlayer(Number(event.rawDamage) || 1, event.source || "ENEMY", true);
+        partyController()?.client?.acknowledgeHit(event.hitId, player.health, maxHealth());
+        return true;
+      }
+      if (event.type === "player_damage" && event.playerId === localPlayerId) {
+        player.health = clamp(Number(event.health), 0, maxHealth());
+        if (player.health <= 0 && state === "playing") endGame(false, "Your Warden fell while defending the shared realm.");
+        return true;
+      }
+      if (event.type === "chest_opened") {
+        const chest = chests.find((item) => item.id === event.chestId);
+        if (!chest) return false;
+        chest.networkOpened = true;
+        applyChestOpenedVisual(chest);
+        if (event.playerId === localPlayerId && !chest.networkRewarded) {
+          chest.networkClaimed = true;
+          grantChestReward(chest, event.powerUp || chest.powerUp);
+          chest.networkRewarded = true;
+        }
+        return true;
+      }
+      if (event.type === "enemy_tamed") {
+        const enemy = networkEnemyById(event.enemyId);
+        if (!enemy) return false;
+        enemy.networkTamedBy = event.playerId;
+        enemy.strongholdHandled = true;
+        if (event.playerId === localPlayerId && !enemy.tamed) tameEnemy(enemy, false, true);
+        else if (event.playerId !== localPlayerId) {
+          enemy.tamed = false;
+          if (lockedTarget === enemy) lockedTarget = null;
+          if (nearestTarget === enemy) nearestTarget = null;
+        }
+        return true;
+      }
+      if (event.type === "stronghold_cleared") {
+        const stronghold = strongholds.find((item) => item.id === event.strongholdId);
+        if (stronghold && !stronghold.cleared) clearStronghold(stronghold, true);
+        if (stronghold) setCaptureFlag(stronghold, Boolean(event.flagRaised || stronghold.cleared), true);
+        return Boolean(stronghold);
+      }
+      return false;
+    } finally {
+      applyingNetworkState = false;
+    }
+  }
+
+  function renderRemoteWardens(players, dt) {
+    if (!remoteWardenRenderer && window.AshenholdRemoteWardens && scene) remoteWardenRenderer = new window.AshenholdRemoteWardens(scene);
+    return remoteWardenRenderer ? remoteWardenRenderer.sync(players, dt) : 0;
+  }
+
+  function renderNetworkEnemies(samples, dt) {
+    if (!multiplayerWorldActive()) return 0;
+    let rendered = 0;
+    (samples || []).forEach((sample) => {
+      const enemy = networkEnemyById(sample.id) || materializeNetworkEnemy(sample);
+      if (!enemy || enemy.networkExcluded || enemy.dead || sample.dead) {
+        if (enemy) enemy.root.visible = false;
+        return;
+      }
+      enemy.root.visible = true;
+      const sampleX = Number(sample.x) || 0;
+      const sampleZ = Number(sample.z) || 0;
+      const sampleY = enemy.kind === "dragon" ? Number(sample.y) || terrainHeight(sampleX, sampleZ) + 16 : terrainHeight(sampleX, sampleZ);
+      enemy.root.position.set(sampleX, sampleY, sampleZ);
+      enemy.root.rotation.y = Number(sample.rotation) || 0;
+      enemy.networkState = sample.state || enemy.networkState;
+      if (enemy.kind === "dragon") {
+        const flap = Math.sin(elapsed * 4.8 + enemy.phase) * .34;
+        enemy.leftWing.rotation.z = -.16 + flap;
+        enemy.rightWing.rotation.z = .16 - flap;
+      } else if (enemy.mixer) {
+        const moving = sample.state === "combat" || sample.state === "return" || sample.state === "search" || sample.state === "bonded";
+        setEnemyAction(enemy, moving ? "run" : "idle");
+        enemy.mixer.update(dt);
+      }
+      rendered += 1;
+    });
+    networkStats.enemyFrames += 1;
+    return rendered;
+  }
+
+  function restoreLocalNetworkActors() {
+    remoteWardenRenderer?.clear();
+    if (!networkLeaveReloading && coopRuntime?.worldStartedLocally && state === "playing" && partyController()?.mode === "solo") {
+      networkLeaveReloading = true;
+      const url = new URL(window.location.href);
+      url.searchParams.delete("room");
+      url.searchParams.delete("autojoin");
+      window.location.replace(url.toString());
+    }
+  }
+
+  function multiplayerSnapshot() {
+    const party = partyController();
+    const client = party?.client;
+    return {
+      active: Boolean(party?.multiplayer),
+      status: client?.status || "offline",
+      roomCode: client?.roomCode || "",
+      playerId: client?.playerId || null,
+      host: Boolean(client?.isHost),
+      worldReady: Boolean(client?.worldReady),
+      started: Boolean(client?.started),
+      remotePlayers: client?.remoteTracks?.size || 0,
+      remoteAvatars: remoteWardenRenderer?.wardens?.size || 0,
+      networkEnemies: client?.enemyTracks?.size || 0,
+      revision: coopRuntime?.lastAppliedRevision ?? -1,
+      stats: Object.assign({}, coopRuntime?.stats || {}, networkStats, { latency: client?.latency ?? null })
+    };
+  }
+
+  function registerNetworkBoss(boss) {
+    const client = partyController()?.client;
+    if (!boss || !client?.isHost || !client.worldReady || typeof client.registerEnemy !== "function") return false;
+    networkBossRegistrationPending = client.registerEnemy(serializeNetworkEnemy(boss));
+    if (networkBossRegistrationPending) networkStats.bossRegistrations += 1;
+    return networkBossRegistrationPending;
+  }
+
+  function initializeMultiplayerAdapter() {
+    if (!multiplayerBootReady) return false;
+    if (coopRuntime || !window.AshenholdCoopRuntime || !partyController()) return Boolean(coopRuntime);
+    const adapter = {
+      serializeWorld: serializeNetworkWorld,
+      serializePlayer: serializeNetworkPlayer,
+      applyNetworkSnapshot,
+      applyNetworkEvent,
+      renderRemotePlayers: renderRemoteWardens,
+      renderNetworkEnemies,
+      requestLocalStart: (reason) => {
+        if (state === "playing") return coopRuntime.startWorld();
+        return startGame(false, reason || "party");
+      },
+      onConnection: () => {
+        if (state === "playing") window.setTimeout(() => coopRuntime?.startWorld(), 0);
+      },
+      onHostChanged: (isHost) => {
+        if (!isHost || !multiplayerWorldActive()) return;
+        coopRuntime.startWorld();
+        const boss = dragons.find((dragon) => dragon.boss && !dragon.dead);
+        if (boss && !partyController().client.snapshot?.enemies?.some((enemy) => enemy.id === boss.networkId)) registerNetworkBoss(boss);
+      },
+      onDisconnect: () => {
+        networkStats.disconnects += 1;
+        networkLocalTransformHydratedFor = null;
+        remoteWardenRenderer?.clear();
+      },
+      onNetworkStatus: () => {},
+      disposeNetwork: () => remoteWardenRenderer?.dispose()
+    };
+    coopRuntime = new window.AshenholdCoopRuntime(partyController(), adapter);
+    window.addEventListener("ashenhold:party-leave", restoreLocalNetworkActors);
+    window.addEventListener("ashenhold:party-mode", (event) => { if (event.detail?.mode === "solo") restoreLocalNetworkActors(); });
+    const client = partyController().client;
+    if (client.status === "connected") {
+      adapter.onConnection({ snapshot: client.snapshot, started: client.started });
+      if (client.started && state !== "playing") window.setTimeout(() => adapter.requestLocalStart("reconnect"), 0);
+    }
+    return true;
+  }
 
   function encounterRandom() {
     let value = encounterRng.state >>> 0;
@@ -837,8 +1455,8 @@
         chests: chests.filter((chest) => chest.opened).map((chest) => chest.id),
         deadDragons: dragons.filter((dragon) => dragon.dead).map((dragon) => dragon.name),
         strongholds: strongholds.filter((stronghold) => stronghold.cleared).map((stronghold) => stronghold.id),
-        handledStrongholdMembers: groundEnemies.filter((enemy) => enemy.tamed && enemy.spawnKey).map((enemy) => enemy.spawnKey),
-        companions: groundEnemies.filter((enemy) => enemy.tamed && !enemy.dead).slice(0, 2).map((enemy) => ({
+        handledStrongholdMembers: groundEnemies.filter((enemy) => isOwnedCompanion(enemy) && enemy.spawnKey).map((enemy) => enemy.spawnKey),
+        companions: groundEnemies.filter(isOwnedCompanion).slice(0, 2).map((enemy) => ({
           kind: enemy.kind, name: enemy.originalName || enemy.name.replace(/^BONDED\s+/, ""), health: enemy.health
         })),
         rngState: encounterRng.state
@@ -970,6 +1588,7 @@
   }
 
   function grantXp(amount) {
+    const oldMaximumHealth = maxHealth();
     player.xp += Math.max(0, Math.round(amount));
     let gained = 0;
     while (player.xp >= levelXpTarget(player.level)) {
@@ -986,6 +1605,7 @@
     if (gained) {
       player.health = maxHealth();
       player.stamina = maxStamina();
+      registerNetworkMaxHealthUpgrade("level", gained, maxHealth() - oldMaximumHealth);
       showProgressionBanner("WARDEN ASCENDED", "LEVEL " + player.level, "+" + gained + " skill point" + (gained > 1 ? "s" : "") + " earned");
     }
     saveProgression();
@@ -1097,6 +1717,9 @@
     else player.skillPoints -= node.cost || 1;
     player.health = Math.min(maxHealth(), player.health + maxHealth() - oldMaxHealth);
     player.stamina = Math.min(maxStamina(), player.stamina + maxStamina() - oldMaxStamina);
+    if (["vitality", "bastion", "run_vigor"].includes(id) && maxHealth() > oldMaxHealth) {
+      registerNetworkMaxHealthUpgrade(id, 1, maxHealth() - oldMaxHealth);
+    }
     saveProgression();
     markRunDirty();
     updateProgressionUI();
@@ -1561,6 +2184,10 @@
       player.lastSafePosition.copy(player.root.position);
       resetActors();
       createLandmarks();
+      if (window.AshenholdCoopRuntime) {
+        updateLoading(88, "Charting shared paths...");
+        buildNetworkNavigation();
+      }
       updateProgressionUI();
       updateLoading(94, "Waking the dragon flight...");
       resize();
@@ -1577,6 +2204,8 @@
       ui.title.classList.add("active");
       ui.enter.focus({ preventScroll: true });
       updateLoading(100, biome.name + " ready");
+      multiplayerBootReady = true;
+      initializeMultiplayerAdapter();
       requestAnimationFrame(loop);
     } catch (error) {
       console.error(error);
@@ -3638,6 +4267,9 @@
   function resetChests() {
     chests.forEach((chest) => {
       chest.opened = false;
+      chest.networkOpened = false;
+      chest.networkClaimed = false;
+      chest.networkRewarded = false;
       chest.openTime = 0;
       chest.lid.rotation.x = 0;
       chest.lockMaterial.visible = true;
@@ -3699,7 +4331,7 @@
   }
 
   function chestInteractionDetails(chest, footOverride, facingOverride, groundedOverride) {
-    if (!chest || chest.opened || !player.root) return { allowed: false, reason: "unavailable" };
+    if (!chest || !chestAvailableForLocal(chest) || !player.root) return { allowed: false, reason: "unavailable" };
     const foot = footOverride ? footOverride.clone() : player.root.position.clone();
     const origin = foot.clone().add(new THREE.Vector3(0, 1.28, 0));
     const latch = chest.interactionAnchor.getWorldPosition(new THREE.Vector3());
@@ -3740,17 +4372,34 @@
     const maximum = Math.min(CHEST_INTERACTION_RANGE, maxDistance == null ? CHEST_INTERACTION_RANGE : Math.max(0, maxDistance));
     return chests
       .map((chest) => ({ chest, access: chestInteractionDetails(chest) }))
-      .filter((entry) => !entry.chest.opened && entry.access.allowed && entry.access.distance <= maximum)
+      .filter((entry) => chestAvailableForLocal(entry.chest) && entry.access.allowed && entry.access.distance <= maximum)
       .sort((a, b) => a.access.distance - b.access.distance)[0]?.chest || null;
   }
 
+  function chestAvailableForLocal(chest) {
+    return Boolean(chest && (!chest.opened || multiplayerWorldActive() && !chest.networkClaimed));
+  }
+
   function openChest(chest) {
-    if (!chest || chest.opened || state !== "playing" || !chestInteractionDetails(chest).allowed) return false;
-    chest.opened = true;
-    chest.openTime = .01;
+    if (!chest || !chestAvailableForLocal(chest) || state !== "playing" || !chestInteractionDetails(chest).allowed) return false;
+    if (multiplayerWorldActive() && !applyingNetworkState) {
+      if (!multiplayerActionReady()) {
+        showMessage("RECONNECTING TO THE SHARED REALM", "#91a5ad");
+        return false;
+      }
+      const sent = coopRuntime.openChest(chest.id);
+      if (sent) networkStats.chestRequests += 1;
+      return sent;
+    }
+    return grantChestReward(chest, chest.powerUp);
+  }
+
+  function grantChestReward(chest, powerOverride) {
+    if (!chest) return false;
+    applyChestOpenedVisual(chest);
     const oldMaximumHealth = maxHealth();
     const oldMaximumStamina = maxStamina();
-    const power = chest.powerUp || { type: "damage", amount: 1 };
+    const power = powerOverride || chest.powerUp || { type: "damage", amount: 1 };
     player.relicBonuses[power.type] = clamp(relicBonus(power.type) + power.amount, 0, 500);
     grantXp(chest.xp);
     grantRunXp(Math.round(chest.xp * .72), "RELIC CHEST");
@@ -3765,8 +4414,6 @@
     const powerNames = { damage: "DAMAGE", health: "MAX HEALTH", regen: "REGENERATION", sprint: "SPRINT SPEED", stamina: "MAX STAMINA", critDamage: "CRITICAL DAMAGE" };
     showProgressionBanner("PERMANENT POWER ABSORBED", chest.name, "+" + power.amount + "% " + powerNames[power.type] + " · +" + chest.xp + " XP");
     showMessage("PERMANENT +" + power.amount + "% " + powerNames[power.type], "#f6cf72");
-    chest.marker.material.opacity = .12;
-    chest.lockMaterial.visible = false;
     saveProgression(true);
     markRunDirty(true);
     return true;
@@ -4465,7 +5112,7 @@
     wing.add(thumb);
   }
 
-  function createDragon(name, x, z, boss) {
+  function createDragon(name, x, z, boss, networkId) {
     const root = new THREE.Group();
     root.name = name;
     const body = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), boss ? dragonDarkMaterial : dragonMaterial);
@@ -4578,6 +5225,7 @@
     const dragonBaseHealth = boss ? 520 : 150;
     const dragonHealth = Math.round(dragonBaseHealth * Math.pow(1.075, dragonThreat - 1));
     const dragon = {
+      networkId: networkId || null,
       name, root, leftWing, rightWing, home: new THREE.Vector3(x, 0, z),
       health: dragonHealth, maxHealth: dragonHealth, boss, threat: dragonThreat,
       damageScale: Math.pow(1.045, dragonThreat - 1),
@@ -4623,7 +5271,7 @@
     enemy.animationState = nextState;
   }
 
-  function createGroundEnemy(type, x, z, difficulty) {
+  function createGroundEnemy(type, x, z, difficulty, networkId) {
     const root = new THREE.Group();
     let modelRoot = root;
     let mixer = null;
@@ -4747,6 +5395,7 @@
     root.rotation.y = encounterRandom() * Math.PI * 2;
     scene.add(root);
     const enemy = {
+      networkId: networkId || null,
       name: stats.name, rank: stats.rank, kind: type, root, modelRoot, mixer, parts,
       health: Math.round(stats.health * healthScale), maxHealth: Math.round(stats.health * healthScale),
       damage: Math.max(1, Math.round(stats.damage * damageScale)), speed: stats.speed * (1 + Math.min(.18, threat * .012)),
@@ -4795,7 +5444,7 @@
   }
 
   function strongholdAliveCount(stronghold) {
-    return stronghold.members.filter((enemy) => !enemy.dead && !enemy.tamed && !enemy.strongholdHandled).length;
+    return stronghold.members.filter((enemy) => !enemy.networkExcluded && !enemy.dead && !enemy.tamed && !enemy.networkTamedBy && !enemy.strongholdHandled).length;
   }
 
   function allStrongholdsCleared() {
@@ -4870,10 +5519,10 @@
   }
 
   function isTameableEnemy(enemy) {
-    return Boolean(enemy && !enemy.dead && !enemy.tamed && (enemy.kind === "warg" || enemy.kind === "biomeLight"));
+    return Boolean(enemy && !enemy.networkExcluded && !enemy.dead && !enemy.tamed && !enemy.networkTamedBy && (enemy.kind === "warg" || enemy.kind === "biomeLight"));
   }
 
-  function setEnemyTameReady(enemy) {
+  function setEnemyTameReady(enemy, silent) {
     if (!isTameableEnemy(enemy) || enemy.tameReady) return;
     enemy.tameReady = true;
     const material = new THREE.MeshBasicMaterial({ color: 0x79e7d0, transparent: true, opacity: .65, side: THREE.DoubleSide, depthWrite: false });
@@ -4882,7 +5531,7 @@
     marker.position.y = .08;
     enemy.root.add(marker);
     enemy.tameMarker = marker;
-    showMessage(enemy.name + "'S WILL IS BROKEN · PRESS E TO TAME", "#80ead5");
+    if (!silent) showMessage(enemy.name + "'S WILL IS BROKEN · PRESS E TO TAME", "#80ead5");
   }
 
   function nearestTameCandidate(maxDistance) {
@@ -4896,9 +5545,19 @@
 
   function tameEnemy(enemy, silent, skipStrongholdHandling) {
     if (!enemy || enemy.dead || enemy.tamed) return false;
-    if (!silent && groundEnemies.filter((item) => item.tamed && !item.dead).length >= 2) {
+    if (!silent && groundEnemies.filter(isOwnedCompanion).length >= 2) {
       showMessage("YOUR BOND CAN HOLD ONLY TWO COMPANIONS", "#91a5ad");
       return false;
+    }
+    if (multiplayerWorldActive() && !applyingNetworkState) {
+      if (!multiplayerActionReady()) {
+        showMessage("RECONNECTING TO THE SHARED REALM", "#91a5ad");
+        return false;
+      }
+      ensureStableNetworkIds();
+      const sent = coopRuntime.tame(enemy.networkId);
+      if (sent) networkStats.tameRequests += 1;
+      return sent;
     }
     enemy.tamed = true;
     enemy.tameReady = false;
@@ -4936,7 +5595,7 @@
   }
 
   function bondedPaceBonus() {
-    return Math.min(.45, groundEnemies.filter((enemy) => enemy.tamed && !enemy.dead)
+    return Math.min(.45, groundEnemies.filter(isOwnedCompanion)
       .reduce((sum, enemy) => sum + (enemy.kind === "warg" ? .3 : .16), 0));
   }
 
@@ -5732,6 +6391,7 @@
     if (playerNoiseTime <= 0) { playerNoiseRadius = 0; playerNoiseReason = "quiet"; }
     const noise = currentPlayerNoise();
     groundEnemies.forEach((enemy) => {
+      if (enemy.networkExcluded) { enemy.root.visible = false; return; }
       const renderDistance = isCoarse ? 175 : 275;
       const playerDistance = player.root ? distance2D(enemy.root.position, player.root.position) : 0;
       enemy.root.visible = enemy.tamed || playerDistance <= renderDistance;
@@ -6099,10 +6759,10 @@
     playerNoiseReason = "quiet";
     worldLayout.forts.forEach((fort, index) => {
       const angle = Math.atan2(fort[1], fort[0]) + .55;
-      createDragon(worldProfile.dragonNames[index], clamp(fort[0] + Math.cos(angle) * 62, -560, 560), clamp(fort[1] + Math.sin(angle) * 62, -560, 560), false);
+      createDragon(worldProfile.dragonNames[index], clamp(fort[0] + Math.cos(angle) * 62, -560, 560), clamp(fort[1] + Math.sin(angle) * 62, -560, 560), false, "dragon-fort-" + index);
     });
     const wanderAngle = seeded(worldLayout.salt + 1600) * Math.PI * 2;
-    createDragon(worldProfile.dragonNames[3], Math.cos(wanderAngle) * 360, Math.sin(wanderAngle) * 360, false);
+    createDragon(worldProfile.dragonNames[3], Math.cos(wanderAngle) * 360, Math.sin(wanderAngle) * 360, false, "dragon-roamer-0");
     // Garrisons are world gen: seeded spots from registerStronghold, spawned with level-scaled
     // count and promotions, with the encounter RNG stream restored so combat stays deterministic.
     const garrisonRngState = encounterRng.state;
@@ -6126,6 +6786,7 @@
         const enemy = createGroundEnemy(spot.type, spot.x, spot.z, threat);
         enemy.strongholdId = stronghold.id;
         enemy.spawnKey = spawnKey;
+        enemy.networkId = "garrison-" + networkIdPart(spawnKey);
         enemy.camp = { x: stronghold.x, z: stronghold.z, radius: stronghold.kind === "keep" ? 40 : 30 };
         enemy.name = stronghold.name + " " + enemy.name;
         assignGarrisonAI(enemy, stronghold, spot, memberIndex);
@@ -6168,12 +6829,18 @@
     if (player.modelRoot) player.modelRoot.position.y = 0;
   }
 
-  function startGame(forceFresh) {
+  function startGame(forceFresh, networkReason) {
+    if (!partyStartAllowed(networkReason)) return false;
+    if (state === "playing") {
+      if (partyModeSelected()) coopRuntime?.startWorld();
+      return true;
+    }
     if (state === "ended" && !testMode) {
       window.location.reload();
-      return;
+      return false;
     }
-    const resumeSave = !forceFresh && pendingRunState;
+    const networkGuest = partyModeSelected() && partyController()?.client && !partyController().client.isHost;
+    const resumeSave = !networkGuest && !forceFresh && pendingRunState;
     if (forceFresh) clearActiveRun();
     runResolving = false;
     audio.init();
@@ -6243,6 +6910,8 @@
     if (!isCoarse && !testMode) requestPointer();
     showLocation(biome.name, resumed ? "RUN RESTORED" : "ENTERING REALM " + (player.realmDepth + 1));
     markRunDirty(true);
+    if (partyModeSelected()) coopRuntime?.startWorld();
+    return true;
   }
 
   function requestPointer() {
@@ -6578,9 +7247,10 @@
 
   function triggerStormlaunch() {
     const origin = player.root.position.clone();
+    const actionId = nextNetworkActionId("stormlaunch");
     createShockwave(origin, 6, .38, 0x8adcf5);
     allEnemies().filter((enemy) => !enemy.dead && distance2D(enemy.root.position, origin) <= 6).forEach((enemy) => {
-      damageDragon(enemy, 12, true, "stormlaunch", "staff");
+      damageDragon(enemy, 12, true, "stormlaunch", "staff", actionId);
       if (enemy.impulse) {
         const away = enemy.root.position.clone().sub(origin).setY(0).normalize();
         enemy.impulse.addScaledVector(away, enemy.elite ? 4 : 8);
@@ -6598,9 +7268,10 @@
     if (player.stormstrideTimer > 0) return;
     player.stormstrideTimer = .25;
     const origin = player.root.position.clone();
+    const actionId = nextNetworkActionId("stormstride");
     createShockwave(origin, 4, .28, 0x78cfff);
     const targets = allEnemies().filter((enemy) => !enemy.dead && distance2D(enemy.root.position, origin) <= 4);
-    targets.forEach((enemy) => damageDragon(enemy, 7, false, "stormstride", "staff"));
+    targets.forEach((enemy) => damageDragon(enemy, 7, false, "stormstride", "staff", actionId));
     if (targets[0]) createLightningArc(origin.clone().add(new THREE.Vector3(0, .35, 0)), targets[0].root.position.clone().add(new THREE.Vector3(0, 1, 0)), 0x8adcf5);
   }
 
@@ -6956,7 +7627,7 @@
     player.root.rotation.y = rotateToward(player.root.rotation.y, cameraYaw, .7);
     emitPlayerNoise(weaponId === "bow" ? 28 : weaponId === "staff" ? 32 : weaponId === "axe" ? 30 : 23, .55, weaponId + "-attack");
     audio.swing();
-    player.pendingAttack = { weaponId, releaseAt: player.attackDuration * .55, executed: false };
+    player.pendingAttack = { weaponId, releaseAt: player.attackDuration * .55, executed: false, actionId: nextNetworkActionId(weaponId) };
   }
 
   function computeCrosshairAim(maxRange) {
@@ -6992,6 +7663,7 @@
   function releasePlayerAttack(weaponId) {
     const weapon = WEAPONS[weaponId];
     if (!weapon || state !== "playing") return;
+    const actionId = player.pendingAttack?.actionId || nextNetworkActionId(weaponId);
     if (weaponId !== "bow") createSlash(weapon.color, weaponId === "axe" ? 1.28 : 1);
     const cameraForward = new THREE.Vector3(
       -Math.sin(cameraYaw) * Math.cos(cameraPitch),
@@ -7017,7 +7689,7 @@
       bolts.push({
         mesh, weaponId, velocity: forward.multiplyScalar(weapon.speed * speedMultiplier), life: weapon.life + (weaponId === "bow" ? skillRank("eagle_eye") * .45 : 0),
         damage: Math.round(weapon.damage * weaponDamageMultiplier(weaponId)), splash: weapon.splash + (weaponId === "staff" ? skillRank("overcharge") * 1.3 : 0),
-        gravity: weapon.gravity * (weaponId === "bow" ? 1 - skillRank("eagle_eye") * .22 : 1), color: weapon.color,
+        gravity: weapon.gravity * (weaponId === "bow" ? 1 - skillRank("eagle_eye") * .22 : 1), color: weapon.color, actionId,
         spin: weaponId === "axe" ? 11 : weaponId === "staff" ? 3.5 : 0
       });
       if (weaponId === "bow") {
@@ -7027,14 +7699,14 @@
           const sideMesh = createWeaponProjectile("bow", weapon);
           sideMesh.position.copy(origin).addScaledVector(sideDirection, 1.2);
           scene.add(sideMesh);
-          bolts.push({ mesh: sideMesh, weaponId: "bow", velocity: sideDirection.multiplyScalar(weapon.speed * speedMultiplier), life: weapon.life, damage: Math.round(weapon.damage * weaponDamageMultiplier("bow") * .7), splash: 0, gravity: weapon.gravity * .55, color: weapon.color, spin: 0 });
+          bolts.push({ mesh: sideMesh, weaponId: "bow", velocity: sideDirection.multiplyScalar(weapon.speed * speedMultiplier), life: weapon.life, damage: Math.round(weapon.damage * weaponDamageMultiplier("bow") * .7), splash: 0, gravity: weapon.gravity * .55, color: weapon.color, spin: 0, actionId });
         }
       }
       if (weaponId === "staff") {
         player.staffCasts += 1;
         if (hasSkill("tempest_crown") && player.staffCasts % 6 === 0) {
           createShockwave(player.root.position.clone(), 13, .7, 0xb388f0);
-          allEnemies().forEach((enemy) => { if (!enemy.dead && enemy.root.position.distanceTo(player.root.position) < 12) damageDragon(enemy, 24, false, "arc", "staff"); });
+          allEnemies().forEach((enemy) => { if (!enemy.dead && enemy.root.position.distanceTo(player.root.position) < 12) damageDragon(enemy, 24, false, "arc", "staff", actionId); });
         }
       }
     }
@@ -7049,11 +7721,14 @@
       const reach = weapon.range + Math.min(enemy.hitRadius || 1.2, 3) * .5;
       const verticalWindow = enemy.kind === "dragon" ? 5 : 3.4;
       const facing = horizontalDistance ? horizontal.normalize().dot(new THREE.Vector3(-Math.sin(player.root.rotation.y), 0, -Math.cos(player.root.rotation.y))) : 1;
-      if (horizontalDistance < reach && verticalDistance < verticalWindow && facing > .08) damageDragon(enemy, Math.round(weapon.melee * weaponDamageMultiplier(weaponId) * riposteMultiplier), weaponId === "axe", "weapon", weaponId);
+      if (horizontalDistance < reach && verticalDistance < verticalWindow && facing > .08) damageDragon(enemy, Math.round(weapon.melee * weaponDamageMultiplier(weaponId) * riposteMultiplier), weaponId === "axe", "weapon", weaponId, actionId);
     });
   }
 
-  function allEnemies() { return dragons.concat(groundEnemies.filter((enemy) => !enemy.tamed)); }
+  function allEnemies() {
+    return dragons.filter((enemy) => !enemy.networkExcluded)
+      .concat(groundEnemies.filter((enemy) => !enemy.networkExcluded && !enemy.tamed && !enemy.networkTamedBy));
+  }
 
   function createWeaponProjectile(weaponId, weapon) {
     const material = new THREE.MeshBasicMaterial({ color: weapon.color, transparent: true, opacity: .96 });
@@ -7111,9 +7786,10 @@
     const forceMultiplier = 1 + skillRank("force") * .12;
     const shoutRadius = 48 + skillRank("force") * 4;
     const shoutTargets = allEnemies().filter((enemy) => !enemy.dead && enemy.root.position.distanceTo(player.root.position) < shoutRadius);
+    const shoutActionId = nextNetworkActionId("shout");
     createShockwave(player.root.position.clone(), shoutRadius, 1.05, 0x8ed5e8);
     shoutTargets.forEach((dragon) => {
-      damageDragon(dragon, Math.round((dragon.boss ? 38 : 62) * forceMultiplier), true, "shout");
+      damageDragon(dragon, Math.round((dragon.boss ? 38 : 62) * forceMultiplier), true, "shout", "shout", shoutActionId);
       const away = dragon.root.position.clone().sub(player.root.position).setY(0).normalize();
       if (dragon.impulse) dragon.impulse.addScaledVector(away, dragon.elite ? 6 : 11);
     });
@@ -7124,7 +7800,7 @@
         const target = chain[index];
         if (distance2D(previous.root.position, target.root.position) > 24) continue;
         createLightningArc(previous.root.position, target.root.position, 0x9de8ff);
-        if (!target.dead) damageDragon(target, target.boss ? 12 : 24, false, "arc", "staff");
+        if (!target.dead) damageDragon(target, target.boss ? 12 : 24, false, "arc", "staff", shoutActionId);
       }
     }
     fireballs.forEach((ball) => {
@@ -7189,6 +7865,7 @@
   function updateDragons(dt, idle) {
     const playerPosition = player.root.position;
     dragons.forEach((dragon) => {
+      if (dragon.networkExcluded) { dragon.root.visible = false; return; }
       if (dragon.dead) {
         clearDragonFireTelegraph(dragon);
         dragon.deathTime += dt;
@@ -7297,11 +7974,11 @@
       allEnemies().some((dragon) => {
         if (dragon.dead) return false;
         if (bolt.mesh.position.distanceTo(dragon.root.position) < dragon.hitRadius) {
-          damageDragon(dragon, bolt.damage, bolt.weaponId === "axe", "weapon", bolt.weaponId);
+          damageDragon(dragon, bolt.damage, bolt.weaponId === "axe", "weapon", bolt.weaponId, bolt.actionId);
           if (bolt.splash > 0) {
             allEnemies().forEach((other) => {
               if (other !== dragon && !other.dead && other.root.position.distanceTo(bolt.mesh.position) < bolt.splash) {
-                damageDragon(other, Math.max(1, Math.round(bolt.damage * .55)), false, "weapon", bolt.weaponId);
+                damageDragon(other, Math.max(1, Math.round(bolt.damage * .55)), false, "weapon", bolt.weaponId, bolt.actionId);
               }
             });
           }
@@ -7343,7 +8020,7 @@
     });
   }
 
-  function damageDragon(dragon, amount, heavy, source, weaponId) {
+  function damageDragon(dragon, amount, heavy, source, weaponId, actionId) {
     if (dragon.dead || dragon.tamed) return;
     const damageSource = source || "weapon";
     let finalAmount = amount;
@@ -7365,6 +8042,55 @@
     if (damageSource === "weapon" && weaponId === "blade") {
       player.bladeHits += 1;
       if (hasSkill("sword_saint") && player.bladeHits % 5 === 0) finalAmount *= 1.8;
+    }
+    finalAmount = Math.max(1, Math.round(finalAmount));
+    if (multiplayerWorldActive() && !applyingNetworkState) {
+      if (!multiplayerActionReady()) return false;
+      ensureStableNetworkIds();
+      const networkWeapon = damageSource === "shout" ? "shout"
+        : damageSource === "companion" ? "companion"
+        : WEAPONS[weaponId] ? weaponId : player.activeWeapon;
+      const networkActionId = actionId || nextNetworkActionId(networkWeapon);
+      const networkEffects = damageSource === "weapon" ? {
+        tameProgress: (weaponId === "staff" ? 30 : 0) + (criticalHit ? 55 : 0),
+        slowMs: weaponId === "staff" ? Math.round((.95 + skillRank("frost_nova") * .55) * 1000) : 0,
+        bleedDamage: weaponId === "blade" && skillRank("bleeding_edge") ? Math.max(1, Math.round(finalAmount * .04 * skillRank("bleeding_edge"))) : 0
+      } : null;
+      const sent = coopRuntime.attack(dragon.networkId, networkWeapon, finalAmount, criticalHit, networkActionId, networkEffects, damageSource === "weapon");
+      if (sent) {
+        networkStats.attacksSent += 1;
+        nearestTarget = dragon;
+        hitStopRemaining = Math.max(hitStopRemaining, heavy ? .045 : .025);
+        cameraTrauma = Math.min(1, cameraTrauma + (heavy ? .18 : .08));
+        if (damageSource === "weapon") {
+          player.comboHits = Math.min(8, player.comboHits + 1);
+          player.comboExpires = elapsed + 2.2;
+          player.shout = Math.min(100, player.shout + (heavy ? 10 : 6) * shoutChargeMultiplier());
+        }
+        if (damageSource === "weapon" && weaponId === "bow" && criticalHit && hasSkill("storm_archer")) {
+          const chained = allEnemies().filter((other) => other !== dragon && !other.dead && other.root.position.distanceTo(dragon.root.position) < 15)
+            .sort((a, b) => a.root.position.distanceTo(dragon.root.position) - b.root.position.distanceTo(dragon.root.position))[0];
+          if (chained) {
+            createLightningArc(dragon.root.position, chained.root.position, 0x8adcf5);
+            damageDragon(chained, Math.max(1, Math.round(finalAmount * .48)), false, "arc", "bow", networkActionId);
+          }
+        }
+        if (damageSource === "weapon" && weaponId === "staff" && skillRank("chain_spark")) {
+          const chained = allEnemies().filter((other) => other !== dragon && !other.dead && other.root.position.distanceTo(dragon.root.position) < 8 + skillRank("chain_spark") * 2)
+            .sort((a, b) => a.root.position.distanceTo(dragon.root.position) - b.root.position.distanceTo(dragon.root.position))[0];
+          if (chained) damageDragon(chained, Math.max(1, Math.round(finalAmount * (.22 + skillRank("chain_spark") * .08))), false, "arc", "staff", networkActionId);
+        }
+        if (damageSource === "weapon" && weaponId === "axe" && hasSkill("world_splitter") && player.worldSplitterAttack !== player.attackVariant) {
+          player.worldSplitterAttack = player.attackVariant;
+          createShockwave(dragon.root.position.clone(), 9, .42, 0xf09a5d);
+          createShockwave(dragon.root.position.clone(), 14, .7, 0xffc27a);
+          allEnemies().filter((other) => other !== dragon && !other.dead && distance2D(other.root.position, dragon.root.position) < 11)
+            .forEach((other) => damageDragon(other, Math.max(1, Math.round(finalAmount * .36)), true, "aftershock", "axe", networkActionId));
+        }
+      }
+      return sent;
+    }
+    if (damageSource === "weapon" && weaponId === "blade") {
       if (dragon.kind !== "dragon" && skillRank("bleeding_edge")) {
         dragon.bleedStacks = Math.min(skillRank("bleeding_edge"), (dragon.bleedStacks || 0) + 1);
         dragon.bleedTime = 4;
@@ -7374,7 +8100,6 @@
       dragon.slowTime = Math.max(dragon.slowTime || 0, .95 + skillRank("frost_nova") * .55);
       if (skillRank("frost_nova") && distance2D(dragon.root.position, player.root.position) < 9) dragon.slowTime = Math.max(dragon.slowTime, 1.4 + skillRank("frost_nova") * .55);
     }
-    finalAmount = Math.max(1, Math.round(finalAmount));
     const appliedDamage = Math.min(dragon.health, finalAmount);
     dragon.engaged = true;
     if (dragon.kind !== "dragon") alertGroundEnemyFromDamage(dragon);
@@ -7436,43 +8161,52 @@
     if (dragon.health <= 0) killDragon(dragon);
   }
 
-  function killDragon(dragon) {
+  function killDragon(dragon, grantRewards, networkControlled) {
+    const rewardKill = grantRewards !== false;
+    if (!dragon || dragon.dead) return false;
     const isDragon = dragon.kind === "dragon";
     dragon.dead = true;
     dragon.health = 0;
     if (!isDragon) setEnemyAction(dragon, "death", true);
-    player.kills += 1;
-    if (hasSkill("run_rampage")) player.rampageTime = 4.5;
-    if (isDragon) player.dragonKills += 1;
-    player.shout = Math.min(100, player.shout + (dragon.boss ? 38 : 21) * shoutChargeMultiplier());
     const xpGain = dragon.xpReward || (dragon.boss ? 950 : 320);
-    grantXp(xpGain);
-    grantRunXp(Math.round((dragon.xpReward || 60) * .58), dragon.elite ? "ELITE SLAIN" : "ENEMY SLAIN");
     const heal = Math.max(3, Math.round((dragon.healthReward || 6) * .65 + skillRank("run_scavenger") * 2 + (hasSkill("immortal_warden") ? 3 : 0)));
-    player.health = Math.min(maxHealth(), player.health + heal);
-    if (dragon.lastDamageSource === "weapon") grantWeaponXp(dragon.boss ? 46 : 16, dragon.lastWeaponId);
+    if (rewardKill) {
+      player.kills += 1;
+      if (hasSkill("run_rampage")) player.rampageTime = 4.5;
+      if (isDragon && !networkControlled) player.dragonKills += 1;
+      player.shout = Math.min(100, player.shout + (dragon.boss ? 38 : 21) * shoutChargeMultiplier());
+      grantXp(xpGain);
+      grantRunXp(Math.round((dragon.xpReward || 60) * .58), dragon.elite ? "ELITE SLAIN" : "ENEMY SLAIN");
+      player.health = Math.min(maxHealth(), player.health + heal);
+      if (dragon.lastDamageSource === "weapon") grantWeaponXp(dragon.boss ? 46 : 16, dragon.lastWeaponId);
+    }
     const effectScale = dragon.boss ? (isDragon ? 18 : 11) : isDragon ? 10 : 6;
     createExplosion(dragon.root.position, dragon.boss ? 0x8bc9d8 : isDragon ? 0xe15e31 : 0x75b9c9, effectScale);
     createShockwave(dragon.root.position.clone(), dragon.boss ? 22 : 10, .75, dragon.boss ? 0x8ccfe0 : 0xd46138);
-    if (isDragon) spawnDragonSouls(dragon);
+    if (isDragon && rewardKill) spawnDragonSouls(dragon);
     showHit(true);
-    showMessage((dragon.boss && isDragon ? "THE WORLD-BURNER IS SLAIN" : dragon.name + " SLAIN") + "  +" + heal + " HEALTH · +" + xpGain + " XP", dragon.boss ? "#a9deea" : "#edbd80");
-    spawnCombatText(dragon.root.position, "+" + xpGain + " XP", "xp");
-    spawnCombatText(player.root.position, "+" + heal, "heal");
+    showMessage((dragon.boss && isDragon ? "THE WORLD-BURNER IS SLAIN" : dragon.name + " SLAIN") + (rewardKill ? "  +" + heal + " HEALTH · +" + xpGain + " XP" : ""), dragon.boss ? "#a9deea" : "#edbd80");
+    if (rewardKill) {
+      spawnCombatText(dragon.root.position, "+" + xpGain + " XP", "xp");
+      spawnCombatText(player.root.position, "+" + heal, "heal");
+    }
     if (isDragon) audio.dragon(); else audio.hit();
-    if (!isDragon) handleStrongholdMember(dragon);
+    if (!isDragon && !networkControlled) handleStrongholdMember(dragon);
+    if (isDragon && networkControlled && !dragon.boss) player.dragonKills = dragons.filter((item) => !item.boss && item.dead && !item.networkExcluded).length;
     if (dragon.boss && isDragon) winGame();
-    else if (isDragon && questStage >= 1 && player.dragonKills >= 3 && !bossSpawned) spawnBoss();
+    else if (isDragon && questStage >= 1 && player.dragonKills >= 3 && !bossSpawned && (!networkControlled || partyController()?.client?.isHost)) spawnBoss();
     updateQuestUI();
     markRunDirty();
+    return true;
   }
 
   function spawnBoss(silent) {
     bossSpawned = true;
     questStage = 2;
-    const boss = createDragon("VHAROK, " + worldProfile.dragonNames[0] + " ASCENDANT", RUINS.x, RUINS.z - 18, true);
+    const boss = createDragon("VHAROK, " + worldProfile.dragonNames[0] + " ASCENDANT", RUINS.x, RUINS.z - 18, true, "dragon-boss-vharok");
     boss.root.position.y = terrainHeight(RUINS.x, RUINS.z) + 44;
     boss.engaged = true;
+    if (multiplayerWorldActive()) registerNetworkBoss(boss);
     if (!silent) {
       showLocation(boss.name, "BOSS AWAKENED");
       audio.dragon();
@@ -7481,8 +8215,8 @@
     markRunDirty(true);
   }
 
-  function damagePlayer(amount, sourceName) {
-    if (state !== "playing") return;
+  function damagePlayer(amount, sourceName, networkForced) {
+    if (state !== "playing" && !networkForced) return;
     if (player.dodgeTime > 0 && player.dodgeElapsed >= .1 && player.dodgeElapsed <= .36) {
       showMessage("PERFECT DODGE", "#9de6ef");
       cameraTrauma = Math.max(cameraTrauma, .08);
@@ -7984,7 +8718,7 @@
         mapContext.fill();
       }
     });
-    groundEnemies.filter((enemy) => enemy.tamed && !enemy.dead).forEach((enemy) => {
+    groundEnemies.filter(isOwnedCompanion).forEach((enemy) => {
       const point = toMap(enemy.root.position);
       if (point.x < 0 || point.x > size || point.y < 0 || point.y > size) return;
       mapContext.fillStyle = MARKER_STYLES.companion.color;
@@ -8118,8 +8852,11 @@
     hudRefreshTimer -= dt;
     minimapRefreshTimer -= dt;
     updatePlayer(dt);
-    updateDragons(dt, false);
-    updateGroundEnemies(dt, false);
+    if (multiplayerWorldActive()) coopRuntime?.update(dt);
+    else {
+      updateDragons(dt, false);
+      updateGroundEnemies(dt, false);
+    }
     updateProjectiles(dt);
     updateEffects(dt);
     updateWorldDecor(dt);
@@ -8320,6 +9057,8 @@
   }
 
   setupInputs();
+  window.addEventListener("ashenhold:party-mode", initializeMultiplayerAdapter);
+  window.addEventListener("ashenhold:party-welcome", initializeMultiplayerAdapter);
   boot();
 
   function firstDragonForwardAlignment() {
@@ -8444,6 +9183,7 @@
   window.ashenholdGame = {
     snapshot: () => ({
       state,
+      multiplayer: multiplayerSnapshot(),
       position: player.root ? { x: player.root.position.x, y: player.root.position.y, z: player.root.position.z } : null,
       health: player.health, stamina: player.stamina, shout: player.shout, kills: player.kills,
       moving: player.moving, sprinting: player.sprinting, superSprinting: player.superSprinting,
@@ -8459,7 +9199,7 @@
       skillNodes: skillTree.reduce((sum, branch) => sum + branch.nodes.length, 0),
       questStage, dragonsAlive: dragons.filter((dragon) => !dragon.dead).length,
       groundEnemiesAlive: groundEnemies.filter((enemy) => !enemy.dead && !enemy.tamed).length,
-      companions: groundEnemies.filter((enemy) => !enemy.dead && enemy.tamed).map((enemy) => ({ name: enemy.name, kind: enemy.kind, health: enemy.health })),
+      companions: groundEnemies.filter(isOwnedCompanion).map((enemy) => ({ name: enemy.name, kind: enemy.kind, health: enemy.health })),
       bondedPace: bondedPaceBonus(),
       strongholds: {
         cleared: strongholds.filter((stronghold) => stronghold.cleared).length,
@@ -8534,12 +9274,38 @@
       renderer: renderer ? renderer.info.render : null,
       rendererMemory: renderer ? renderer.info.memory : null
     }),
-    modelCatalog: () => Object.assign({}, visualAssets.modelPaths || {})
+    modelCatalog: () => Object.assign({}, visualAssets.modelPaths || {}),
+    multiplayerSnapshot
   };
 
   if (testMode) {
     window.__ASHENHOLD_TEST__ = {
       start: startGame,
+      multiplayerDebug: multiplayerSnapshot,
+      multiplayerSnapshot,
+      multiplayerWorldDebug: () => {
+        const world = serializeNetworkWorld();
+        const ids = world.enemies.map((enemy) => enemy.id);
+        return {
+          registrationBytes: networkStats.worldBytes,
+          serializeMs: networkStats.worldSerializeMs,
+          navigationMs: networkStats.navigationMs,
+          navigationCells: networkStats.navigationCells,
+          blockedCells: networkStats.blockedCells,
+          enemies: ids.length,
+          uniqueEnemyIds: new Set(ids).size,
+          strongholds: world.strongholds.length,
+          chests: world.chests.length,
+          underServerLimit: networkStats.worldBytes < 256 * 1024
+        };
+      },
+      multiplayerDisconnectTransport: () => {
+        const client = partyController()?.client;
+        if (!client?.socket || client.socket.readyState > 1) return false;
+        client.intentionalClose = false;
+        client.socket.close(4100, "test transport fault");
+        return true;
+      },
       teleport: (x, z) => {
         player.root.position.x = clamp(x, -HALF_WORLD, HALF_WORLD);
         player.root.position.z = clamp(z, -HALF_WORLD, HALF_WORLD);
