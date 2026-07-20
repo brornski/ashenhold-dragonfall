@@ -269,14 +269,10 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
     canonicalRegistryMeasured: ["wall", "gate", "tower", "tavern", "homeA", "homeB", "ruinedHouse", "ancientTreeA", "ancientTreeB"]
       .every((id) => worldDebug.scales[id]?.world?.height > 0)
       && worldDebug.scales.wall.targetHeight === 12.5 && worldDebug.scales.wall.verticalScale < worldDebug.scales.wall.scale,
-    ancientInstancedForest: titleSnapshot.world.forest.total >= 3000
-      && titleSnapshot.world.forest.instancedMeshes === titleSnapshot.world.forest.chunks * 3
-      && titleSnapshot.world.forest.heroes > 0 && titleSnapshot.world.forest.maxTrunkDiameter >= 8,
-    forestLodAndCulling: titleSnapshot.world.forest.nearChunks > 0 && titleSnapshot.world.forest.farChunks > 0
-      && titleSnapshot.world.forest.culledChunks > 0 && titleSnapshot.world.forest.visible < titleSnapshot.world.forest.total
-      && worldDebug.forest.lodChunks.some((chunk) => chunk.lod === "near")
-      && worldDebug.forest.lodChunks.some((chunk) => chunk.lod === "far")
-      && worldDebug.forest.lodChunks.some((chunk) => chunk.lod === "culled"),
+    proceduralForestsRemoved: titleSnapshot.world.forest.enabled === false && titleSnapshot.world.forest.total === 0
+      && titleSnapshot.world.forest.chunks === 0 && titleSnapshot.world.forest.heroColliders === 0,
+    proceduralForestRenderStateCleared: titleSnapshot.world.forest.instancedMeshes === 0
+      && titleSnapshot.world.forest.visible === 0 && worldDebug.forest.lodChunks.length === 0,
     infrastructureMicroLandmarks: titleSnapshot.world.infrastructure.total >= 24
       && Object.keys(titleSnapshot.world.infrastructure.byKind).length >= 4
       && worldDebug.infrastructure.length === titleSnapshot.world.infrastructure.total,

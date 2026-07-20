@@ -298,11 +298,12 @@
   const STYLIZED_WATER_STYLE = "cortiz-anime-voronoi";
   const WATER_RIPPLE_CAPACITY = isCoarse ? 0 : 6;
   const TREELESS_BIOME_IDS = new Set(["desert"]);
+  const PROCEDURAL_TREE_GENERATION_ENABLED = false;
   const TREE_MODEL_IDS = new Set([
     "tree", "treePalm", "treePalmBend", "treePineA", "treePineB",
     "pineCrooked", "ancientTreeA", "ancientTreeB"
   ]);
-  const TREE_PROP_KINDS = new Set(["snowPine", "broadleaf", "palm", "windPine"]);
+  const TREE_PROP_KINDS = new Set(["snowPine", "broadleaf", "palm", "windPine", "darkPine"]);
 
   function biomeIdAt(x, z) {
     let nearest = CONTINENT_ZONES[0];
@@ -483,7 +484,7 @@
   let biomePropMeshes = [];
   let forestVisibilityTimer = 0;
   let forestReport = {
-    profile: "none", total: 0, heroes: 0, chunks: 0, visible: 0,
+    profile: "procedural-forest-disabled", enabled: false, total: 0, heroes: 0, chunks: 0, visible: 0,
     nearChunks: 0, farChunks: 0, culledChunks: 0, nearTrees: 0, farTrees: 0,
     instancedMeshes: 0, heroColliders: 0, maxTrunkDiameter: 0,
     assetHeroes: 0, proceduralHeroes: 0, heroVariants: []
@@ -5220,6 +5221,7 @@
   }
 
   function createDeadTree(x, z, scale, rotation) {
+    if (!PROCEDURAL_TREE_GENERATION_ENABLED) return null;
     if (!biomeAllowsTreesAt(x, z)) return null;
     const group = new THREE.Group();
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.23 * scale, .48 * scale, 5.8 * scale, 6), woodMaterial);
@@ -5294,6 +5296,19 @@
   }
 
   function createAncientForest() {
+    if (!PROCEDURAL_TREE_GENERATION_ENABLED) {
+      forestChunks = [];
+      forestReport = {
+        profile: "procedural-forest-disabled", enabled: false, total: 0,
+        byBiome: Object.fromEntries(BIOME_IDS.map((id) => [id, 0])),
+        heroes: 0, assetHeroes: 0, proceduralHeroes: 0, heroVariants: [],
+        chunks: 0, visible: 0, nearChunks: 0, farChunks: 0, culledChunks: 0,
+        nearTrees: 0, farTrees: 0, instancedMeshes: 0, heroColliders: 0,
+        maxTrunkDiameter: 0, potentialDrawCalls: 0
+      };
+      updateAncientForestVisibility(true);
+      return;
+    }
     const profile = FOREST_PROFILES[realm.biome] || FOREST_PROFILES.jungle;
     const forestBiomes = BIOME_IDS.filter((id) => !TREELESS_BIOME_IDS.has(id));
     const densityAverage = forestBiomes.reduce((sum, id) => sum + (editorDocument.biomes[id] && editorDocument.biomes[id].treeDensity !== undefined ? editorDocument.biomes[id].treeDensity : 1), 0) / Math.max(1, forestBiomes.length);
@@ -7468,6 +7483,7 @@
       const definitions = biomePropDefinitions(biomeId);
       byBiome[biomeId] = 0;
       definitions.forEach((definition, index) => {
+        if (!PROCEDURAL_TREE_GENERATION_ENABLED && TREE_PROP_KINDS.has(definition.kind)) return;
         const placed = placePropSet(definition, index, biomeId);
         byKind[definition.kind] = placed;
         byBiome[biomeId] += placed;
@@ -12288,7 +12304,7 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
             return result;
           }, {})
         },
-        forest: Object.assign({}, forestReport, { profile: FOREST_PROFILES[currentBiomeId].id }),
+        forest: Object.assign({}, forestReport, { biomeProfile: FOREST_PROFILES[currentBiomeId].id }),
         treePopulation: {
           total: treePopulationReport.total,
           byBiome: Object.assign({}, treePopulationReport.byBiome),

@@ -88,9 +88,11 @@ async function boot(context, diagnostics, suffix) {
         playerScaledCastle: zoneSnapshot.world.canonicalScale.structures.wall.height >= 9 && zoneSnapshot.world.canonicalScale.structures.wall.height <= 15
           && zoneSnapshot.world.canonicalScale.structures.gate.height >= 7 && zoneSnapshot.world.canonicalScale.structures.gate.height <= 10
           && zoneSnapshot.world.canonicalScale.structures.tower.height >= 18 && zoneSnapshot.world.canonicalScale.structures.tower.height <= 32,
-        ancientForestDensity: zoneSnapshot.world.forest.total >= 2000 && zoneSnapshot.world.forest.instancedMeshes === zoneSnapshot.world.forest.chunks * 3,
-        forestLodCulling: zoneSnapshot.world.forest.nearChunks > 0 && zoneSnapshot.world.forest.farChunks > 0
-          && zoneSnapshot.world.forest.culledChunks > 0 && zoneSnapshot.world.forest.visible < zoneSnapshot.world.forest.total,
+        proceduralForestRemoved: zoneSnapshot.world.forest.enabled === false && zoneSnapshot.world.forest.total === 0
+          && zoneSnapshot.world.forest.chunks === 0 && zoneSnapshot.world.forest.heroColliders === 0,
+        proceduralForestRenderStateCleared: zoneSnapshot.world.forest.visible === 0 && zoneSnapshot.world.forest.nearChunks === 0
+          && zoneSnapshot.world.forest.farChunks === 0 && zoneSnapshot.world.forest.culledChunks === 0
+          && zoneSnapshot.world.forest.instancedMeshes === 0,
         infrastructureMicroLandmarks: zoneSnapshot.world.infrastructure.total >= 24 && Object.keys(zoneSnapshot.world.infrastructure.byKind).length >= 4,
         biomeSkyTransition: zoneSnapshot.world.skyProfile.features.length >= 3 && zoneSnapshot.world.skyProfile.featureCount > 0
           && (zoneSnapshot.world.skyProfile.gradientStops >= 5 || (zoneSnapshot.world.skyProfile.projection === "equirectangular"
@@ -402,8 +404,8 @@ async function boot(context, diagnostics, suffix) {
     reducedCoarseWater: mobile.snapshot.world.water.tier === "coarse" && mobile.snapshot.world.water.reducedMotion
       && !mobile.snapshot.world.water.animated && mobile.snapshot.world.water.rippleCapacity === 0
       && mobile.snapshot.world.water.activeRipples === 0,
-    adaptiveForestDensity: mobile.snapshot.world.forest.total >= 900 && mobile.snapshot.world.forest.total <= 2200
-      && mobile.snapshot.world.forest.instancedMeshes === mobile.snapshot.world.forest.chunks * 3
+    proceduralForestDisabledOnCoarse: mobile.snapshot.world.forest.enabled === false
+      && mobile.snapshot.world.forest.total === 0 && mobile.snapshot.world.forest.instancedMeshes === 0
   };
   await mobilePage.screenshot({ path: "test-results/mobile-landscape.png", timeout: 90000 });
   await mobileContext.close();
@@ -416,7 +418,7 @@ async function boot(context, diagnostics, suffix) {
     uniqueEnemyRosters: new Set(zoneMatrix.map((zone) => zone.enemyModels.join("/"))).size === 6,
     uniqueBiomeSkies: new Set(zoneMatrix.map((zone) => zone.sky.id)).size === 6
       && new Set(zoneMatrix.map((zone) => zone.sky.signature)).size === 6,
-    uniqueForestProfiles: new Set(zoneMatrix.map((zone) => zone.forest.profile)).size === 6,
+    proceduralForestDisabledAcrossZones: zoneMatrix.every((zone) => zone.forest.profile === "procedural-forest-disabled" && zone.forest.total === 0),
     progression: Object.values(progression.checks).every(Boolean),
     combat: Object.values(combat.checks).every(Boolean),
     strongholds: Object.values(strongholds.checks).every(Boolean),
