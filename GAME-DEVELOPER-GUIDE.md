@@ -58,7 +58,7 @@ Freecam moves independently of the Warden: `WASD` moves relative to the view, `Q
 
 ### World and combat tuning
 
-World controls edit the one authored continent rather than generating a new seed. Each biome can override ground, cliff, grass, and fog colors; fog density and exposure; and tree, prop, and grass density. Changes preview live. Density values above currently allocated instance capacity take full effect after **Save Repo** and reload. Ember Dunes is a deliberate invariant: its tree density is clamped to zero in both the editor and runtime. Ember Dunes and Moonfall use the supplied 2K equirectangular panoramas at `assets/textures/skyboxes/ember-dunes-sandsky-2k.png` and `assets/textures/skyboxes/moonfall-moonsky-2k.png`; each biome retains its generated sky as a load-failure fallback.
+World controls edit the one authored continent rather than generating a new seed. Each biome can override ground, cliff, grass, and fog colors; fog density and exposure; and tree, prop, and grass density. Changes preview live. Density values above currently allocated instance capacity take full effect after **Save Repo** and reload. Ember Dunes is a deliberate invariant: its tree density is clamped to zero in both the editor and runtime. Drowned Coast, Ember Dunes, Frostbound Wilds, and Moonfall use supplied 2K equirectangular panoramas under `assets/textures/skyboxes/`; each biome retains its generated sky as a load-failure fallback.
 
 Enemy tuning can be global or scoped to an enemy kind. Multipliers cover health, damage, speed, attack range, sight range, tracking, and attack rate, and apply to present and future spawns. Selecting an enemy also exposes exact health/max-health, damage, speed, attack range/interval, sight range, and tracking fields for that entity.
 
@@ -204,7 +204,7 @@ Release 5.5 establishes one world unit as one metre and measures every loaded mo
 
 Every biome now builds a distinct ancient-forest profile with 2,000-3,600 desktop trees (adaptive coarse counts), including rare 30-82 metre hero trees. Trees are stored in 180-metre instanced chunks with near geometry, far silhouettes, timed distance culling, and a small collider budget for the largest trunks. Seeded infrastructure adds 24-32 biome-specific micro-landmarks such as collapsed walls, abandoned farms, hunter platforms, drowned piers, carts, and waystones outside protected routes and strongholds.
 
-The six regions use separate 2:1 sky environments and horizon blends: humid canopy light, tempest coast shelves, the supplied Ember Dunes sand panorama, aurora, high-altitude peaks, and the supplied Moonfall galactic panorama. The other four environments remain procedurally generated, while Ember Dunes and Moonfall fall back to their procedural versions if a supplied image cannot load. Cleared shrines and graveyards raise animated Warden flags; their state derives from the persisted cleared-stronghold IDs and is represented by a blue flag on the minimap.
+The six regions use separate 2:1 sky environments and horizon blends. Drowned Coast, Ember Dunes, Frostbound Wilds, and Moonfall use supplied local panoramas; Verdant Ruins and Sky-Sunder Peaks remain procedurally generated. Every supplied sky falls back to its original procedural version if the image cannot load. Cleared shrines and graveyards raise animated Warden flags; their state derives from the persisted cleared-stronghold IDs and is represented by a blue flag on the minimap.
 
 ### Global stylized water renderer
 

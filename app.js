@@ -99,14 +99,16 @@
   ]);
   const SKY_PROFILES = Object.freeze({
     jungle: { id: "verdant-canopy", features: ["humid-cloud-decks", "sun-shafts", "green-gold-haze"], halo: [520, 230, -420], haloScale: 150 },
-    shore: { id: "tempest-coast", features: ["storm-shelves", "rain-shafts", "sea-horizon"], halo: [650, 145, -330], haloScale: 120 },
+    shore: { id: "tempest-coast", features: ["coastal-sky-panorama", "sunbreak-clouds", "sea-horizon"], halo: [650, 145, -330], haloScale: 120 },
     desert: { id: "ember-dust", features: ["sandsky-panorama", "painted-cloud-bands", "ember-horizon"], halo: [720, 195, -210], haloScale: 190 },
-    snowy: { id: "frozen-aurora", features: ["aurora-ribbons", "snow-clouds", "ice-horizon"], halo: [610, 205, -370], haloScale: 135 },
+    snowy: { id: "frozen-aurora", features: ["snowbound-panorama", "painted-cloud-mass", "violet-frost-horizon"], halo: [610, 205, -370], haloScale: 135 },
     mountains: { id: "high-altitude", features: ["massive-clouds", "distant-peaks", "altitude-blue"], halo: [690, 235, -270], haloScale: 145 },
     moon: { id: "celestial-void", features: ["moonsky-panorama", "milky-way-arc", "violet-horizon"], halo: [690, 260, -160], haloScale: 105 }
   });
   const DESERT_SKYBOX_PATH = "assets/textures/skyboxes/ember-dunes-sandsky-2k.png";
   const MOON_SKYBOX_PATH = "assets/textures/skyboxes/moonfall-moonsky-2k.png";
+  const SHORE_SKYBOX_PATH = "assets/textures/skyboxes/drowned-coast-skybox-2k.png";
+  const SNOWY_SKYBOX_PATH = "assets/textures/skyboxes/frostbound-skyline-2k.png";
   const BIOMES = {
     snowy: { name: "FROSTBOUND WILDS", textureId: "snow", relief: 1.05, base: 2.6, fog: 0x869ca6, fogDensity: .00195, ground: 0x718087, cliff: 0x7d898d, grass: 0x50625c, grassStrength: .42, frost: 0xc9d4d5, frostStart: 16, water: 0x315663, waterLevel: -3.2, waterOpacity: .62, sky: 0xb2c5ce, sun: 0xffead2, sunIntensity: 1.22, hemi: 0xa9bdc4, exposure: 1.1, skyZenith: 0x6b87a0, skyHorizon: 0xdfe9ec, skyGlow: 0xdceef4, stoneTint: 0xcfdde2, particleSize: 1.4, particleOpacity: .5, particleFall: .55, particleCount: 1 },
     jungle: { name: "VERDANT RUINS", textureId: "jungle", relief: .72, base: 3.2, fog: 0x1b352c, fogDensity: .00305, ground: 0x344a32, cliff: 0x465448, grass: 0x284b2d, grassStrength: 1.0, frost: 0x7a8a76, frostStart: 125, water: 0x1e514c, waterLevel: -2.4, waterOpacity: .72, sky: 0x71968d, sun: 0xffd5a7, sunIntensity: 1.12, hemi: 0x759a82, exposure: 1.02, skyZenith: 0x1d3a33, skyHorizon: 0x7fae8f, skyGlow: 0xe8c87a, stoneTint: 0x718a64, particleSize: 1.05, particleOpacity: .38, particleFall: .7, particleCount: .9 },
@@ -2367,7 +2369,7 @@
 
   function adminTextureCatalog() {
     const paths = new Set([
-      "assets/textures/storm-sky-panorama.jpg", DESERT_SKYBOX_PATH, MOON_SKYBOX_PATH, "assets/textures/ashen-ground.jpg",
+      "assets/textures/storm-sky-panorama.jpg", DESERT_SKYBOX_PATH, MOON_SKYBOX_PATH, SHORE_SKYBOX_PATH, SNOWY_SKYBOX_PATH, "assets/textures/ashen-ground.jpg",
       "assets/textures/ancient-stone.jpg", "assets/textures/alpine-cliff.jpg", "assets/textures/tundra-grass-v1.jpg"
     ]);
     Object.keys(visualAssets.biomeMaterialCatalog || {}).forEach((id) => {
@@ -3858,6 +3860,10 @@
     paths.push(DESERT_SKYBOX_PATH);
     const moonSkyboxIndex = paths.length;
     paths.push(MOON_SKYBOX_PATH);
+    const shoreSkyboxIndex = paths.length;
+    paths.push(SHORE_SKYBOX_PATH);
+    const snowySkyboxIndex = paths.length;
+    paths.push(SNOWY_SKYBOX_PATH);
     const loaded = await Promise.allSettled(paths.map(textureFrom));
     if (loaded[0].status === "fulfilled") {
       visualAssets.sky = loaded[0].value;
@@ -3889,6 +3895,20 @@
       visualAssets.moonSky.wrapS = THREE.ClampToEdgeWrapping;
       visualAssets.moonSky.wrapT = THREE.ClampToEdgeWrapping;
       visualAssets.moonSky.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    }
+    if (loaded[shoreSkyboxIndex].status === "fulfilled") {
+      visualAssets.shoreSky = loaded[shoreSkyboxIndex].value;
+      visualAssets.shoreSky.encoding = THREE.sRGBEncoding;
+      visualAssets.shoreSky.wrapS = THREE.ClampToEdgeWrapping;
+      visualAssets.shoreSky.wrapT = THREE.ClampToEdgeWrapping;
+      visualAssets.shoreSky.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    }
+    if (loaded[snowySkyboxIndex].status === "fulfilled") {
+      visualAssets.snowySky = loaded[snowySkyboxIndex].value;
+      visualAssets.snowySky.encoding = THREE.sRGBEncoding;
+      visualAssets.snowySky.wrapS = THREE.ClampToEdgeWrapping;
+      visualAssets.snowySky.wrapT = THREE.ClampToEdgeWrapping;
+      visualAssets.snowySky.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     }
     visualAssets.biomeMaterials[currentBiomeId] = startingRegionalMaterial;
     const startingMaterial = visualAssets.biomeMaterials[currentBiomeId] || visualAssets.biomeMaterials.jungle || {};
@@ -4260,6 +4280,36 @@
         id: profile.id, features: profile.features.slice(), featureCount: 1,
         signature: profile.id + ":moonskybox-2k-v1", gradientStops: 0, horizonBlend: true,
         projection: "equirectangular", source: MOON_SKYBOX_PATH
+      };
+      return suppliedTexture;
+    }
+    if (skyBiomeId === "shore" && visualAssets.shoreSky) {
+      const suppliedTexture = visualAssets.shoreSky.clone();
+      suppliedTexture.encoding = THREE.sRGBEncoding;
+      suppliedTexture.wrapS = THREE.ClampToEdgeWrapping;
+      suppliedTexture.wrapT = THREE.ClampToEdgeWrapping;
+      suppliedTexture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      suppliedTexture.needsUpdate = true;
+      suppliedTexture.userData = suppliedTexture.userData || {};
+      suppliedTexture.userData.skyReport = {
+        id: profile.id, features: profile.features.slice(), featureCount: 1,
+        signature: profile.id + ":coastskybox-2k-v1", gradientStops: 0, horizonBlend: true,
+        projection: "equirectangular", source: SHORE_SKYBOX_PATH
+      };
+      return suppliedTexture;
+    }
+    if (skyBiomeId === "snowy" && visualAssets.snowySky) {
+      const suppliedTexture = visualAssets.snowySky.clone();
+      suppliedTexture.encoding = THREE.sRGBEncoding;
+      suppliedTexture.wrapS = THREE.ClampToEdgeWrapping;
+      suppliedTexture.wrapT = THREE.ClampToEdgeWrapping;
+      suppliedTexture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      suppliedTexture.needsUpdate = true;
+      suppliedTexture.userData = suppliedTexture.userData || {};
+      suppliedTexture.userData.skyReport = {
+        id: profile.id, features: profile.features.slice(), featureCount: 1,
+        signature: profile.id + ":snowline-2k-v1", gradientStops: 0, horizonBlend: true,
+        projection: "equirectangular", source: SNOWY_SKYBOX_PATH
       };
       return suppliedTexture;
     }

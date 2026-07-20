@@ -74,7 +74,10 @@
 - Runtime asset: `assets/textures/skyboxes/moonfall-moonsky-2k.png`.
 - Source archive: `moon skybox.zip`, supplied by the project owner for inclusion in Ashenhold.
 - The unmodified 2048 x 1024 equirectangular panorama replaces only Moonfall's generated sky; its redundant cubemap faces and layout reference are not shipped.
-- Neither supplied archive included original author or license metadata. Local provenance and authorization notice: `assets/textures/skyboxes/LICENSE-USER-SUPPLIED.md`.
+- Runtime assets: `assets/textures/skyboxes/drowned-coast-skybox-2k.png` and `assets/textures/skyboxes/frostbound-skyline-2k.png`.
+- Source archives: `drowned coast skybox.zip` and `snowbound skyline.zip`, supplied by the project owner for inclusion in Ashenhold.
+- The unmodified 2048 x 1024 panoramas replace only the Drowned Coast and Frostbound Wilds generated skies; redundant cubemap faces and layout references are not shipped.
+- None of the four supplied archives included original author or license metadata. Local provenance and authorization notice: `assets/textures/skyboxes/LICENSE-USER-SUPPLIED.md`.
 
 ## Generated tundra grass
 

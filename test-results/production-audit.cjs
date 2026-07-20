@@ -95,7 +95,9 @@ async function boot(context, diagnostics, suffix) {
         biomeSkyTransition: zoneSnapshot.world.skyProfile.features.length >= 3 && zoneSnapshot.world.skyProfile.featureCount > 0
           && (zoneSnapshot.world.skyProfile.gradientStops >= 5 || (zoneSnapshot.world.skyProfile.projection === "equirectangular"
             && ((biome === "desert" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/ember-dunes-sandsky-2k.png")
-              || (biome === "moon" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/moonfall-moonsky-2k.png"))))
+              || (biome === "moon" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/moonfall-moonsky-2k.png")
+              || (biome === "shore" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/drowned-coast-skybox-2k.png")
+              || (biome === "snowy" && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/frostbound-skyline-2k.png"))))
           && zoneSnapshot.world.skyProfile.horizonBlend && zoneSnapshot.world.skyProfile.environmentMap,
         desertSandskybox: biome !== "desert" || (zoneSnapshot.world.skyProfile.id === "ember-dust"
           && zoneSnapshot.world.skyProfile.signature === "ember-dust:sandskybox-2k-v1"
@@ -105,6 +107,14 @@ async function boot(context, diagnostics, suffix) {
           && zoneSnapshot.world.skyProfile.signature === "celestial-void:moonskybox-2k-v1"
           && zoneSnapshot.world.skyProfile.projection === "equirectangular"
           && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/moonfall-moonsky-2k.png"),
+        drownedCoastSkybox: biome !== "shore" || (zoneSnapshot.world.skyProfile.id === "tempest-coast"
+          && zoneSnapshot.world.skyProfile.signature === "tempest-coast:coastskybox-2k-v1"
+          && zoneSnapshot.world.skyProfile.projection === "equirectangular"
+          && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/drowned-coast-skybox-2k.png"),
+        frostboundSkyline: biome !== "snowy" || (zoneSnapshot.world.skyProfile.id === "frozen-aurora"
+          && zoneSnapshot.world.skyProfile.signature === "frozen-aurora:snowline-2k-v1"
+          && zoneSnapshot.world.skyProfile.projection === "equirectangular"
+          && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/frostbound-skyline-2k.png"),
         stylizedWaterPinned: zoneSnapshot.world.water.style === "cortiz-anime-voronoi"
           && zoneSnapshot.world.water.source === STYLIZED_WATER_SOURCE
           && zoneSnapshot.world.water.textureFree && zoneSnapshot.world.water.sameOriginRequests === 0,
