@@ -1435,6 +1435,53 @@
     return { x: x * cosine + z * sine, z: -x * sine + z * cosine };
   }
 
+  function mapAdminPointBetweenTransforms(point, from, to) {
+    const inverse = rotateAdminXZ(point.x - from.position.x, point.z - from.position.z, -from.rotationY);
+    const localX = inverse.x / Math.max(.001, Math.abs(from.scale.x));
+    const localZ = inverse.z / Math.max(.001, Math.abs(from.scale.z));
+    const mapped = rotateAdminXZ(localX * to.scale.x, localZ * to.scale.z, to.rotationY);
+    return {
+      x: to.position.x + mapped.x,
+      y: to.position.y + (point.y - from.position.y) * (to.scale.y / Math.max(.001, Math.abs(from.scale.y))),
+      z: to.position.z + mapped.z
+    };
+  }
+
+  function updateAdminActorLogic(record, previous, next) {
+    const enemy = record && record.enemy;
+    if (!enemy) return;
+    const deltaRotation = next.rotationY - previous.rotationY;
+    const movePoint = (point) => {
+      if (!point) return;
+      const mapped = mapAdminPointBetweenTransforms(point, {
+        position: previous.position, rotationY: previous.rotationY, scale: { x: 1, y: 1, z: 1 }
+      }, {
+        position: next.position, rotationY: next.rotationY, scale: { x: 1, y: 1, z: 1 }
+      });
+      if (point.set) point.set(mapped.x, mapped.y, mapped.z);
+      else { point.x = mapped.x; point.y = mapped.y; point.z = mapped.z; }
+    };
+    if (enemy.home) movePoint(enemy.home);
+    if (enemy.lastPosition && enemy.lastPosition.copy) enemy.lastPosition.copy(enemy.root.position);
+    if (enemy.fireTarget) movePoint(enemy.fireTarget);
+    if (enemy.ai) {
+      movePoint(enemy.ai.home);
+      movePoint(enemy.ai.lastKnown);
+      enemy.ai.patrol.forEach(movePoint);
+      enemy.ai.path = [];
+      enemy.ai.pathIndex = 0;
+      enemy.ai.repathTimer = 0;
+      enemy.ai.progressX = next.position.x;
+      enemy.ai.progressZ = next.position.z;
+      enemy.ai.guardYaw += deltaRotation;
+    }
+    if (enemy.camp) {
+      enemy.camp.x += next.position.x - previous.position.x;
+      enemy.camp.z += next.position.z - previous.position.z;
+    }
+    networkNavigationCache = null;
+  }
+
   function updateAdminLocationLogic(record, previous, next) {
     if (!record || record.type !== "location") return;
     const sourceId = record.sourceId || record.id.replace(/^location:/, "");
@@ -1538,6 +1585,7 @@
     }
     updateAdminLinkedGeometry(record, next);
     updateAdminLocationLogic(record, previous, next);
+    updateAdminActorLogic(record, previous, next);
     if (persist !== false) {
       const entry = editorDocument.entities[record.id] || {};
       entry.type = record.type;
@@ -1736,6 +1784,24 @@
       position: Object.assign({}, baseAnchor), rotationY: 0, scale: { x: 1, y: 1, z: 1 }
     } : adminEntityTransform(record);
     record.defaultTransform = cloneAdminTransform(record.transform);
+    const authoredAnchor = record.type === "location" && record.sourceId ? authoredLocationAnchors.get(record.sourceId) : null;
+    if (authoredAnchor) {
+      record.defaultTransform.position.x = authoredAnchor.x;
+      record.defaultTransform.position.z = authoredAnchor.z;
+      record.defaultTransform.position.y = terrainHeight(authoredAnchor.x, authoredAnchor.z);
+    }
+    if (record.enemy && record.enemy.strongholdId) {
+      const locationSourceId = /^ascent-\d+$/.test(record.enemy.strongholdId)
+        ? "route-" + record.enemy.strongholdId.slice(7)
+        : record.enemy.strongholdId;
+      const locationRecord = adminEntities.get("location:" + locationSourceId);
+      if (locationRecord) {
+        const currentLocation = adminEntityTransform(locationRecord);
+        const canonicalLocation = locationRecord.defaultTransform;
+        record.defaultTransform.position = mapAdminPointBetweenTransforms(record.defaultTransform.position, currentLocation, canonicalLocation);
+        record.defaultTransform.rotationY += canonicalLocation.rotationY - currentLocation.rotationY;
+      }
+    }
     record.defaultVisible = root.visible;
     record.appearance = captureAdminAppearance(root);
     record.defaultEnemy = record.enemy ? {
@@ -1744,6 +1810,7 @@
       speed: record.enemy.speed, attackRange: record.enemy.attackRange, attackInterval: record.enemy.attackInterval,
       sightRange: record.enemy.adminSightRange, tracking: record.enemy.adminTracking || 1
     } : null;
+    if (record.enemy) record.enemy.adminEntityId = id;
     adminEntities.set(id, record);
     tagAdminEntityRoot(record);
     applyAdminEntityOverride(record);
@@ -1769,22 +1836,47 @@
     }, {});
   }
 
+  function captureAdminEnemyBaseline(enemy) {
+    const damage = enemy.kind === "dragon" && Number.isFinite(enemy.damageScale)
+      ? (enemy.boss ? 30 : 22) * enemy.damageScale
+      : enemy.damage;
+    return {
+      health: enemy.health,
+      maxHealth: enemy.maxHealth,
+      damage,
+      speed: enemy.speed,
+      attackRange: enemy.attackRange,
+      attackInterval: enemy.attackInterval,
+      sightRange: undefined,
+      tracking: 1
+    };
+  }
+
   function applyAdminEnemyTuning(enemy, resetBaseline) {
     if (!enemy) return false;
+    if (resetBaseline || !enemy.adminBaseStats) enemy.adminBaseStats = captureAdminEnemyBaseline(enemy);
+    const base = enemy.adminBaseStats;
     const next = adminEnemyTuning(enemy.kind || (enemy.boss ? "dragon" : "enemy"));
-    const previous = resetBaseline || !enemy.adminTuning ? ADMIN_ENEMY_TUNING_FIELDS.reduce((result, field) => { result[field] = 1; return result; }, {}) : enemy.adminTuning;
-    const healthRatio = next.health / Math.max(.001, previous.health);
     const currentHealthRatio = enemy.maxHealth > 0 ? enemy.health / enemy.maxHealth : 1;
-    enemy.maxHealth = Math.max(1, Math.round(enemy.maxHealth * healthRatio));
+    enemy.maxHealth = Math.max(1, Math.round(base.maxHealth * next.health));
     enemy.health = clamp(Math.round(enemy.maxHealth * currentHealthRatio), 0, enemy.maxHealth);
-    if (Number.isFinite(enemy.damage)) enemy.damage = Math.max(0, enemy.damage * next.damage / Math.max(.001, previous.damage));
-    if (Number.isFinite(enemy.damageScale)) enemy.damageScale *= next.damage / Math.max(.001, previous.damage);
-    enemy.speed = Math.max(0, enemy.speed * next.speed / Math.max(.001, previous.speed));
-    if (Number.isFinite(enemy.attackRange)) enemy.attackRange = Math.max(.1, enemy.attackRange * next.attackRange / Math.max(.001, previous.attackRange));
-    if (Number.isFinite(enemy.attackInterval)) enemy.attackInterval = Math.max(.05, enemy.attackInterval * previous.attackRate / Math.max(.001, next.attackRate));
+    if (Number.isFinite(enemy.damage)) enemy.damage = Math.max(0, base.damage * next.damage);
+    if (Number.isFinite(enemy.damageScale)) enemy.damageScale = base.damage * next.damage / (enemy.boss ? 30 : 22);
+    enemy.speed = Math.max(0, base.speed * next.speed);
+    if (Number.isFinite(base.attackRange)) enemy.attackRange = Math.max(.1, base.attackRange * next.attackRange);
+    if (Number.isFinite(base.attackInterval)) enemy.attackInterval = Math.max(.05, base.attackInterval / next.attackRate);
+    enemy.adminSightRange = Number.isFinite(base.sightRange) ? base.sightRange * next.sightRange : undefined;
     enemy.adminSightMultiplier = next.sightRange;
-    enemy.adminTracking = next.tracking;
+    enemy.adminTracking = base.tracking * next.tracking;
     enemy.adminTuning = next;
+    return true;
+  }
+
+  function applyAdminEnemyTuningAndSpecific(enemy) {
+    if (!applyAdminEnemyTuning(enemy, false)) return false;
+    const record = enemy.adminEntityId && adminEntities.get(enemy.adminEntityId);
+    const entry = record && editorDocument.entities[record.id];
+    if (record && entry && entry.enemy) applyAdminEnemyValues(record, entry.enemy, false);
     return true;
   }
 
@@ -2266,6 +2358,29 @@
     return true;
   }
 
+  function resizeAdminLinkedGeometryForModel(record, oldSize, newSize) {
+    const baseline = record.defaultTransform || { position: record.baseAnchor };
+    const factorX = clamp(newSize.x / Math.max(.01, oldSize.x), .05, 20);
+    const factorY = clamp(newSize.y / Math.max(.01, oldSize.y), .05, 20);
+    const factorZ = clamp(newSize.z / Math.max(.01, oldSize.z), .05, 20);
+    (record.colliderLinks || []).forEach((link) => {
+      link.base.x = baseline.position.x + (link.base.x - baseline.position.x) * factorX;
+      link.base.z = baseline.position.z + (link.base.z - baseline.position.z) * factorZ;
+      link.base.hx = Math.max(.05, link.base.hx * factorX);
+      link.base.hz = Math.max(.05, link.base.hz * factorZ);
+      link.base.minY = baseline.position.y + (link.base.minY - baseline.position.y) * factorY;
+      link.base.maxY = baseline.position.y + (link.base.maxY - baseline.position.y) * factorY;
+    });
+    (record.platformLinks || []).forEach((link) => {
+      link.base.x = baseline.position.x + (link.base.x - baseline.position.x) * factorX;
+      link.base.z = baseline.position.z + (link.base.z - baseline.position.z) * factorZ;
+      link.base.hx = Math.max(.05, link.base.hx * factorX);
+      link.base.hz = Math.max(.05, link.base.hz * factorZ);
+      link.base.y = baseline.position.y + (link.base.y - baseline.position.y) * factorY;
+    });
+    updateAdminLinkedGeometry(record, adminEntityTransform(record));
+  }
+
   function applyAdminModelSlot(record, modelSlot, persist) {
     const asset = visualAssets.models && visualAssets.models[modelSlot];
     if (!record || !record.modelSlot || !asset || !asset.scene) return false;
@@ -2281,6 +2396,10 @@
     replacement.scale.setScalar(oldSpan / newSpan / Math.max(.001, Math.max(record.root.scale.x, record.root.scale.y, record.root.scale.z)));
     record.root.clear();
     record.root.add(replacement);
+    record.root.updateMatrixWorld(true);
+    const replacementSize = new THREE.Vector3();
+    new THREE.Box3().setFromObject(record.root).getSize(replacementSize);
+    resizeAdminLinkedGeometryForModel(record, oldSize, replacementSize);
     record.modelSlot = modelSlot;
     record.label = "Imported " + modelSlot;
     record.appearance = captureAdminAppearance(record.root);
@@ -2376,8 +2495,8 @@
     if (!kind || kind === "global") editorDocument.enemies.global = Object.assign({}, editorDocument.enemies.global || {}, values || {});
     else editorDocument.enemies.byKind[kind] = Object.assign({}, editorDocument.enemies.byKind[kind] || {}, values || {});
     editorDocument = sanitizeWorldOverrides(editorDocument);
-    dragons.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
-    groundEnemies.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
+    dragons.forEach(applyAdminEnemyTuningAndSpecific);
+    groundEnemies.forEach(applyAdminEnemyTuningAndSpecific);
     commitAdminHistory("Tune " + (kind || "global") + " enemies");
     return adminEnemyTuning(kind && kind !== "global" ? kind : "enemy");
   }
@@ -2423,8 +2542,9 @@
       restoreAdminAppearance(record);
       applyAdminTransform(record, record.defaultTransform, false);
       setAdminEntityVisibility(record, record.defaultVisible, false);
-      if (record.defaultEnemy) applyAdminEnemyValues(record, record.defaultEnemy, false);
     });
+    dragons.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
+    groundEnemies.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
     records.slice().sort((a, b) => Number(b.type === "location") - Number(a.type === "location")).forEach(applyAdminEntityOverride);
     records.forEach((record) => {
       if (record.type === "custom-model" && !next.entities[record.id]) {
@@ -2433,8 +2553,6 @@
       }
     });
     loadAdminCustomModels().then(() => announceAdminChange("custom-models-loaded", null)).catch(() => {});
-    dragons.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
-    groundEnemies.forEach((enemy) => applyAdminEnemyTuning(enemy, false));
     if (historyReason) commitAdminHistory(historyReason);
     announceAdminChange("document-applied", null);
     return adminDocumentSnapshot();
@@ -2647,7 +2765,14 @@
     return { id: WORLD_ID, signature: WORLD_LAYOUT_SIGNATURE, version: WORLD_LAYOUT_VERSION, forts, routes, roadPhase: -.42, salt: 24000 };
   }
 
+  const authoredLocationAnchors = new Map();
+
   function applyAuthoredAnchorOverride(id, target, arrayTarget) {
+    if (!authoredLocationAnchors.has(id)) {
+      authoredLocationAnchors.set(id, arrayTarget
+        ? { x: target[0], z: target[1] }
+        : { x: target.x, z: target.z });
+    }
     const override = editorDocument.entities["location:" + id];
     if (!override || !override.position) return target;
     if (arrayTarget) {
@@ -8841,8 +8966,9 @@
         .concat(stronghold.spots.filter((spot) => spot.type === "biomeLight").slice(0, base.light + countBonus)
           .map((spot) => Object.assign({}, spot, { type: spot.roll < promoteRoll ? "biomeHeavy" : "biomeLight" })));
       plan.forEach((spot, memberIndex) => {
-        const spawnKey = stronghold.id + ":" + Math.round(spot.x * 10) + ":" + Math.round(spot.z * 10);
-        if (handledMemberKeys.has(spawnKey)) return;
+        const spawnKey = stronghold.id + ":slot-" + (Number.isInteger(spot.slotIndex) ? spot.slotIndex : memberIndex);
+        const legacySpawnKey = stronghold.id + ":" + Math.round(spot.x * 10) + ":" + Math.round(spot.z * 10);
+        if (handledMemberKeys.has(spawnKey) || handledMemberKeys.has(legacySpawnKey)) return;
         const enemy = createGroundEnemy(spot.type, spot.x, spot.z, threat);
         enemy.strongholdId = stronghold.id;
         enemy.spawnKey = spawnKey;
