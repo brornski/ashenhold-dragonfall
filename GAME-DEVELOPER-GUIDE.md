@@ -58,7 +58,7 @@ Freecam moves independently of the Warden: `WASD` moves relative to the view, `Q
 
 ### World and combat tuning
 
-World controls edit the one authored continent rather than generating a new seed. Each biome can override ground, cliff, grass, and fog colors; fog density and exposure; and tree, prop, and grass density. Changes preview live. Density values above currently allocated instance capacity take full effect after **Save Repo** and reload. Ember Dunes is a deliberate invariant: its tree density is clamped to zero in both the editor and runtime.
+World controls edit the one authored continent rather than generating a new seed. Each biome can override ground, cliff, grass, and fog colors; fog density and exposure; and tree, prop, and grass density. Changes preview live. Density values above currently allocated instance capacity take full effect after **Save Repo** and reload. Ember Dunes is a deliberate invariant: its tree density is clamped to zero in both the editor and runtime. Its sky uses the supplied 2K equirectangular panorama at `assets/textures/skyboxes/ember-dunes-sandsky-2k.png`, with the generated Ember Dunes sky retained as a load-failure fallback.
 
 Enemy tuning can be global or scoped to an enemy kind. Multipliers cover health, damage, speed, attack range, sight range, tracking, and attack rate, and apply to present and future spawns. Selecting an enemy also exposes exact health/max-health, damage, speed, attack range/interval, sight range, and tracking fields for that entity.
 

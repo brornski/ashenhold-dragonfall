@@ -100,11 +100,12 @@
   const SKY_PROFILES = Object.freeze({
     jungle: { id: "verdant-canopy", features: ["humid-cloud-decks", "sun-shafts", "green-gold-haze"], halo: [520, 230, -420], haloScale: 150 },
     shore: { id: "tempest-coast", features: ["storm-shelves", "rain-shafts", "sea-horizon"], halo: [650, 145, -330], haloScale: 120 },
-    desert: { id: "ember-dust", features: ["dust-bands", "white-hot-sun", "heat-horizon"], halo: [720, 195, -210], haloScale: 190 },
+    desert: { id: "ember-dust", features: ["sandsky-panorama", "painted-cloud-bands", "ember-horizon"], halo: [720, 195, -210], haloScale: 190 },
     snowy: { id: "frozen-aurora", features: ["aurora-ribbons", "snow-clouds", "ice-horizon"], halo: [610, 205, -370], haloScale: 135 },
     mountains: { id: "high-altitude", features: ["massive-clouds", "distant-peaks", "altitude-blue"], halo: [690, 235, -270], haloScale: 145 },
     moon: { id: "celestial-void", features: ["starfield", "eclipse-moon", "violet-nebula"], halo: [690, 260, -160], haloScale: 105 }
   });
+  const DESERT_SKYBOX_PATH = "assets/textures/skyboxes/ember-dunes-sandsky-2k.png";
   const BIOMES = {
     snowy: { name: "FROSTBOUND WILDS", textureId: "snow", relief: 1.05, base: 2.6, fog: 0x869ca6, fogDensity: .00195, ground: 0x718087, cliff: 0x7d898d, grass: 0x50625c, grassStrength: .42, frost: 0xc9d4d5, frostStart: 16, water: 0x315663, waterLevel: -3.2, waterOpacity: .62, sky: 0xb2c5ce, sun: 0xffead2, sunIntensity: 1.22, hemi: 0xa9bdc4, exposure: 1.1, skyZenith: 0x6b87a0, skyHorizon: 0xdfe9ec, skyGlow: 0xdceef4, stoneTint: 0xcfdde2, particleSize: 1.4, particleOpacity: .5, particleFall: .55, particleCount: 1 },
     jungle: { name: "VERDANT RUINS", textureId: "jungle", relief: .72, base: 3.2, fog: 0x1b352c, fogDensity: .00305, ground: 0x344a32, cliff: 0x465448, grass: 0x284b2d, grassStrength: 1.0, frost: 0x7a8a76, frostStart: 125, water: 0x1e514c, waterLevel: -2.4, waterOpacity: .72, sky: 0x71968d, sun: 0xffd5a7, sunIntensity: 1.12, hemi: 0x759a82, exposure: 1.02, skyZenith: 0x1d3a33, skyHorizon: 0x7fae8f, skyGlow: 0xe8c87a, stoneTint: 0x718a64, particleSize: 1.05, particleOpacity: .38, particleFall: .7, particleCount: .9 },
@@ -2357,7 +2358,7 @@
 
   function adminTextureCatalog() {
     const paths = new Set([
-      "assets/textures/storm-sky-panorama.jpg", "assets/textures/ashen-ground.jpg",
+      "assets/textures/storm-sky-panorama.jpg", DESERT_SKYBOX_PATH, "assets/textures/ashen-ground.jpg",
       "assets/textures/ancient-stone.jpg", "assets/textures/alpine-cliff.jpg", "assets/textures/tundra-grass-v1.jpg"
     ]);
     Object.keys(visualAssets.biomeMaterialCatalog || {}).forEach((id) => {
@@ -3844,6 +3845,8 @@
       const entry = visualAssets.biomeMaterialCatalog[currentBiomeId];
       return [entry.base + "-color" + entry.extension, entry.base + "-normal" + entry.extension, entry.base + "-roughness" + entry.extension];
     })());
+    const desertSkyboxIndex = paths.length;
+    paths.push(DESERT_SKYBOX_PATH);
     const loaded = await Promise.allSettled(paths.map(textureFrom));
     if (loaded[0].status === "fulfilled") {
       visualAssets.sky = loaded[0].value;
@@ -3862,6 +3865,13 @@
     if (loaded[5].status === "fulfilled") startingRegionalMaterial.color = configureTexture(loaded[5].value, 64, 64);
     if (loaded[6].status === "fulfilled") startingRegionalMaterial.normal = configureDataTexture(loaded[6].value, 64, 64);
     if (loaded[7].status === "fulfilled") startingRegionalMaterial.roughness = configureDataTexture(loaded[7].value, 64, 64);
+    if (loaded[desertSkyboxIndex].status === "fulfilled") {
+      visualAssets.desertSky = loaded[desertSkyboxIndex].value;
+      visualAssets.desertSky.encoding = THREE.sRGBEncoding;
+      visualAssets.desertSky.wrapS = THREE.ClampToEdgeWrapping;
+      visualAssets.desertSky.wrapT = THREE.ClampToEdgeWrapping;
+      visualAssets.desertSky.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    }
     visualAssets.biomeMaterials[currentBiomeId] = startingRegionalMaterial;
     const startingMaterial = visualAssets.biomeMaterials[currentBiomeId] || visualAssets.biomeMaterials.jungle || {};
     visualAssets.biomeGround = startingMaterial.color || null;
@@ -4204,6 +4214,22 @@
   function createBiomeSkyTexture(biomeId) {
     const skyBiomeId = BIOMES[biomeId] ? biomeId : "jungle";
     const skyBiome = BIOMES[skyBiomeId];
+    const profile = SKY_PROFILES[skyBiomeId] || SKY_PROFILES.jungle;
+    if (skyBiomeId === "desert" && visualAssets.desertSky) {
+      const suppliedTexture = visualAssets.desertSky.clone();
+      suppliedTexture.encoding = THREE.sRGBEncoding;
+      suppliedTexture.wrapS = THREE.ClampToEdgeWrapping;
+      suppliedTexture.wrapT = THREE.ClampToEdgeWrapping;
+      suppliedTexture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+      suppliedTexture.needsUpdate = true;
+      suppliedTexture.userData = suppliedTexture.userData || {};
+      suppliedTexture.userData.skyReport = {
+        id: profile.id, features: profile.features.slice(), featureCount: 1,
+        signature: profile.id + ":sandskybox-2k-v1", gradientStops: 0, horizonBlend: true,
+        projection: "equirectangular", source: DESERT_SKYBOX_PATH
+      };
+      return suppliedTexture;
+    }
     const surface = document.createElement("canvas");
     surface.width = 1024;
     surface.height = 512;
@@ -4230,7 +4256,6 @@
     glowGradient.addColorStop(1, "rgba(" + glowRgb + ",0)");
     context.fillStyle = glowGradient;
     context.fillRect(0, 0, 1024, 512);
-    const profile = SKY_PROFILES[skyBiomeId] || SKY_PROFILES.jungle;
     const skySalt = 13100 + BIOME_IDS.indexOf(skyBiomeId) * 1000;
     let featureCount = 0;
     const ellipse = (x, y, rx, ry, color, alpha) => {
@@ -4328,7 +4353,7 @@
     const generatedSkyReport = {
       id: profile.id, features: profile.features.slice(), featureCount,
       signature: profile.id + ":" + skyBiome.skyZenith.toString(16) + ":" + featureCount,
-      gradientStops: 5, horizonBlend: true
+      gradientStops: 5, horizonBlend: true, projection: "generated-equirectangular", source: "procedural"
     };
     const texture = new THREE.CanvasTexture(surface);
     texture.encoding = THREE.sRGBEncoding;
@@ -11770,7 +11795,8 @@
         skyProfile: {
           id: skyReport.id, signature: skyReport.signature, features: skyReport.features.slice(),
           featureCount: skyReport.featureCount || 0, gradientStops: skyReport.gradientStops || 0,
-          horizonBlend: Boolean(skyReport.horizonBlend), environmentMap: Boolean(visualAssets.environment)
+          horizonBlend: Boolean(skyReport.horizonBlend), environmentMap: Boolean(visualAssets.environment),
+          projection: skyReport.projection || "generated-equirectangular", source: skyReport.source || "procedural"
         },
         capturedFlags: { total: captureFlags.length, raised: captureFlags.filter((flag) => flag.root.visible && flag.target > 0).length },
         grassInstances: grassField ? grassField.count : 0,

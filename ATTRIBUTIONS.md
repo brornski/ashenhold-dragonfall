@@ -58,6 +58,13 @@
 - Exact sources: [Ground Tiles 13](https://freestylized.com/material/ground_tiles_13/), [Ground Tiles 17](https://freestylized.com/material/ground_tiles_17/), [Ground With Rocks 03](https://freestylized.com/material/ground_with_rocks_03/), [Sand 01](https://freestylized.com/material/sand_01/), and [Lava Rocks 01](https://freestylized.com/material/lava_rocks_01/).
 - FreeStylized grants royalty-free commercial and non-commercial project use and restricts standalone redistribution of its source content. Exact archive-to-biome mapping and local terms notice: `assets/textures/freestylized-biomes/LICENSE-FREESTYLIZED.md`.
 
+## User-provided Ember Dunes skybox
+
+- Runtime asset: `assets/textures/skyboxes/ember-dunes-sandsky-2k.png`.
+- Source archive: `sandskybox.zip`, supplied by the project owner for inclusion in Ashenhold.
+- The 2048 x 1024 equirectangular panorama is used only by Ember Dunes; the redundant cubemap faces from the archive are not shipped.
+- The supplied archive did not include original author or license metadata. Local provenance and authorization notice: `assets/textures/skyboxes/LICENSE-USER-SUPPLIED.md`.
+
 ## Generated tundra grass
 
 - Runtime asset: `assets/textures/tundra-grass-v1.jpg`.

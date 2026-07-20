@@ -91,7 +91,14 @@ async function boot(context, diagnostics, suffix) {
           && zoneSnapshot.world.forest.culledChunks > 0 && zoneSnapshot.world.forest.visible < zoneSnapshot.world.forest.total,
         infrastructureMicroLandmarks: zoneSnapshot.world.infrastructure.total >= 24 && Object.keys(zoneSnapshot.world.infrastructure.byKind).length >= 4,
         biomeSkyTransition: zoneSnapshot.world.skyProfile.features.length >= 3 && zoneSnapshot.world.skyProfile.featureCount > 0
-          && zoneSnapshot.world.skyProfile.gradientStops >= 5 && zoneSnapshot.world.skyProfile.horizonBlend && zoneSnapshot.world.skyProfile.environmentMap,
+          && (zoneSnapshot.world.skyProfile.gradientStops >= 5 || (biome === "desert"
+            && zoneSnapshot.world.skyProfile.projection === "equirectangular"
+            && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/ember-dunes-sandsky-2k.png"))
+          && zoneSnapshot.world.skyProfile.horizonBlend && zoneSnapshot.world.skyProfile.environmentMap,
+        desertSandskybox: biome !== "desert" || (zoneSnapshot.world.skyProfile.id === "ember-dust"
+          && zoneSnapshot.world.skyProfile.signature === "ember-dust:sandskybox-2k-v1"
+          && zoneSnapshot.world.skyProfile.projection === "equirectangular"
+          && zoneSnapshot.world.skyProfile.source === "assets/textures/skyboxes/ember-dunes-sandsky-2k.png"),
         biomeEnemyRendered: Boolean(enemy && zoneSnapshot.world.biomeEnemyNames.includes(enemy.name)),
         locationGarrisons: zoneSnapshot.strongholds.total >= 12 && zoneSnapshot.strongholds.list.every((stronghold) => stronghold.alive >= 3),
         expandedPois: zoneSnapshot.world.pois.length >= 8,
