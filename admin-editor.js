@@ -7,7 +7,7 @@
   const DRAFT_KEY = "ashenhold-admin-draft-v1";
   const state = {
     tab: "scene", selectedId: null, category: "All", search: "", panelCollapsed: false,
-    pointerMode: null, pointerId: null, dragAxis: null,
+    pointerMode: null, pointerId: null, dragAxis: null, dragCandidateId: null,
     startX: 0, startY: 0, lastX: 0, lastY: 0,
     bridge: { connected: false, token: "", publishEnabled: false, branch: "", dirty: false },
     renderQueued: false, draftAvailable: false
@@ -65,7 +65,7 @@
         <button type="button" data-admin-tab="data">Publish</button>
       </nav>
       <main id="adminPanelBody" class="admin-panel-body"></main>
-      <footer class="admin-footer"><span><kbd>LMB</kbd> edit/look</span><span><kbd>RMB</kbd> look</span><span><kbd>WASD</kbd> move</span><span><kbd>Q/E</kbd> down/up</span><span><kbd>Shift</kbd> boost</span><span><kbd>Ctrl Z</kbd> undo</span></footer>
+      <footer class="admin-footer"><span><kbd>LMB drag</kbd> move object</span><span><kbd>Empty drag</kbd> look</span><span><kbd>Shift drag</kbd> vertical</span><span><kbd>RMB</kbd> look</span><span><kbd>WASD/QE</kbd> fly</span><span><kbd>Ctrl Z</kbd> undo</span></footer>
     </aside>
     <button type="button" id="adminExpand" class="admin-expand" aria-label="Open Ashenhold Forge">A</button>
     <div id="adminToast" class="admin-toast" role="status" aria-live="polite"></div>
@@ -95,7 +95,7 @@
       if (node) node.setAttribute("aria-pressed", String(id === mode));
     });
     toast(mode === "freecam"
-      ? "Freecam: click to edit · drag to look · WASD + Q/E to fly"
+      ? "Freecam: drag objects to move · drag empty space to look · Shift-drag vertically"
       : mode === "noclip" ? "Noclip: the Warden starts at the freecam position"
         : "Warden placed at the freecam position");
   }
@@ -617,16 +617,13 @@
   }
 
   const viewport = document.getElementById("viewport");
-  function finishPointerInteraction(event, pickOnRelease) {
+  function finishPointerInteraction() {
     if (state.pointerMode === "transform") api.endDrag();
-    else if (state.pointerMode === "pick" && pickOnRelease && event) {
-      const item = api.pick(state.startX, state.startY);
-      state.selectedId = item && item.id || null;
-    }
     if (state.pointerId != null && viewport.hasPointerCapture && viewport.hasPointerCapture(state.pointerId)) viewport.releasePointerCapture(state.pointerId);
     state.pointerMode = null;
     state.pointerId = null;
     state.dragAxis = null;
+    state.dragCandidateId = null;
     scheduleRender();
   }
 
@@ -651,16 +648,31 @@
       state.dragAxis = axis;
       api.controls.clearInput();
     } else {
+      const item = api.pick(event.clientX, event.clientY);
+      state.selectedId = item && item.id || null;
+      state.dragCandidateId = state.selectedId;
       state.pointerMode = "pick";
+      scheduleRender();
     }
     viewport.setPointerCapture(event.pointerId);
   }, true);
   viewport.addEventListener("pointermove", (event) => {
     if (event.pointerId !== state.pointerId) return;
     if (state.pointerMode === "transform" && state.dragAxis) {
-      event.preventDefault(); event.stopImmediatePropagation(); api.drag(event.clientX, event.clientY); scheduleRender(); return;
+      event.preventDefault(); event.stopImmediatePropagation(); api.drag(event.clientX, event.clientY, { vertical: event.shiftKey }); scheduleRender(); return;
     }
-    if (state.pointerMode === "pick" && Math.hypot(event.clientX - state.startX, event.clientY - state.startY) >= 6) state.pointerMode = "look";
+    if (state.pointerMode === "pick" && Math.hypot(event.clientX - state.startX, event.clientY - state.startY) >= 6) {
+      if (state.dragCandidateId && api.beginDirectDrag(state.dragCandidateId, state.startX, state.startY)) {
+        setTransformMode("translate");
+        state.pointerMode = "transform";
+        state.dragAxis = "direct";
+        api.controls.clearInput();
+        api.drag(event.clientX, event.clientY, { vertical: event.shiftKey });
+        scheduleRender();
+        return;
+      }
+      state.pointerMode = "look";
+    }
     if (state.pointerMode === "look") {
       event.preventDefault(); event.stopImmediatePropagation();
       api.controls.look(event.clientX - state.lastX, event.clientY - state.lastY);
@@ -671,12 +683,12 @@
     if (event.pointerId !== state.pointerId) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    finishPointerInteraction(event, true);
+    finishPointerInteraction();
   };
   viewport.addEventListener("pointerup", endPointer, true);
   viewport.addEventListener("pointercancel", (event) => {
     if (event.pointerId !== state.pointerId) return;
-    finishPointerInteraction(event, false);
+    finishPointerInteraction();
   }, true);
   viewport.addEventListener("wheel", (event) => {
     if (api.info().mode !== "freecam") return;

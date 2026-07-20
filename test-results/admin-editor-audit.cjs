@@ -366,25 +366,94 @@ async function stopBridgeProcess(bridge) {
       && JSON.stringify(clickAfter.entity.transform) === JSON.stringify(clickBefore.entity.transform)
       && JSON.stringify(clickAfter.documentEntry) === JSON.stringify(clickBefore.documentEntry), "A short selection click mutated the entity or editor history.");
 
-    const leftDragBefore = await prepareFreecamTarget(pointerTarget.id, false);
-    await admin.mouse.move(leftDragBefore.point.clientX, leftDragBefore.point.clientY);
+    const directDragBefore = await prepareFreecamTarget(pointerTarget.id, false);
+    await admin.mouse.move(directDragBefore.point.clientX, directDragBefore.point.clientY);
     await admin.mouse.down({ button: "left" });
-    await admin.mouse.move(leftDragBefore.point.clientX + 72, leftDragBefore.point.clientY + 30, { steps: 5 });
+    await admin.mouse.move(directDragBefore.point.clientX + 72, directDragBefore.point.clientY + 30, { steps: 5 });
     await admin.mouse.up({ button: "left" });
     await admin.waitForTimeout(40);
-    const leftDragAfter = await admin.evaluate((id) => ({
+    const directDragAfter = await admin.evaluate((id) => ({
       info: window.__ASHENHOLD_ADMIN__.info(),
       entity: window.__ASHENHOLD_ADMIN__.getEntity(id),
       documentEntry: window.__ASHENHOLD_ADMIN__.getDocument().entities[id]
     }), pointerTarget.id);
-    check(leftDragAfter.info.mode === "freecam" && leftDragAfter.info.selectedId === null, "A left look-drag selected an entity or exited freecam.");
-    check(directionDot(leftDragBefore.info.camera.forward, leftDragAfter.info.camera.forward) < .999
-      && vectorDistance(leftDragBefore.info.camera.position, leftDragAfter.info.camera.position) < .01, "A left drag did not rotate freecam in place.");
-    check(leftDragAfter.info.history.length === leftDragBefore.info.history.length
-      && JSON.stringify(leftDragAfter.entity.transform) === JSON.stringify(leftDragBefore.entity.transform)
-      && JSON.stringify(leftDragAfter.documentEntry) === JSON.stringify(leftDragBefore.documentEntry), "A left look-drag transformed the pointed entity.");
-    const leftReleased = leftDragAfter.info.camera;
-    await admin.mouse.move(leftDragBefore.point.clientX + 105, leftDragBefore.point.clientY + 55, { steps: 2 });
+    check(directDragAfter.info.mode === "freecam" && directDragAfter.info.selectedId === pointerTarget.id,
+      "Direct object dragging exited freecam or lost selection.");
+    check(vectorDistance(directDragBefore.info.camera.position, directDragAfter.info.camera.position) < .01
+      && directionDot(directDragBefore.info.camera.forward, directDragAfter.info.camera.forward) > .99999,
+    "Direct object dragging moved or rotated freecam.");
+    check(Math.hypot(
+      directDragAfter.entity.transform.position.x - directDragBefore.entity.transform.position.x,
+      directDragAfter.entity.transform.position.z - directDragBefore.entity.transform.position.z
+    ) >= .5 && Math.abs(directDragAfter.entity.transform.position.y - directDragBefore.entity.transform.position.y) < .001,
+    "Left-dragging the object did not move it horizontally while preserving elevation.");
+    check(directDragAfter.info.history.length === directDragBefore.info.history.length + 1
+      && Math.abs(directDragAfter.documentEntry.position.x - directDragAfter.entity.transform.position.x) < .001
+      && Math.abs(directDragAfter.documentEntry.position.z - directDragAfter.entity.transform.position.z) < .001,
+    "Direct object dragging did not persist exactly one history state.");
+
+    const verticalDragBefore = await prepareFreecamTarget(pointerTarget.id, false);
+    await admin.keyboard.down("Shift");
+    await admin.mouse.move(verticalDragBefore.point.clientX, verticalDragBefore.point.clientY);
+    await admin.mouse.down({ button: "left" });
+    await admin.mouse.move(verticalDragBefore.point.clientX, verticalDragBefore.point.clientY - 64, { steps: 5 });
+    await admin.mouse.up({ button: "left" });
+    await admin.keyboard.up("Shift");
+    await admin.waitForTimeout(40);
+    const verticalDragAfter = await admin.evaluate((id) => ({
+      info: window.__ASHENHOLD_ADMIN__.info(),
+      entity: window.__ASHENHOLD_ADMIN__.getEntity(id),
+      documentEntry: window.__ASHENHOLD_ADMIN__.getDocument().entities[id]
+    }), pointerTarget.id);
+    check(Math.abs(verticalDragAfter.entity.transform.position.y - verticalDragBefore.entity.transform.position.y) >= .5
+      && Math.abs(verticalDragAfter.entity.transform.position.x - verticalDragBefore.entity.transform.position.x) < .001
+      && Math.abs(verticalDragAfter.entity.transform.position.z - verticalDragBefore.entity.transform.position.z) < .001,
+    "Shift-dragging the object did not move it vertically in place.");
+    check(verticalDragAfter.info.mode === "freecam" && verticalDragAfter.info.history.length === verticalDragBefore.info.history.length + 1,
+      "Vertical object dragging did not retain freecam or commit one history state.");
+
+    const emptyLookBefore = await admin.evaluate(async (id) => {
+      const api = window.__ASHENHOLD_ADMIN__;
+      api.controls.setMode("freecam");
+      api.controls.clearInput();
+      api.select(null);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const viewport = document.getElementById("viewport");
+      const bounds = viewport.getBoundingClientRect();
+      let point = null;
+      for (let y = 100; y < bounds.height - 80 && !point; y += 70) {
+        for (let x = 300; x < Math.min(bounds.width - 460, 1080); x += 90) {
+          const target = document.elementFromPoint(x, y);
+          if (target && viewport.contains(target) && !target.closest?.(".ashenhold-admin") && !api.entityAt(x, y) && !api.pickGizmo(x, y)) {
+            point = { clientX: x, clientY: y };
+            break;
+          }
+        }
+      }
+      return { point, info: api.info(), entity: api.getEntity(id), documentEntry: api.getDocument().entities[id] };
+    }, pointerTarget.id);
+    check(emptyLookBefore.point, "Could not find empty viewport space for the freecam look gesture.");
+    await admin.mouse.move(emptyLookBefore.point.clientX, emptyLookBefore.point.clientY);
+    await admin.mouse.down({ button: "left" });
+    await admin.mouse.move(emptyLookBefore.point.clientX + 72, emptyLookBefore.point.clientY + 30, { steps: 5 });
+    await admin.mouse.up({ button: "left" });
+    await admin.waitForTimeout(40);
+    const emptyLookAfter = await admin.evaluate((id) => ({
+      info: window.__ASHENHOLD_ADMIN__.info(),
+      entity: window.__ASHENHOLD_ADMIN__.getEntity(id),
+      documentEntry: window.__ASHENHOLD_ADMIN__.getDocument().entities[id]
+    }), pointerTarget.id);
+    check(emptyLookAfter.info.mode === "freecam" && emptyLookAfter.info.selectedId === null,
+      "An empty-space look drag selected an entity or exited freecam.");
+    check(directionDot(emptyLookBefore.info.camera.forward, emptyLookAfter.info.camera.forward) < .999
+      && vectorDistance(emptyLookBefore.info.camera.position, emptyLookAfter.info.camera.position) < .01,
+    "Dragging empty space did not rotate freecam in place.");
+    check(emptyLookAfter.info.history.length === emptyLookBefore.info.history.length
+      && JSON.stringify(emptyLookAfter.entity.transform) === JSON.stringify(emptyLookBefore.entity.transform)
+      && JSON.stringify(emptyLookAfter.documentEntry) === JSON.stringify(emptyLookBefore.documentEntry),
+    "An empty-space look drag transformed the object.");
+    const leftReleased = emptyLookAfter.info.camera;
+    await admin.mouse.move(emptyLookBefore.point.clientX + 105, emptyLookBefore.point.clientY + 55, { steps: 2 });
     await admin.waitForTimeout(40);
     const afterReleasedMove = await admin.evaluate(() => window.__ASHENHOLD_ADMIN__.info());
     check(directionDot(leftReleased.forward, afterReleasedMove.camera.forward) > .999999
@@ -480,7 +549,18 @@ async function stopBridgeProcess(bridge) {
         cameraTravel: vectorDistance(clickBefore.info.camera.position, clickAfter.info.camera.position),
         directionDot: directionDot(clickBefore.info.camera.forward, clickAfter.info.camera.forward)
       },
-      leftDrag: { directionDot: directionDot(leftDragBefore.info.camera.forward, leftDragAfter.info.camera.forward) },
+      directDrag: {
+        distance: Math.hypot(
+          directDragAfter.entity.transform.position.x - directDragBefore.entity.transform.position.x,
+          directDragAfter.entity.transform.position.z - directDragBefore.entity.transform.position.z
+        ),
+        historyDelta: directDragAfter.info.history.length - directDragBefore.info.history.length
+      },
+      verticalDrag: {
+        deltaY: verticalDragAfter.entity.transform.position.y - verticalDragBefore.entity.transform.position.y,
+        historyDelta: verticalDragAfter.info.history.length - verticalDragBefore.info.history.length
+      },
+      emptyLook: { directionDot: directionDot(emptyLookBefore.info.camera.forward, emptyLookAfter.info.camera.forward) },
       rightDrag: { directionDot: directionDot(rightDragBefore.info.camera.forward, rightDragAfter.camera.forward) },
       gizmo: {
         deltaX: gizmoAfter.entity.transform.position.x - gizmoBefore.entity.transform.position.x,
@@ -601,7 +681,8 @@ async function stopBridgeProcess(bridge) {
         ordinaryUrlReadOnly: true, ordinaryUrlSkipsEditorAssets: true, productionOverridesApplied: true,
         productionGameplayLifecycle: true, cleanDiagnostics: true,
         defaultFreecam: true, freecamShortClickSelects: true, freecamShortClickStable: true,
-        freecamLeftDragLooksWithoutPicking: true, freecamRightDragLooks: true, freecamPointerReleaseClean: true,
+        freecamDirectObjectDrag: true, freecamDirectDragPersists: true, freecamVerticalObjectDrag: true,
+        freecamEmptyDragLooks: true, freecamRightDragLooks: true, freecamPointerReleaseClean: true,
         freecamGizmoTransform: true, freecamGizmoRetainsMode: true,
         freecamWardenExactHandoff: true, freecamWardenMotionReset: true,
         freecamWardenInputReset: true, freecamWardenCameraStable: true

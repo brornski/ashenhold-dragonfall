@@ -2067,7 +2067,7 @@
     return hit && hit.object.userData.adminAxis || null;
   }
 
-  function pickAdminEntity(clientX, clientY) {
+  function adminEntityAt(clientX, clientY) {
     if (!setAdminRay(clientX, clientY)) return null;
     const roots = [];
     adminEntities.forEach((record) => { if (record.root && record.root.visible) roots.push(record.root); });
@@ -2075,11 +2075,16 @@
     for (let index = 0; index < hits.length; index += 1) {
       let object = hits[index].object;
       while (object) {
-        if (object.userData && adminEntities.has(object.userData.adminEntityId)) return selectAdminEntity(object.userData.adminEntityId);
+        if (object.userData && adminEntities.has(object.userData.adminEntityId)) return adminEntities.get(object.userData.adminEntityId);
         object = object.parent;
       }
     }
-    return selectAdminEntity(null);
+    return null;
+  }
+
+  function pickAdminEntity(clientX, clientY) {
+    const record = adminEntityAt(clientX, clientY);
+    return selectAdminEntity(record && record.id || null);
   }
 
   function projectAdminPoint(worldPosition) {
@@ -2136,18 +2141,55 @@
     return true;
   }
 
+  function beginAdminDirectDrag(id, clientX, clientY) {
+    const record = id ? adminEntities.get(id) : adminSelectedId ? adminEntities.get(adminSelectedId) : null;
+    if (!record || !camera || !renderer) return false;
+    const start = adminEntityTransform(record);
+    const origin = new THREE.Vector3(start.position.x, start.position.y, start.position.z);
+    const viewForward = new THREE.Vector3();
+    camera.getWorldDirection(viewForward);
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+    right.y = 0;
+    if (right.lengthSq() < .0001) right.set(1, 0, 0);
+    else right.normalize();
+    const forward = new THREE.Vector3(viewForward.x, 0, viewForward.z);
+    if (forward.lengthSq() < .0001) forward.set(-right.z, 0, right.x);
+    else forward.normalize();
+    const bounds = renderer.domElement.getBoundingClientRect();
+    adminDrag = {
+      id: record.id, mode: "translate-direct", axis: "xz",
+      startX: clientX, startY: clientY, start,
+      direct: {
+        right, forward,
+        worldPerPixel: 2 * camera.position.distanceTo(origin) * Math.tan(camera.fov * Math.PI / 360) / Math.max(1, bounds.height)
+      }
+    };
+    return true;
+  }
+
   function snappedAdminValue(value, step) {
     return step > 0 ? Math.round(value / step) * step : value;
   }
 
-  function dragAdminTransform(clientX, clientY) {
+  function dragAdminTransform(clientX, clientY, options) {
     if (!adminDrag) return false;
     const record = adminEntities.get(adminDrag.id);
     if (!record) return false;
     const dx = clientX - adminDrag.startX;
     const dy = clientY - adminDrag.startY;
     const next = cloneAdminTransform(adminDrag.start);
-    if (adminDrag.mode === "translate") {
+    if (adminDrag.mode === "translate-direct") {
+      const vertical = Boolean(options && options.vertical);
+      if (vertical) {
+        const distance = snappedAdminValue(-dy * adminDrag.direct.worldPerPixel, adminControls.snap.translate);
+        next.position.y = adminDrag.start.position.y + distance;
+      } else {
+        const rightDistance = snappedAdminValue(dx * adminDrag.direct.worldPerPixel, adminControls.snap.translate);
+        const forwardDistance = snappedAdminValue(-dy * adminDrag.direct.worldPerPixel, adminControls.snap.translate);
+        next.position.x = adminDrag.start.position.x + adminDrag.direct.right.x * rightDistance + adminDrag.direct.forward.x * forwardDistance;
+        next.position.z = adminDrag.start.position.z + adminDrag.direct.right.z * rightDistance + adminDrag.direct.forward.z * forwardDistance;
+      }
+    } else if (adminDrag.mode === "translate") {
       const projectedDistance = dx * adminDrag.projected.x + dy * adminDrag.projected.y;
       const distance = snappedAdminValue(projectedDistance * adminDrag.projected.worldPerPixel, adminControls.snap.translate);
       next.position[adminDrag.axis] = adminDrag.start.position[adminDrag.axis] + distance;
@@ -2765,6 +2807,7 @@
       getEntity: (id) => adminEntitySummary(adminEntities.get(id)),
       select: selectAdminEntity,
       pick: pickAdminEntity,
+      entityAt: (clientX, clientY) => adminEntitySummary(adminEntityAt(clientX, clientY)),
       pickGizmo: pickAdminGizmo,
       projectEntity: projectAdminEntity,
       projectGizmo: projectAdminGizmo,
@@ -2774,6 +2817,7 @@
         return adminControls.transformMode;
       },
       beginDrag: beginAdminDrag,
+      beginDirectDrag: beginAdminDirectDrag,
       drag: dragAdminTransform,
       endDrag: endAdminDrag,
       setTransform: setAdminEntityTransform,

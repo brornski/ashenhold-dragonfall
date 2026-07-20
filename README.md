@@ -82,11 +82,11 @@ Ashenhold Forge is a local-only world sandbox for changing the authored continen
 
 Forge is freecam-first: it opens in freecam, and scene selection plus gizmo and inspector editing all remain available without leaving that mode. Forge supports these core workflows:
 
-- select a world object with a short left click or choose it from the searchable, category-filtered Scene tree; use the axis gizmo or inspector for snapped move (`G`), rotate (`R`), and scale (`X`) edits
+- select a world object with a short left click or choose it from the searchable, category-filtered Scene tree; left-drag the model to move it horizontally, Shift-left-drag it vertically, or use the axis gizmo and inspector for exact move (`G`), rotate (`R`), and scale (`X`) edits
 - frame, duplicate, move, recolor, retarget collision on, or replace model geometry; decorative and custom models may also be hidden or removed, while chests, enemies, dragons, and location groups lock those lifecycle actions so their interaction, AI, and progression state cannot become invisible-but-active
 - add catalog models at the camera and tune each biome's ground, cliff, grass, fog, exposure, vegetation, and prop density; Ember Dunes intentionally keeps tree density at zero
 - tune global or per-enemy-kind health, damage, speed, attack range, sight, tracking, and attack rate, or set exact values on the selected enemy
-- freecam uses `WASD`, `Q`/`E`, Shift boost, and the wheel for speed; a short left click selects, left-drag away from a gizmo or right-drag looks, and left-drag on a gizmo transforms the selection
+- freecam uses `WASD`, `Q`/`E`, Shift boost, and the wheel for speed; left-drag a model to move it, left-drag empty space or right-drag to look, and left-drag a gizmo for single-axis transforms
 - from freecam, `V` returns the Warden to the camera's exact XYZ and facing, clears stale movement, combat, and pose state, and resumes Warden control; `N` places the Warden at the freecam position and starts noclip; use `F` for freecam, `Ctrl+Z` / `Ctrl+Y` for history, and backtick to collapse the panel
 
 The Publish tab validates the document and can copy/download JSON, import JSON, or export a ready-to-use `world-overrides.js` source file. Browser edits also maintain a local draft. **Save Repo** uses the authenticated loopback bridge to atomically replace only the repository-root `world-overrides.js`; a regular static server can run the editor in export-only mode but cannot save to the repository. Some density increases beyond the currently allocated instance capacity require Save Repo followed by a reload.
