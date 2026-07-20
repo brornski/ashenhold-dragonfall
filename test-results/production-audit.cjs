@@ -40,10 +40,13 @@ async function boot(context, diagnostics, suffix) {
   for (const biome of BIOMES) {
     const zone = (Array.isArray(zones) ? zones : zones.zones || []).find((entry) => String(entry.biome || entry.id || entry.name).toLowerCase() === biome);
     const center = zone?.center || zone?.sample || zone?.spawn || zone?.position || zone;
-    await first.page.evaluate(({ x, z }) => {
-      window.__ASHENHOLD_TEST__.teleport(x, z);
-      window.__ASHENHOLD_TEST__.step(.35);
-    }, { x: Number(center?.x), z: Number(center?.z) });
+    await first.page.evaluate(async ({ biome: targetBiome, x, z }) => {
+      const test = window.__ASHENHOLD_TEST__;
+      test.teleport(x, z);
+      test.step(.35);
+      await test.awaitBiomeAssets(targetBiome);
+      test.step(.02);
+    }, { biome, x: Number(center?.x), z: Number(center?.z) });
     const zoneSnapshot = await first.page.evaluate(() => window.ashenholdGame.snapshot());
     await first.page.screenshot({ path: "test-results/biome-" + biome + ".png", timeout: 90000 });
     const platform = await first.page.evaluate(() => window.__ASHENHOLD_TEST__.platformProbe());
@@ -117,7 +120,7 @@ async function boot(context, diagnostics, suffix) {
   const migrated = await progressionPage.evaluate(() => window.ashenholdGame.snapshot());
   await progressionPage.evaluate(() => window.__ASHENHOLD_TEST__.start());
   const wrongWeaponGate = await progressionPage.evaluate(() => window.__ASHENHOLD_TEST__.canPurchaseSkill("marksman"));
-  const ranked = await progressionPage.evaluate(() => {
+  const ranked = await progressionPage.evaluate(async () => {
     const test = window.__ASHENHOLD_TEST__;
     test.setSkillResources(20, 12, 12, { bow: 2 });
     const correctWeaponGate = test.canPurchaseSkill("marksman");
@@ -134,11 +137,12 @@ async function boot(context, diagnostics, suffix) {
     const captureBefore = shrine ? test.captureFlagDebug().find((flag) => flag.strongholdId === shrine.id) : null;
     const shrineCleared = shrine ? test.clearStronghold(shrine.id) : false;
     test.step(2);
+    await test.awaitBiomeAssets(test.biomeAt(42, 118));
+    await Promise.all(test.regionalAssetDebug().filter((entry) => entry.requested).map((entry) => test.awaitBiomeAssets(entry.biome)));
     const captureAfter = shrine ? test.captureFlagDebug().find((flag) => flag.strongholdId === shrine.id) : null;
     test.saveRun();
     return { correctWeaponGate, shrine, captureBefore, shrineCleared, captureAfter, snapshot: window.ashenholdGame.snapshot(), saved: test.savedRun() };
   });
-  await progressionPage.waitForTimeout(500);
   await progressionPage.reload({ waitUntil: "domcontentloaded", timeout: 90000 });
   await progressionPage.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   const continueLabel = await progressionPage.locator("#enterButton span").textContent();
@@ -218,7 +222,7 @@ async function boot(context, diagnostics, suffix) {
     hitStop: combat.postHit.combat.hitStopRemaining > 0,
     axeKnockback: combat.enemies.some((enemy) => enemy.impulse > 1 && enemy.health < 100)
   };
-  combat.capstones = await combatPage.evaluate(() => {
+  combat.capstones = await combatPage.evaluate(async () => {
     const test = window.__ASHENHOLD_TEST__;
     test.clearGroundEnemies();
     test.setSkillForTest("pathfinder", 1);
@@ -226,6 +230,8 @@ async function boot(context, diagnostics, suffix) {
     const fort = window.ashenholdGame.snapshot().world.layoutForts[0];
     test.teleport(fort.x + 120, fort.z);
     test.step(.03);
+    await test.awaitBiomeAssets(test.biomeAt(fort.x + 120, fort.z));
+    await Promise.all(test.regionalAssetDebug().filter((entry) => entry.requested).map((entry) => test.awaitBiomeAssets(entry.biome)));
     const afterReveal = window.ashenholdGame.snapshot().world.landmarksRevealed;
 
     test.clearGroundEnemies();
@@ -269,7 +275,7 @@ async function boot(context, diagnostics, suffix) {
   instrument(strongholdsPage, "strongholds", diagnostics);
   await strongholdsPage.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await strongholdsPage.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
-  const strongholds = await strongholdsPage.evaluate(() => {
+  const strongholds = await strongholdsPage.evaluate(async () => {
     const test = window.__ASHENHOLD_TEST__;
     test.start();
     const base = window.ashenholdGame.snapshot();
@@ -291,6 +297,9 @@ async function boot(context, diagnostics, suffix) {
     test.setSkillForTest("stormlaunch", 1);
     test.setSkillForTest("stormstride", 1);
     test.teleport(0, 182);
+    test.step(.02);
+    await test.awaitBiomeAssets(test.biomeAt(0, 182));
+    await Promise.all(test.regionalAssetDebug().filter((entry) => entry.requested).map((entry) => test.awaitBiomeAssets(entry.biome)));
     test.setStamina(100);
     return { base, first, afterClear, scaledAlive, scaled, tamePrepared, tamed };
   });

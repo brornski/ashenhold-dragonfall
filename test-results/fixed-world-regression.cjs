@@ -128,11 +128,13 @@ async function boot(context, query, label) {
     });
     const traversedZones = [];
     for (const zone of primaryZones) {
-      const observation = await primary.page.evaluate(({ x, z }) => {
+      const observation = await primary.page.evaluate(async ({ biome, x, z }) => {
         const test = window.__ASHENHOLD_TEST__;
         const hookBiome = test.biomeAt?.(x, z) ?? null;
         test.teleport(x, z);
         test.step(.08);
+        await test.awaitBiomeAssets(biome);
+        test.step(.02);
         const snapshot = window.ashenholdGame.snapshot();
         return {
           hookBiome,
@@ -140,7 +142,7 @@ async function boot(context, query, label) {
           position: snapshot.position,
           documentToken: window.__fixedWorldDocumentToken
         };
-      }, zone.center);
+      }, { biome: zone.biome, x: zone.center.x, z: zone.center.z });
       traversedZones.push({ expected: zone.biome, ...observation });
     }
 
@@ -155,6 +157,12 @@ async function boot(context, query, label) {
       test.saveRun();
       return { shrine, before, cleared, after: matching[0] || null, duplicates: matching.length, saved: test.savedRun() };
     });
+
+    const regionalAssets = await primary.page.evaluate(async (biomes) => {
+      const test = window.__ASHENHOLD_TEST__;
+      await Promise.all(biomes.map((biome) => test.awaitBiomeAssets(biome)));
+      return test.regionalAssetDebug();
+    }, BIOMES);
 
     await primary.page.reload({ waitUntil: "domcontentloaded", timeout: 90000 });
     await primary.page.waitForFunction(() => window.ashenholdGame?.snapshot?.().state === "title", null, { timeout: 70000 });
@@ -185,6 +193,7 @@ async function boot(context, query, label) {
       traversedZones
     };
     report.shrine = { capture: shrineCapture, restored: restoredFlag };
+    report.regionalAssets = regionalAssets;
     report.momentum = momentum;
     report.migration = restored.migration;
     report.diagnostics = allDiagnostics;
@@ -207,6 +216,8 @@ async function boot(context, query, label) {
         && flag?.visible && flag.raised === 1 && flag.minimapMarker && flag.height >= 10 && shrineCapture.duplicates === 1),
       shrineFlagPersistsAfterReload: Boolean(restoredFlag?.visible && restoredFlag.raised === 1 && restoredFlag.minimapMarker
         && restoredFlag.height >= 10),
+      regionalAssetsSettleBeforeReload: regionalAssets.length === BIOMES.length
+        && regionalAssets.every((entry) => entry.requested && entry.texturesReady && entry.enemiesReady),
       sprintJumpMaintainsMomentum: Boolean(sprintMomentum && sprintMomentum.takeoffSpeed >= 8
         && sprintMomentum.airborneSpeed >= sprintMomentum.takeoffSpeed * .8 && sprintMomentum.directionAlignment >= .9),
       noBrowserDiagnostics: allDiagnostics.every((entry) => !entry.consoleErrors.length && !entry.pageErrors.length
