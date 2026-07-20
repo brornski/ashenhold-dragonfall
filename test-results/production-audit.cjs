@@ -233,6 +233,7 @@ async function boot(context, diagnostics, suffix) {
     await test.awaitBiomeAssets(test.biomeAt(fort.x + 120, fort.z));
     await Promise.all(test.regionalAssetDebug().filter((entry) => entry.requested).map((entry) => test.awaitBiomeAssets(entry.biome)));
     const afterReveal = window.ashenholdGame.snapshot().world.landmarksRevealed;
+    test.prepareSlideSurface("flat");
 
     test.clearGroundEnemies();
     test.setSkillForTest("world_voice", 1);

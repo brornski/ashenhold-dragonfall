@@ -37,6 +37,7 @@ async function boot(page) {
     const after = window.ashenholdGame.snapshot().chestsOpened;
     return { probe, positioned, opened, before, after };
   });
+  const water = await page.evaluate(() => window.__ASHENHOLD_TEST__.waterTraversalProbe());
 
   const desktopSkillsButton = await page.locator("#skillsButton").boundingBox();
   await page.click("#skillsButton");
@@ -162,6 +163,11 @@ async function boot(page) {
     : 0;
   const momentumHook = await page.evaluate(() => window.__ASHENHOLD_TEST__.jumpMomentumProbe?.() || null);
   const checks = {
+    shorelineRouteFound: water.available,
+    waterEntryDoesNotStick: water.available && water.entryDistance >= water.route.distance * .8 && water.enteredWading,
+    waterExitDoesNotStick: water.available && water.exitDistance >= water.route.distance * .8 && water.returnedDry,
+    forcedWaterLandingCanEscape: water.available && water.forcedExitDistance >= water.route.distance * .8 && water.escapedForcedWater,
+    shallowWadingSurface: water.available && water.wadingDepth >= -.12 && water.wadingDepth <= .65,
     chestFrontLatchValid: chest.probe.available && chest.probe.valid && chest.probe.validDistance <= 3.5,
     chestFarRejected: chest.probe.farRejected,
     chestBelowRejected: chest.probe.belowRejected,
@@ -215,6 +221,7 @@ async function boot(page) {
   });
   const report = {
     checks,
+    water,
     chest,
     desktopSkills,
     mobileSkills,

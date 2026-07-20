@@ -119,6 +119,9 @@
     Object.freeze({ id: "moon", name: BIOMES.moon.name, center: Object.freeze({ x: 590, z: -410 }), bounds: Object.freeze({ minX: 300, maxX: 900, minZ: -900, maxZ: -40 }), skybox: SKY_PROFILES.moon.id })
   ]);
   const CONTINENT_ZONE_BY_ID = new Map(CONTINENT_ZONES.map((zone) => [zone.id, zone]));
+  const SHORE_WATER_RADIUS = 520;
+  const PLAYER_WADING_DEPTH = .55;
+  const WATERLINE_MARGIN = .35;
   const TREELESS_BIOME_IDS = new Set(["desert"]);
   const TREE_MODEL_IDS = new Set([
     "tree", "treePalm", "treePalmBend", "treePineA", "treePineB",
@@ -1045,6 +1048,7 @@
     mobileSlideHeld: false,
     airMomentum: new THREE.Vector3(),
     groundMomentum: new THREE.Vector3(),
+    wading: false,
     lastJumpTelemetry: null,
     airbornePhase: "grounded",
     landingTime: 0,
@@ -1541,11 +1545,12 @@
     });
     const x = clamp(Number(runPlayer.x) || START.x, -HALF_WORLD + 2, HALF_WORLD - 2);
     const z = clamp(Number(runPlayer.z) || START.z, -HALF_WORLD + 2, HALF_WORLD - 2);
-    const terrainY = terrainHeight(x, z);
+    const terrainY = playerSurfaceHeightAt(x, z, Number(runPlayer.y) || 0);
     const savedY = Number(runPlayer.y);
     const restoredY = Number.isFinite(savedY) ? Math.max(terrainY, Math.min(savedY, terrainY + 90)) : terrainY;
-    if (terrainY <= waterLevelAt(x, z) + .3 || hitsCollider(x, z, .8, restoredY, restoredY + 2.15)) player.root.position.copy(player.lastSafePosition);
+    if (hitsCollider(x, z, .8, restoredY, restoredY + 2.15)) player.root.position.copy(player.lastSafePosition);
     else player.root.position.set(x, restoredY, z);
+    player.wading = isPlayerWadingAt(player.root.position.x, player.root.position.z, player.root.position.y);
     player.root.rotation.y = Number(runPlayer.rotation) || 0;
     player.health = clamp(Number(runPlayer.health) || maxHealth(), 1, maxHealth());
     player.stamina = clamp(Number(runPlayer.stamina) || maxStamina(), 0, maxStamina());
@@ -2765,7 +2770,7 @@
     const shoreZone = CONTINENT_ZONE_BY_ID.get("shore");
     const shoreBiome = BIOMES.shore;
     const water = new THREE.Mesh(
-      new THREE.CircleGeometry(520, isCoarse ? 48 : 96),
+      new THREE.CircleGeometry(SHORE_WATER_RADIUS, isCoarse ? 48 : 96),
       new THREE.MeshPhongMaterial({ color: shoreBiome.water, transparent: true, opacity: shoreBiome.waterOpacity, shininess: 92, specular: new THREE.Color(shoreBiome.water).lerp(new THREE.Color(0xb6d9e4), .58) })
     );
     water.rotation.x = -Math.PI / 2;
@@ -7195,6 +7200,7 @@
     player.mobileSlideHeld = false;
     player.airMomentum.set(0, 0, 0);
     player.groundMomentum.set(0, 0, 0);
+    player.wading = false;
     player.lastJumpTelemetry = null;
     player.airbornePhase = "grounded";
     player.landingTime = 0;
@@ -7328,6 +7334,26 @@
       if (Math.abs(localX) <= platform.hx && Math.abs(localZ) <= platform.hz && platform.y <= footY + .85) height = Math.max(height, platform.y);
     });
     return height;
+  }
+
+  function shoreWaterSurfaceAt(x, z) {
+    const shore = CONTINENT_ZONE_BY_ID.get("shore");
+    if (!shore || Math.hypot(x - shore.center.x, z - shore.center.z) > SHORE_WATER_RADIUS) return null;
+    return BIOMES.shore.waterLevel;
+  }
+
+  function playerSurfaceHeightAt(x, z, footY) {
+    const surface = surfaceHeightAt(x, z, footY);
+    const waterSurface = shoreWaterSurfaceAt(x, z);
+    if (waterSurface === null || surface > waterSurface + WATERLINE_MARGIN) return surface;
+    return Math.max(surface, waterSurface - PLAYER_WADING_DEPTH);
+  }
+
+  function isPlayerWadingAt(x, z, footY) {
+    const waterSurface = shoreWaterSurfaceAt(x, z);
+    if (waterSurface === null) return false;
+    const surface = surfaceHeightAt(x, z, footY + .9);
+    return surface <= waterSurface + WATERLINE_MARGIN && footY <= waterSurface + .12;
   }
 
   function strideSprintPower() {
@@ -7579,7 +7605,7 @@
     updateStormstrideTrail(dt);
 
     const currentY = player.root.position.y;
-    const landingHeight = surfaceHeightAt(player.root.position.x, player.root.position.z, currentY);
+    const landingHeight = playerSurfaceHeightAt(player.root.position.x, player.root.position.z, currentY);
     if (player.grounded && currentY - landingHeight > .9) {
       if (player.sliding) {
         player.airMomentum.copy(player.slideDirection).multiplyScalar(player.slideSpeed);
@@ -7595,7 +7621,7 @@
       player.velocityY -= 20.5 * dt;
       player.airbornePhase = player.jumpTime < .1 && player.velocityY > 0 ? "jump" : player.velocityY > 2 ? "rise" : player.velocityY > -2 ? "apex" : "fall";
       const nextY = player.root.position.y + player.velocityY * dt;
-      const surface = surfaceHeightAt(player.root.position.x, player.root.position.z, player.root.position.y + .9);
+      const surface = playerSurfaceHeightAt(player.root.position.x, player.root.position.z, player.root.position.y + .9);
       if (player.velocityY <= 0 && nextY <= surface) {
         const impact = Math.abs(player.velocityY);
         player.root.position.y = surface;
@@ -7617,8 +7643,9 @@
       if (player.landingTime <= 0) player.airbornePhase = "grounded";
     }
     recoverPlayerFromCollision();
-    if (player.grounded && player.root.position.y > waterLevelAt(player.root.position.x, player.root.position.z) + .35 && !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + (player.sliding ? 1.15 : 2.1))) player.lastSafePosition.copy(player.root.position);
-    player.vertical = Math.max(0, player.root.position.y - terrainHeight(player.root.position.x, player.root.position.z));
+    if (player.grounded && !hitsCollider(player.root.position.x, player.root.position.z, .68, player.root.position.y, player.root.position.y + (player.sliding ? 1.15 : 2.1))) player.lastSafePosition.copy(player.root.position);
+    player.wading = player.grounded && isPlayerWadingAt(player.root.position.x, player.root.position.z, player.root.position.y);
+    player.vertical = Math.max(0, player.root.position.y - playerSurfaceHeightAt(player.root.position.x, player.root.position.z, player.root.position.y + .9));
     const slideFov = 69 + clamp((player.slideSpeed - 12) * .22, 0, 7);
     camera.fov = lerp(camera.fov, player.sliding ? slideFov : player.superSprinting ? 76 : player.sprinting ? 69 : 62, 1 - Math.pow(.002, dt));
     camera.updateProjectionMatrix();
@@ -7691,7 +7718,7 @@
         else if (zOpen) player.root.position.z = candidateZ;
       }
       if (player.grounded) {
-        const surface = surfaceHeightAt(player.root.position.x, player.root.position.z, player.root.position.y + 1.05);
+        const surface = playerSurfaceHeightAt(player.root.position.x, player.root.position.z, player.root.position.y + 1.05);
         if (surface - player.root.position.y <= .92) player.root.position.y = surface;
       }
     }
@@ -7722,19 +7749,19 @@
     const collisionHeight = Number.isFinite(height) ? height : player.sliding ? 1.15 : 2.15;
     if (hitsCollider(x, z, radius, footY, footY + collisionHeight)) return false;
     if (!player.grounded) return true;
-    const currentSurface = surfaceHeightAt(player.root.position.x, player.root.position.z, footY + .9);
-    const nextSurface = surfaceHeightAt(x, z, footY + .9);
+    const currentSurface = playerSurfaceHeightAt(player.root.position.x, player.root.position.z, footY + .9);
+    const nextSurface = playerSurfaceHeightAt(x, z, footY + .9);
     const step = nextSurface - currentSurface;
     if (step > .92) return false;
     const terrain = terrainHeight(x, z);
-    const supportedAboveWater = nextSurface > terrain + .35;
-    if (!supportedAboveWater && terrain <= waterLevelAt(x, z) + .35) return false;
+    const rawNextSurface = surfaceHeightAt(x, z, footY + .9);
+    const supportedPlatform = rawNextSurface > terrain + .35;
     const sample = 1.15;
     const slope = Math.max(
-      Math.abs(terrainHeight(x + sample, z) - terrainHeight(x - sample, z)),
-      Math.abs(terrainHeight(x, z + sample) - terrainHeight(x, z - sample))
+      Math.abs(playerSurfaceHeightAt(x + sample, z, footY + .9) - playerSurfaceHeightAt(x - sample, z, footY + .9)),
+      Math.abs(playerSurfaceHeightAt(x, z + sample, footY + .9) - playerSurfaceHeightAt(x, z - sample, footY + .9))
     ) / (sample * 2);
-    return supportedAboveWater || slope <= 1.18;
+    return supportedPlatform || slope <= 1.18;
   }
 
   function recoverPlayerFromCollision() {
@@ -7751,7 +7778,7 @@
         if (!canPlayerOccupy(x, z, .68, player.root.position.y, collisionHeight)) continue;
         player.root.position.x = x;
         player.root.position.z = z;
-        player.root.position.y = surfaceHeightAt(x, z, player.root.position.y + 1.05);
+        player.root.position.y = playerSurfaceHeightAt(x, z, player.root.position.y + 1.05);
         return true;
       }
     }
@@ -9531,6 +9558,100 @@
     return Object.assign({}, sample);
   }
 
+  function findWaterTraversalTestRoute() {
+    const shore = CONTINENT_ZONE_BY_ID.get("shore");
+    if (!shore) return null;
+    const waterSurface = BIOMES.shore.waterLevel;
+    const directions = [[20, 0], [-20, 0], [0, 20], [0, -20]];
+    for (let z = shore.bounds.minZ + 20; z <= shore.bounds.maxZ - 20; z += 20) {
+      for (let x = shore.bounds.minX + 20; x <= shore.bounds.maxX - 20; x += 20) {
+        if (Math.hypot(x - shore.center.x, z - shore.center.z) > SHORE_WATER_RADIUS - 24) continue;
+        const dryTerrain = terrainHeight(x, z);
+        const drySurface = surfaceHeightAt(x, z, dryTerrain + 1);
+        if (dryTerrain <= waterSurface + WATERLINE_MARGIN + .08 || drySurface > dryTerrain + .35) continue;
+        if (hitsCollider(x, z, .72, dryTerrain, dryTerrain + 2.15)) continue;
+        for (let index = 0; index < directions.length; index += 1) {
+          const wetX = x + directions[index][0];
+          const wetZ = z + directions[index][1];
+          if (Math.hypot(wetX - shore.center.x, wetZ - shore.center.z) > SHORE_WATER_RADIUS - 4) continue;
+          const wetTerrain = terrainHeight(wetX, wetZ);
+          const rawWetSurface = surfaceHeightAt(wetX, wetZ, wetTerrain + 1);
+          if (wetTerrain > waterSurface + .12 || rawWetSurface > wetTerrain + .35) continue;
+          const wetSurface = playerSurfaceHeightAt(wetX, wetZ, dryTerrain + 1);
+          if (dryTerrain - wetSurface > .9 || hitsCollider(wetX, wetZ, .72, wetSurface, wetSurface + 2.15)) continue;
+          return {
+            dry: { x, y: dryTerrain, z },
+            wet: { x: wetX, y: wetSurface, terrainY: wetTerrain, z: wetZ },
+            waterSurface,
+            distance: Math.hypot(wetX - x, wetZ - z)
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  function waterTraversalProbe() {
+    if (!player.root) return { available: false };
+    const route = findWaterTraversalTestRoute();
+    if (!route) return { available: false };
+    const saved = {
+      position: player.root.position.clone(),
+      lastSafePosition: player.lastSafePosition.clone(),
+      grounded: player.grounded,
+      velocityY: player.velocityY,
+      sliding: player.sliding,
+      slideSpeed: player.slideSpeed,
+      wading: player.wading,
+      airMomentum: player.airMomentum.clone(),
+      groundMomentum: player.groundMomentum.clone()
+    };
+    try {
+      player.sliding = false;
+      player.slideSpeed = 0;
+      player.grounded = true;
+      player.velocityY = 0;
+      player.root.position.set(route.dry.x, route.dry.y, route.dry.z);
+      player.lastSafePosition.copy(player.root.position);
+
+      const entryDistance = movePlayer(route.wet.x - route.dry.x, route.wet.z - route.dry.z);
+      player.wading = isPlayerWadingAt(player.root.position.x, player.root.position.z, player.root.position.y);
+      const enteredWading = player.wading;
+      const wadingDepth = route.waterSurface - player.root.position.y;
+      const exitDistance = movePlayer(route.dry.x - player.root.position.x, route.dry.z - player.root.position.z);
+      player.wading = isPlayerWadingAt(player.root.position.x, player.root.position.z, player.root.position.y);
+      const returnedDry = !player.wading;
+
+      player.root.position.set(route.wet.x, route.wet.terrainY, route.wet.z);
+      player.grounded = true;
+      player.wading = true;
+      const forcedExitDistance = movePlayer(route.dry.x - route.wet.x, route.dry.z - route.wet.z);
+      const escapedForcedWater = !isPlayerWadingAt(player.root.position.x, player.root.position.z, player.root.position.y);
+
+      return {
+        available: true,
+        route,
+        entryDistance,
+        exitDistance,
+        forcedExitDistance,
+        enteredWading,
+        returnedDry,
+        escapedForcedWater,
+        wadingDepth
+      };
+    } finally {
+      player.root.position.copy(saved.position);
+      player.lastSafePosition.copy(saved.lastSafePosition);
+      player.grounded = saved.grounded;
+      player.velocityY = saved.velocityY;
+      player.sliding = saved.sliding;
+      player.slideSpeed = saved.slideSpeed;
+      player.wading = saved.wading;
+      player.airMomentum.copy(saved.airMomentum);
+      player.groundMomentum.copy(saved.groundMomentum);
+    }
+  }
+
   function chestInteractionProbe() {
     if (!player.root) return { available: false };
     let sample = null;
@@ -9592,7 +9713,7 @@
       multiplayer: multiplayerSnapshot(),
       position: player.root ? { x: player.root.position.x, y: player.root.position.y, z: player.root.position.z } : null,
       health: player.health, stamina: player.stamina, shout: player.shout, kills: player.kills,
-      moving: player.moving, sprinting: player.sprinting, superSprinting: player.superSprinting,
+      moving: player.moving, sprinting: player.sprinting, superSprinting: player.superSprinting, wading: player.wading,
       grounded: player.grounded, airbornePhase: player.airbornePhase, velocityY: player.velocityY,
       sliding: player.sliding, slideSpeed: player.slideSpeed, slideSlopeDegrees: player.slideSlopeDegrees,
       maxHealth: maxHealth(), maxStamina: maxStamina(), level: player.level, xp: player.xp,
@@ -9733,7 +9854,8 @@
       teleport: (x, z) => {
         player.root.position.x = clamp(x, -HALF_WORLD, HALF_WORLD);
         player.root.position.z = clamp(z, -HALF_WORLD, HALF_WORLD);
-        player.root.position.y = terrainHeight(player.root.position.x, player.root.position.z);
+        player.root.position.y = playerSurfaceHeightAt(player.root.position.x, player.root.position.z, player.root.position.y + .9);
+        player.wading = isPlayerWadingAt(player.root.position.x, player.root.position.z, player.root.position.y);
         updateCamera(1, true);
       },
       moveBy: (dx, dz) => movePlayer(Number(dx) || 0, Number(dz) || 0),
@@ -9925,6 +10047,7 @@
         for (let i = 0; i < iterations; i += 1) update(.01);
       },
       zoom: (delta) => { cameraDistance = clamp(cameraDistance + delta, 5.1, 13.5); updateCamera(1, true); },
+      waterTraversalProbe,
       slideSurfaceProbe: () => ({ downhill: findSlideTestSurface("downhill"), flat: findSlideTestSurface("flat"), uphill: findSlideTestSurface("uphill") }),
       prepareSlideSurface: (kind) => prepareSlideTestSurface(kind || "downhill"),
       startPreparedSlide: (kind) => {

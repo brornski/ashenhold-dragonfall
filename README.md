@@ -22,6 +22,8 @@ Ashenhold is now one permanent, authored 1,800-metre continent instead of a gene
 
 Captured shrines and the Moonfall graveyard now raise a 20-22 metre animated Warden standard that persists in the active save and appears on the minimap. Normal sprint and super-sprint jumps retain horizontal takeoff velocity through rise and fall, with limited air steering and a dedicated airborne animation pose. Remote party members use the same full animated Warden GLTF as the local player, with server-stable cape, shoulder, marker, and nameplate colors to distinguish each connected Warden.
 
+The Drowned Coast shoreline now supports uninterrupted shallow-water traversal. The Warden can run into, through, and back out of water on one consistent collision surface, including after jumping into a submerged area; water positions are valid recovery and active-save locations instead of one-way movement traps.
+
 Parties now identify only the canonical `ashenhold-continent-v1` world. Invite links carry a room code and auto-join flag but no biome or seed; old links are cleaned in place, old layout-7 saves migrate without regenerating the map, and contradictory world registrations are rejected.
 
 ## Release 5.5: Living world and co-op
