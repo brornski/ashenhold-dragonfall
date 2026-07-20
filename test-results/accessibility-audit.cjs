@@ -24,7 +24,10 @@ async function scan(page, state) {
 (async () => {
   const browser = await chromium.launch({ headless: true });
   const reports = [];
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  // Axe is injected only by this local test harness. Bypass the production CSP in
+  // the isolated audit contexts instead of weakening the shipped page policy.
+  const desktopContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, bypassCSP: true });
+  const page = await desktopContext.newPage();
   await page.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   reports.push(await scan(page, "desktop-title"));
@@ -33,15 +36,16 @@ async function scan(page, state) {
   await page.evaluate(() => window.__ASHENHOLD_TEST__.openSkills());
   reports.push(await scan(page, "desktop-skills"));
   await page.screenshot({ path: "test-results/skills-audit.png", fullPage: true });
-  await page.close();
+  await desktopContext.close();
 
-  const mobile = await browser.newPage({ viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true });
+  const mobileContext = await browser.newContext({ viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true, bypassCSP: true });
+  const mobile = await mobileContext.newPage();
   await mobile.goto(BASE + "?test", { waitUntil: "domcontentloaded", timeout: 90000 });
   await mobile.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   await mobile.evaluate(() => window.__ASHENHOLD_TEST__.start());
   reports.push(await scan(mobile, "mobile-playing"));
   await mobile.screenshot({ path: "test-results/mobile-accessibility-audit.png" });
-  await mobile.close();
+  await mobileContext.close();
   await browser.close();
 
   const violations = reports.flatMap((report) => report.violations.map((violation) => ({ state: report.state, ...violation })));

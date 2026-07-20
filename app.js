@@ -1960,6 +1960,11 @@
       visible: record.root.visible, protected: record.protected,
       canHide: lifecycle.canHide, canRemove: lifecycle.canRemove, size,
       collision: record.colliderLinks.concat(record.platformLinks).length > 0 && record.colliderLinks.concat(record.platformLinks).some((link) => !link.target.disabled),
+      collisionBounds: record.colliderLinks.map((link) => ({
+        x: link.target.x, z: link.target.z, hx: link.target.hx, hz: link.target.hz,
+        minY: link.target.minY, maxY: link.target.maxY, disabled: Boolean(link.target.disabled)
+      })),
+      defaultTransform: cloneAdminTransform(record.defaultTransform),
       meshCount: material.meshCount, color: record.color || material.color,
       texture: record.texture || material.textures[0] || "", textures: material.textures,
       material: material.material
@@ -1971,7 +1976,10 @@
       attackRange: record.enemy.attackRange, attackInterval: record.enemy.attackInterval,
       sightRange: record.enemy.adminSightRange || (record.enemy.kind === "dragon" ? 100 : roleSightProfile(record.enemy).range),
       tracking: record.enemy.adminTracking || 1,
-      state: record.enemy.ai ? record.enemy.ai.state : record.enemy.dead ? "dead" : "active"
+      state: record.enemy.ai ? record.enemy.ai.state : record.enemy.dead ? "dead" : "active",
+      behaviorHome: record.enemy.ai
+        ? { x: record.enemy.ai.home.x, y: record.enemy.ai.home.y, z: record.enemy.ai.home.z }
+        : record.enemy.home ? { x: record.enemy.home.x, y: record.enemy.home.y, z: record.enemy.home.z } : null
     };
     return output;
   }

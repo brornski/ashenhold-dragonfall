@@ -99,6 +99,19 @@ async function stopBridgeProcess(bridge) {
 
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ viewport: { width: 1500, height: 900 }, deviceScaleFactor: 1 });
+    const startupFixture = {
+      schemaVersion: 1, worldSignature: "ashenhold-authored-continent-8",
+      entities: {
+        "location:keep": {
+          type: "location", position: { x: 24, y: 0, z: -68 }, rotationY: .27, scale: { x: 1.12, y: 1, z: 1.12 }
+        }
+      },
+      biomes: {}, enemies: { global: { health: 1.35, damage: 1.2 }, byKind: {} }
+    };
+    await context.route("**/world-overrides.js", (route) => route.fulfill({
+      status: 200, contentType: "text/javascript; charset=utf-8",
+      body: `(function(){"use strict";window.AshenholdWorldOverrides=${JSON.stringify(startupFixture)};})();`
+    }));
     const diagnostics = [];
     const admin = await context.newPage();
     admin.on("pageerror", (error) => diagnostics.push("page: " + error.message));
@@ -113,12 +126,19 @@ async function stopBridgeProcess(bridge) {
       const before = api.info();
       const entities = api.listEntities();
       const modelSlots = api.modelCatalog();
+      const loadedKeep = api.getEntity("location:keep");
+      api.setDocument({
+        schemaVersion: 1, worldSignature: "ashenhold-authored-continent-8",
+        entities: {}, biomes: {}, enemies: { global: {}, byKind: {} }
+      });
+      const resetKeep = api.getEntity("location:keep");
       const forceCandidate = testApi.enemyDebug().find((entry) => !entry.camp) || testApi.enemyDebug()[0];
       const baseModel = entities.find((entry) => entry.type === "model" && ["siegeTower", "bridgePillar"].includes(entry.modelSlot) && entry.id.split(":").length >= 7)
         || entities.find((entry) => entry.type === "model" && entry.modelSlot && entry.id.startsWith("model:") && entry.id.split(":").length >= 7)
         || entities.find((entry) => entry.type === "model" && entry.modelSlot && entry.id.startsWith("model:"));
       const baseChest = entities.find((entry) => entry.type === "chest");
-      const baseEnemy = entities.find((entry) => entry.type === "enemy" && forceCandidate && entry.label === forceCandidate.name)
+      const baseEnemy = entities.find((entry) => entry.type === "enemy" && /^ASHENHOLD KEEP\b/.test(entry.label))
+        || entities.find((entry) => entry.type === "enemy" && forceCandidate && entry.label === forceCandidate.name)
         || entities.find((entry) => entry.type === "enemy" && !/^ASHENHOLD KEEP\b/.test(entry.label))
         || entities.find((entry) => entry.type === "enemy");
       const keep = entities.find((entry) => entry.id === "location:keep");
@@ -131,6 +151,10 @@ async function stopBridgeProcess(bridge) {
       api.setCollision(custom.id, false);
       const hiddenCollision = api.getEntity(custom.id).collision;
       api.setCollision(custom.id, true);
+      const colliderBeforeReplacement = api.getEntity(custom.id).collisionBounds[0];
+      const replacementModelSlot = custom.modelSlot === "rock" ? "crateBig" : "rock";
+      const modelReplacementAccepted = Boolean(api.replaceModel(custom.id, replacementModelSlot));
+      const colliderAfterReplacement = api.getEntity(custom.id).collisionBounds[0];
       const customHideAccepted = Boolean(api.setVisible(custom.id, false));
       const customHidden = api.getEntity(custom.id);
       const customShowAccepted = Boolean(api.setVisible(custom.id, true));
@@ -170,6 +194,22 @@ async function stopBridgeProcess(bridge) {
       const forcedEnemyAfter = testApi.enemyDebug().find((entry) => !entry.camp) || testApi.enemyDebug()[0];
       const enemyAIActive = Boolean(forcedEnemyAfter && forcedEnemyAfter.health > 0 && forcedEnemyAfter.aiState === "combat");
       const keepStrongholdPresent = keepSourceId && testApi.strongholdDebug().some((entry) => entry.id === keepSourceId);
+      const enemyBeforeMove = baseEnemy && api.getEntity(baseEnemy.id);
+      const enemyMoved = enemyBeforeMove && api.setTransform(baseEnemy.id, {
+        position: {
+          x: enemyBeforeMove.transform.position.x + 8,
+          y: enemyBeforeMove.transform.position.y,
+          z: enemyBeforeMove.transform.position.z - 5
+        }
+      });
+      const actorHomeRebased = enemyMoved && enemyMoved.enemy && enemyMoved.enemy.behaviorHome
+        && Math.hypot(enemyMoved.enemy.behaviorHome.x - enemyMoved.transform.position.x, enemyMoved.enemy.behaviorHome.z - enemyMoved.transform.position.z) < .05;
+      const exactEnemy = baseEnemy && api.setEnemy(baseEnemy.id, {
+        health: 77, maxHealth: 123, damage: 19, speed: 4.5,
+        attackRange: 8, attackInterval: 1.4, sightRange: 88, tracking: 1.7
+      });
+      api.setEnemyProfile("global", { health: 1.6, damage: 1.4, speed: 1.2 });
+      const exactAfterGlobalProfile = baseEnemy && api.getEntity(baseEnemy.id).enemy;
       const desert = api.setBiome("desert", { treeDensity: 2, propDensity: 1.1, fogDensity: .0022 });
       api.setEnemyProfile("warg", { health: 1.15, damage: 1.25, sightRange: 1.2, tracking: 1.3 });
       const documentValue = api.getDocument();
@@ -179,14 +219,16 @@ async function stopBridgeProcess(bridge) {
       const redoWorked = api.redo();
       api.select(custom.id);
       return {
-        before, after: api.info(), entities: entities.length,
+        before, after: api.info(), entities: entities.length, loadedKeep, resetKeep,
         categories: Array.from(new Set(entities.map((entry) => entry.category))),
         modelSlots: modelSlots.length, custom, moved, hiddenCollision,
         collisionRestored: api.getEntity(custom.id).collision,
+        colliderReplacement: { colliderBeforeReplacement, colliderAfterReplacement, modelReplacementAccepted, replacementModelSlot },
         safeLifecycle: { customHideAccepted, customHidden, customShowAccepted, customRemoveAccepted, customRemoved },
         gameplayLifecycle: {
           before: gameplayBefore, calls: lifecycleCalls, after: gameplayAfter, unsafeLifecyclePersisted,
-          chestSourceId, chestPositioned, chestOpened, enemyStillRegistered, enemyAttackTelegraph, enemyAIActive, keepSourceId, keepStrongholdPresent
+          chestSourceId, chestPositioned, chestOpened, enemyStillRegistered, enemyAttackTelegraph, enemyAIActive, keepSourceId, keepStrongholdPresent,
+          enemyMoved, actorHomeRebased, exactEnemy, exactAfterGlobalProfile
         },
         desert, warg: documentValue.enemies.byKind.warg,
         documentEntry: documentValue.entities[custom.id], source, report, undoWorked, redoWorked,
@@ -202,10 +244,18 @@ async function stopBridgeProcess(bridge) {
 
     check(runtime.gameState === "playing" && !runtime.titleActive, "Admin mode must boot directly into the editable world.");
     check(runtime.before.simulationPaused, "Admin sandbox must pause simulation by default.");
+    check(Math.abs(runtime.loadedKeep.transform.position.x - 24) < .05 && Math.abs(runtime.loadedKeep.transform.position.z + 68) < .05, "Startup location override did not load into the admin scene.");
+    check(Math.abs(runtime.resetKeep.transform.position.x) < .05 && Math.abs(runtime.resetKeep.transform.position.z + 92) < .05, "Importing an empty document did not restore the canonical authored keep anchor.");
     check(runtime.entities >= 100 && runtime.modelSlots >= 40, "Editor must expose the real scene and asset catalog.");
     for (const category of ["Locations", "Models", "Enemies", "Chests"]) check(runtime.categories.includes(category), `Missing scene category: ${category}`);
     check(runtime.custom && runtime.moved && runtime.documentEntry.type === "custom-model", "Custom model placement and transform persistence failed.");
     check(runtime.hiddenCollision === false && runtime.collisionRestored, "Collider toggle did not follow the edited object.");
+    check(runtime.colliderReplacement.modelReplacementAccepted && runtime.colliderReplacement.colliderBeforeReplacement && runtime.colliderReplacement.colliderAfterReplacement, "Model replacement did not preserve an editable collider.");
+    check(
+      Math.abs(runtime.colliderReplacement.colliderBeforeReplacement.hx - runtime.colliderReplacement.colliderAfterReplacement.hx) > .01
+        || Math.abs(runtime.colliderReplacement.colliderBeforeReplacement.hz - runtime.colliderReplacement.colliderAfterReplacement.hz) > .01,
+      "Model replacement retained the previous model's collision footprint."
+    );
     check(runtime.safeLifecycle.customHideAccepted && runtime.safeLifecycle.customHidden.visible === false && runtime.safeLifecycle.customHidden.collision === false && runtime.safeLifecycle.customShowAccepted, "Decorative/custom Hide and Show must remain functional and collision-coherent.");
     check(runtime.safeLifecycle.customRemoveAccepted && runtime.safeLifecycle.customRemoved, "Custom model Remove must delete its scene registration.");
     check(runtime.fixtureTargets.model && runtime.fixtureTargets.chest && runtime.fixtureTargets.enemy && runtime.fixtureTargets.keep, "Gameplay lifecycle fixture targets were not registered.");
@@ -220,6 +270,8 @@ async function stopBridgeProcess(bridge) {
     check(gameplayLifecycle.enemyStillRegistered, "A protected enemy disappeared from the gameplay roster after rejected Hide/Remove calls.");
     check(gameplayLifecycle.enemyAIActive, "A protected enemy lost its live AI combat state after rejected Hide/Remove calls.");
     check(gameplayLifecycle.keepStrongholdPresent, "A protected location must retain its stronghold gameplay state after rejected Hide/Remove calls.");
+    check(gameplayLifecycle.enemyMoved && gameplayLifecycle.actorHomeRebased, "Moving an actor did not rebase its gameplay home/patrol anchor.");
+    check(gameplayLifecycle.exactEnemy && gameplayLifecycle.exactAfterGlobalProfile.maxHealth === 123 && gameplayLifecycle.exactAfterGlobalProfile.damage === 19, "Global tuning overwrote an exact per-enemy edit instead of preserving instance precedence.");
     check(runtime.desert.treeDensity === 0, "Ember Dunes must remain tree-free through the editor.");
     check(runtime.warg.damage === 1.25 && runtime.warg.tracking === 1.3, "Enemy archetype tuning was not persisted.");
     check(runtime.source.includes("window.AshenholdWorldOverrides") && !runtime.source.includes("__ASHENHOLD_ADMIN__"), "Source export must be data-only.");
@@ -262,8 +314,9 @@ async function stopBridgeProcess(bridge) {
         }
       },
       biomes: { jungle: { ground: "#345a41", fogDensity: .0027, exposure: 1.15, treeDensity: .65, propDensity: .8, grassDensity: .7 } },
-      enemies: { global: {}, byKind: {} }
+      enemies: { global: { health: 2, damage: 1.5, speed: 1.25 }, byKind: {} }
     };
+    await context.unroute("**/world-overrides.js");
     await context.route("**/world-overrides.js", (route) => route.fulfill({
       status: 200, contentType: "text/javascript; charset=utf-8",
       body: `(function(){"use strict";window.AshenholdWorldOverrides=${JSON.stringify(fixture).replace(/</g, "\\u003c")};})();`
@@ -304,7 +357,8 @@ async function stopBridgeProcess(bridge) {
     for (const id of [targets.chest.id, targets.enemy.id, targets.keep.id]) {
       const documentEntry = normalState.overrides.document.entities[id];
       check(documentEntry && !Object.prototype.hasOwnProperty.call(documentEntry, "visible") && !Object.prototype.hasOwnProperty.call(documentEntry, "deleted"), `Unsafe lifecycle flags were not stripped from ${id}.`);
-      check(applied[id]?.visible === true && applied[id]?.canHide === false && applied[id]?.canRemove === false, `Gameplay-owned ${id} did not remain visible and lifecycle-locked.`);
+      check(applied[id]?.canHide === false && applied[id]?.canRemove === false, `Gameplay-owned ${id} did not remain lifecycle-locked.`);
+      if (id !== targets.enemy.id) check(applied[id]?.visible === true, `Gameplay-owned ${id} did not remain visible.`);
     }
     check(normalState.gameplay.chestPositioned === targets.chest.id.replace(/^chest:/, "") && normalState.gameplay.chestOpened, "A published hidden/deleted chest override must be ignored so the chest remains interactable.");
     check(normalState.gameplay.enemyStillRegistered, "A published hidden/deleted enemy override removed the actor from the gameplay roster.");
@@ -321,6 +375,7 @@ async function stopBridgeProcess(bridge) {
         loopbackToken: true, worktreeIdentity: true, originRejected: true, unauthorizedWriteRejected: true, signatureValidated: true,
         prototypeRejected: true, textureTraversalRejected: true, bodyLimit: true,
         adminBoot: true, sceneRegistry: true, customTransform: true, colliderLink: true,
+        canonicalLocationReset: true, actorBehaviorRebased: true, replacementColliderResized: true, enemyTuningPrecedence: true,
         safeDecorativeLifecycle: true, gameplayLifecycleGuardrails: true, gameplayStatePreserved: true,
         treelessDesert: true, enemyTuning: true, history: true, dataOnlyExport: true,
         ordinaryUrlReadOnly: true, ordinaryUrlSkipsEditorAssets: true, productionOverridesApplied: true,
