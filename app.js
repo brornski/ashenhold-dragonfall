@@ -48,7 +48,9 @@
   const START = new THREE.Vector3(0, 0, 182);
   const RUINS = new THREE.Vector3(0, 0, -92);
   const RUNE_HOLLOW = new THREE.Vector3(68, 0, 126);
-  const TITLE_VANTAGE = new THREE.Vector3(0, 0, -60);
+  // The title camera looks north toward Ashenhold Keep. Keep enough distance that
+  // the 80-metre enclosure frames the menu instead of surrounding the camera.
+  const TITLE_VANTAGE = new THREE.Vector3(0, 0, -20);
   const isCoarse = window.matchMedia("(pointer: coarse)").matches;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const launchParams = new URLSearchParams(window.location.search);
@@ -78,8 +80,14 @@
     cryptSmall: { role: "small crypt", targetHeight: 7.5 }, tree: { role: "old-growth tree", targetHeight: 32 },
     treePalm: { role: "coastal tree", targetHeight: 22 }, treePalmBend: { role: "jungle tree", targetHeight: 27 },
     treePineA: { role: "conifer", targetHeight: 27 }, treePineB: { role: "conifer", targetHeight: 30 },
-    pineCrooked: { role: "crooked pine", targetHeight: 24 }
+    pineCrooked: { role: "crooked pine", targetHeight: 24 },
+    ancientTreeA: { role: "ancient broadleaf hero", targetHeight: 58 },
+    ancientTreeB: { role: "ancient broadleaf hero", targetHeight: 64 }
   });
+  const AUTHORED_CASTLE_MATERIAL_IDS = new Set([
+    "bridge", "bridgePillar", "gate", "stairs", "tower", "towerTop",
+    "wall", "wallCorner", "doorway", "rock"
+  ]);
   const SKY_PROFILES = Object.freeze({
     jungle: { id: "verdant-canopy", features: ["humid-cloud-decks", "sun-shafts", "green-gold-haze"], halo: [520, 230, -420], haloScale: 150 },
     shore: { id: "tempest-coast", features: ["storm-shelves", "rain-shafts", "sea-horizon"], halo: [650, 145, -330], haloScale: 120 },
@@ -251,7 +259,8 @@
   let forestReport = {
     profile: "none", total: 0, heroes: 0, chunks: 0, visible: 0,
     nearChunks: 0, farChunks: 0, culledChunks: 0, nearTrees: 0, farTrees: 0,
-    instancedMeshes: 0, heroColliders: 0, maxTrunkDiameter: 0
+    instancedMeshes: 0, heroColliders: 0, maxTrunkDiameter: 0,
+    assetHeroes: 0, proceduralHeroes: 0, heroVariants: []
   };
   let infrastructureReport = { total: 0, byKind: {}, colliders: 0, importedModels: 0 };
   let captureFlags = [];
@@ -1945,15 +1954,21 @@
   }
 
   async function loadVisualAssets() {
+    const curatedBiomeMaterial = realm.biome !== "snowy";
+    const biomeMaterialBase = curatedBiomeMaterial
+      ? "assets/textures/freestylized-biomes/" + realm.biome
+      : "assets/textures/biomes/" + biome.textureId;
+    const biomeMaterialExtension = curatedBiomeMaterial ? ".webp" : ".jpg";
+    visualAssets.biomeMaterialSource = curatedBiomeMaterial ? "freestylized" : "ambientcg";
     const paths = [
       "assets/textures/storm-sky-panorama.jpg",
       "assets/textures/ashen-ground.jpg",
       "assets/textures/ancient-stone.jpg",
       "assets/textures/alpine-cliff.jpg",
       "assets/textures/tundra-grass-v1.jpg",
-      "assets/textures/biomes/" + biome.textureId + "-color.jpg",
-      "assets/textures/biomes/" + biome.textureId + "-normal.jpg",
-      "assets/textures/biomes/" + biome.textureId + "-roughness.jpg"
+      biomeMaterialBase + "-color" + biomeMaterialExtension,
+      biomeMaterialBase + "-normal" + biomeMaterialExtension,
+      biomeMaterialBase + "-roughness" + biomeMaterialExtension
     ];
     const loaded = await Promise.allSettled(paths.map(textureFrom));
     if (loaded[0].status === "fulfilled") {
@@ -1974,12 +1989,12 @@
       if (result.status === "rejected") console.warn("Texture failed to load:", paths[index], result.reason);
     });
     stoneMaterial = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(biome.cliff).lerp(new THREE.Color(0xc1c5c5), .35), map: visualAssets.stone || null, bumpMap: visualAssets.stone || null,
-      bumpScale: .32, roughness: .91, metalness: .025, envMapIntensity: .34
+      color: new THREE.Color(biome.stoneTint || biome.cliff).lerp(new THREE.Color(0xf3f1eb), .72), map: visualAssets.stone || null, bumpMap: visualAssets.stone || null,
+      bumpScale: .18, roughness: .9, metalness: .025, envMapIntensity: .42
     });
     darkStoneMaterial = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(biome.cliff).multiplyScalar(.72), map: visualAssets.stone || null, bumpMap: visualAssets.stone || null,
-      bumpScale: .4, roughness: .96, metalness: .01, envMapIntensity: .22
+      color: new THREE.Color(biome.cliff).lerp(new THREE.Color(0xc8cbc4), .58), map: visualAssets.stone || null, bumpMap: visualAssets.stone || null,
+      bumpScale: .22, roughness: .95, metalness: .01, envMapIntensity: .32
     });
     worldWoodMaterial = new THREE.MeshStandardMaterial({
       color: realm.biome === "desert" ? 0x4c3322 : 0x332b27, map: visualAssets.ground || null, bumpMap: visualAssets.ground || null,
@@ -2118,6 +2133,14 @@
       dngWallGated: dungeon + "wall_gated.glb",
       dngColumn: dungeon + "column.glb"
     });
+    // The detailed foliage pack is reserved for a bounded set of old-growth hero
+    // trees. The instanced procedural forest remains the scalable fallback.
+    if (realm.biome === "jungle" || realm.biome === "shore") {
+      Object.assign(modelPaths, {
+        ancientTreeA: "assets/models/freestylized-foliage/F1_Tree1.glb",
+        ancientTreeB: "assets/models/freestylized-foliage/F1_Tree3.glb"
+      });
+    }
     if (realm.biome === "moon") {
       const graveyard = "assets/models/kenney-graveyard/";
       Object.assign(modelPaths, {
@@ -2278,14 +2301,23 @@
       }
       context.save();
       context.globalCompositeOperation = "screen";
+      context.globalAlpha = .68;
+      context.filter = "blur(22px)";
       for (let index = 0; index < 7; index += 1) {
         const x = 410 + index * 45 + seeded(skySalt + 300 + index) * 70;
         const shaft = context.createLinearGradient(x, 112, x + 80, 390);
-        shaft.addColorStop(0, "rgba(238,215,135,.2)");
+        shaft.addColorStop(0, "rgba(238,215,135,.14)");
+        shaft.addColorStop(.46, "rgba(238,215,135,.065)");
         shaft.addColorStop(1, "rgba(238,215,135,0)");
         context.fillStyle = shaft;
         context.beginPath();
-        context.moveTo(x, 100); context.lineTo(x + 25, 100); context.lineTo(x + 145, 420); context.lineTo(x + 65, 420); context.closePath(); context.fill();
+        context.moveTo(x, 94);
+        context.lineTo(x + 25, 94);
+        context.quadraticCurveTo(x + 84, 255, x + 145, 420);
+        context.lineTo(x + 68, 420);
+        context.quadraticCurveTo(x + 43, 245, x, 94);
+        context.closePath();
+        context.fill();
         featureCount += 1;
       }
       context.restore();
@@ -2695,11 +2727,12 @@
     const key = repeatX.toFixed(1) + "x" + repeatY.toFixed(1);
     if (!boxStoneMaterialCache.has(key)) {
       const material = stoneMaterial.clone();
-      material.color.multiply(importedWoodTint);
+      material.color.lerp(new THREE.Color(0xffffff), .06);
       const map = cloneTiledTexture(visualAssets.stone, repeatX, repeatY);
       material.map = map;
       material.bumpMap = map;
-      material.bumpScale = .34;
+      material.bumpScale = .14;
+      material.envMapIntensity = .44;
       boxStoneMaterialCache.set(key, material);
     }
     return boxStoneMaterialCache.get(key);
@@ -2843,6 +2876,33 @@
     return true;
   }
 
+  function createForestHeroModel(tree, assetId, trunkMaterial, crownMaterial) {
+    const asset = visualAssets.models && visualAssets.models[assetId];
+    const metric = modelScaleRegistry[assetId];
+    if (!asset || !asset.scene || !metric) return null;
+    const root = asset.scene.clone(true);
+    const sourceSpan = Math.max(.01, metric.sx, metric.sz);
+    const targetSpan = Math.max(tree.trunkRadius * 4.8, tree.crownRadius * 2);
+    const scaleY = tree.height / metric.sy;
+    const scaleXZ = targetSpan / sourceSpan;
+    root.name = "Forest hero " + assetId;
+    root.scale.set(scaleXZ * tree.widthX, scaleY, scaleXZ * tree.widthZ);
+    root.position.set(tree.x, tree.y - metric.minY * scaleY, tree.z);
+    root.rotation.order = "YXZ";
+    root.rotation.set(tree.leanX * .45, tree.rotation, tree.leanZ * .45);
+    root.visible = false;
+    root.traverse((object) => {
+      if (!object.isMesh) return;
+      const foliage = /^F1_L/i.test(object.name);
+      object.material = foliage ? crownMaterial : trunkMaterial;
+      object.castShadow = !isCoarse && !foliage;
+      object.receiveShadow = true;
+    });
+    scene.add(root);
+    importedModelInstances += 1;
+    return root;
+  }
+
   function createAncientForest() {
     const profile = FOREST_PROFILES[realm.biome] || FOREST_PROFILES.jungle;
     const target = isCoarse ? profile.coarse : profile.desktop;
@@ -2865,8 +2925,28 @@
         ? lerp(2.3, realm.biome === "jungle" ? 6.7 : 5.2, seeded(roll + 5))
         : (.38 + seeded(roll + 5) * .78) * profile.trunk;
       const crownRadius = hero ? height * (.18 + seeded(roll + 6) * .08) : height * (.14 + seeded(roll + 6) * .065);
-      placements.push({ x, y, z, height, trunkRadius, crownRadius, hero, rotation: seeded(roll + 7) * Math.PI * 2 });
+      placements.push({
+        x, y, z, height, trunkRadius, crownRadius, hero,
+        rotation: seeded(roll + 7) * Math.PI * 2,
+        widthX: .84 + seeded(roll + 8) * .32,
+        widthZ: .84 + seeded(roll + 9) * .32,
+        leanX: (seeded(roll + 10) - .5) * .09,
+        leanZ: (seeded(roll + 11) - .5) * .09,
+        trunkTone: .88 + seeded(roll + 12) * .2,
+        crownTone: .88 + seeded(roll + 13) * .18,
+        assetId: null
+      });
     }
+    const heroAssetIds = profile.crown === "broad"
+      ? ["ancientTreeA", "ancientTreeB"].filter((id) => visualAssets.models && visualAssets.models[id] && modelScaleRegistry[id])
+      : [];
+    let assignedAssetHeroes = 0;
+    const assetHeroBudget = isCoarse ? 14 : 36;
+    placements.forEach((tree) => {
+      if (!tree.hero || !heroAssetIds.length || assignedAssetHeroes >= assetHeroBudget) return;
+      tree.assetId = heroAssetIds[assignedAssetHeroes % heroAssetIds.length];
+      assignedAssetHeroes += 1;
+    });
     const chunkSize = 180;
     const buckets = new Map();
     placements.forEach((tree) => {
@@ -2881,18 +2961,34 @@
       : profile.crown === "crystal" ? new THREE.OctahedronGeometry(1, 0)
       : profile.crown === "dead" ? new THREE.ConeGeometry(.45, 1, 5)
       : new THREE.SphereGeometry(1, isCoarse ? 5 : 7, isCoarse ? 4 : 6);
-    const farGeometry = new THREE.ConeGeometry(.72, 1, 5);
+    const farGeometry = profile.crown === "conifer" ? new THREE.ConeGeometry(.8, 1, 5)
+      : profile.crown === "crystal" ? new THREE.OctahedronGeometry(1, 0)
+      : profile.crown === "dead" ? new THREE.ConeGeometry(.48, 1, 5)
+      : new THREE.SphereGeometry(1, 5, 4);
     const trunkMaterial = new THREE.MeshStandardMaterial({ color: profile.bark, roughness: 1, metalness: 0 });
     const crownMaterial = new THREE.MeshStandardMaterial({
       color: profile.leaf, roughness: .96, metalness: profile.crown === "crystal" ? .2 : 0,
       emissive: profile.crown === "crystal" ? 0x26264d : 0x000000,
       emissiveIntensity: profile.crown === "crystal" ? .35 : 0
     });
+    const heroTrunkMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(profile.bark).lerp(new THREE.Color(0xffffff), .44),
+      roughness: .96, metalness: 0, vertexColors: false
+    });
+    const heroCrownMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(profile.leaf).lerp(new THREE.Color(0xb8c5ad), .26),
+      emissive: new THREE.Color(profile.leaf).multiplyScalar(.12), emissiveIntensity: .22,
+      roughness: .92, metalness: 0, vertexColors: false, side: THREE.DoubleSide
+    });
     const farMaterial = new THREE.MeshLambertMaterial({ color: new THREE.Color(profile.leaf).multiplyScalar(.72) });
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
+    const euler = new THREE.Euler(0, 0, 0, "YXZ");
+    const instanceTone = new THREE.Color();
     forestChunks = [];
     let heroColliderBudget = isCoarse ? 12 : 28;
+    let assetHeroCount = 0;
+    const assetHeroVariants = new Set();
     const colliderCountBefore = colliders.length;
     buckets.forEach((bucket) => {
       const centerX = -HALF_WORLD + (bucket.gx + .5) * chunkSize;
@@ -2900,25 +2996,53 @@
       const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, bucket.trees.length);
       const crownMesh = new THREE.InstancedMesh(crownGeometry, crownMaterial, bucket.trees.length);
       const farMesh = new THREE.InstancedMesh(farGeometry, farMaterial, bucket.trees.length);
+      const heroModels = [];
+      bucket.trees.forEach((tree) => {
+        if (!tree.assetId) return;
+        const heroModel = createForestHeroModel(tree, tree.assetId, heroTrunkMaterial, heroCrownMaterial);
+        if (!heroModel) {
+          tree.assetId = null;
+          return;
+        }
+        heroModels.push(heroModel);
+        assetHeroCount += 1;
+        assetHeroVariants.add(tree.assetId);
+      });
       bucket.trees.forEach((tree, index) => {
-        quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), tree.rotation);
+        euler.set(tree.leanX, tree.rotation, tree.leanZ, "YXZ");
+        quaternion.setFromEuler(euler);
+        const proceduralScale = tree.assetId ? .0001 : 1;
         matrix.compose(
           new THREE.Vector3(tree.x - centerX, tree.y + tree.height * .5, tree.z - centerZ), quaternion,
-          new THREE.Vector3(tree.trunkRadius / .65, tree.height, tree.trunkRadius / .65)
+          new THREE.Vector3(
+            tree.trunkRadius / .65 * tree.widthX * proceduralScale,
+            tree.height * proceduralScale,
+            tree.trunkRadius / .65 * tree.widthZ * proceduralScale
+          )
         );
         trunkMesh.setMatrixAt(index, matrix);
+        instanceTone.setRGB(tree.trunkTone, tree.trunkTone, tree.trunkTone);
+        trunkMesh.setColorAt(index, instanceTone);
         const crownHeight = profile.crown === "dead" ? tree.height * .42 : tree.height * (tree.hero ? .52 : .46);
         const crownY = tree.y + tree.height * (profile.crown === "conifer" ? .7 : .78);
         matrix.compose(
           new THREE.Vector3(tree.x - centerX, crownY, tree.z - centerZ), quaternion,
-          new THREE.Vector3(tree.crownRadius, crownHeight, tree.crownRadius)
+          new THREE.Vector3(
+            tree.crownRadius * tree.widthX * proceduralScale,
+            crownHeight * proceduralScale,
+            tree.crownRadius * tree.widthZ * proceduralScale
+          )
         );
         crownMesh.setMatrixAt(index, matrix);
+        instanceTone.setRGB(tree.crownTone, tree.crownTone, tree.crownTone);
+        crownMesh.setColorAt(index, instanceTone);
         matrix.compose(
-          new THREE.Vector3(tree.x - centerX, tree.y + tree.height * .5, tree.z - centerZ), quaternion,
-          new THREE.Vector3(Math.max(tree.trunkRadius * 1.5, tree.crownRadius * .72), tree.height, Math.max(tree.trunkRadius * 1.5, tree.crownRadius * .72))
+          new THREE.Vector3(tree.x - centerX, crownY, tree.z - centerZ), quaternion,
+          new THREE.Vector3(tree.crownRadius * tree.widthX, crownHeight, tree.crownRadius * tree.widthZ)
         );
         farMesh.setMatrixAt(index, matrix);
+        instanceTone.setRGB(tree.crownTone, tree.crownTone, tree.crownTone);
+        farMesh.setColorAt(index, instanceTone);
         if (tree.hero && heroColliderBudget > 0) {
           addCollider(tree.x, tree.z, tree.trunkRadius * .72, tree.trunkRadius * .72, 0, tree.y, tree.y + tree.height);
           heroColliderBudget -= 1;
@@ -2932,21 +3056,31 @@
         mesh.receiveShadow = true;
         scene.add(mesh);
       });
+      if (trunkMesh.instanceColor) trunkMesh.instanceColor.needsUpdate = true;
+      if (crownMesh.instanceColor) crownMesh.instanceColor.needsUpdate = true;
+      if (farMesh.instanceColor) farMesh.instanceColor.needsUpdate = true;
       trunkMesh.castShadow = !isCoarse;
       crownMesh.castShadow = false;
       farMesh.castShadow = false;
-      forestChunks.push({ centerX, centerZ, count: bucket.trees.length, nearMeshes: [trunkMesh, crownMesh], farMesh });
+      forestChunks.push({
+        centerX, centerZ, radius: chunkSize * Math.SQRT1_2, count: bucket.trees.length,
+        nearMeshes: [trunkMesh, crownMesh].concat(heroModels), farMesh
+      });
     });
+    const totalHeroes = placements.filter((tree) => tree.hero).length;
     forestReport = {
       profile: profile.id, total: placements.length,
-      heroes: placements.filter((tree) => tree.hero).length,
+      heroes: totalHeroes,
+      assetHeroes: assetHeroCount,
+      proceduralHeroes: Math.max(0, totalHeroes - assetHeroCount),
+      heroVariants: Array.from(assetHeroVariants),
       chunks: forestChunks.length, visible: 0,
       nearChunks: 0, farChunks: 0, culledChunks: forestChunks.length,
       nearTrees: 0, farTrees: 0,
       instancedMeshes: forestChunks.length * 3,
       heroColliders: colliders.length - colliderCountBefore,
       maxTrunkDiameter: placements.reduce((maximum, tree) => Math.max(maximum, tree.trunkRadius * 2), 0),
-      potentialDrawCalls: forestChunks.length * 3
+      potentialDrawCalls: forestChunks.length * 3 + assetHeroCount * 2
     };
     updateAncientForestVisibility(true);
   }
@@ -2966,7 +3100,8 @@
     let nearTrees = 0;
     let farTrees = 0;
     forestChunks.forEach((chunk) => {
-      const distance = Math.hypot(chunk.centerX - focus.x, chunk.centerZ - focus.z);
+      const centerDistance = Math.hypot(chunk.centerX - focus.x, chunk.centerZ - focus.z);
+      const distance = Math.max(0, centerDistance - (chunk.radius || 0));
       const near = distance < nearDistance;
       const far = !near && distance < farDistance;
       chunk.nearMeshes.forEach((mesh) => { mesh.visible = near; });
@@ -3039,6 +3174,16 @@
     scene.add(mesh);
   }
 
+  function tunedAuthoredCastleMaterial(material) {
+    const tuned = material && material.clone ? material.clone() : stoneMaterial.clone();
+    if (tuned.color) tuned.color.lerp(importedStoneTint, .16);
+    if ("roughness" in tuned) tuned.roughness = Math.max(.72, Number(tuned.roughness) || 0);
+    if ("metalness" in tuned) tuned.metalness = Math.min(.18, Number(tuned.metalness) || 0);
+    if ("envMapIntensity" in tuned) tuned.envMapIntensity = .42;
+    tuned.needsUpdate = true;
+    return tuned;
+  }
+
   function importedModel(id, x, z, scale, rotation, yOffset, collider, baseY) {
     const asset = visualAssets.models && visualAssets.models[id];
     if (!asset) return null;
@@ -3054,16 +3199,23 @@
     const wooden = id === "catapult" || id === "siegeTower";
     const ironwork = id === "gate";
     const palette = id === "tree" ? worldFoliageMaterial : wooden ? worldWoodMaterial : ironwork ? worldIronMaterial : darkStoneMaterial;
+    const preserveAuthoredCastleMaterial = AUTHORED_CASTLE_MATERIAL_IDS.has(id);
     let meshIndex = 0;
     root.traverse((object) => {
       if (!object.isMesh) return;
       object.castShadow = !isCoarse;
       object.receiveShadow = true;
-      object.material = palette.clone();
-      if (object.material.color) {
-        if (palette === darkStoneMaterial) object.material.color.multiply(importedStoneTint);
-        else if (palette === worldWoodMaterial) object.material.color.multiply(importedWoodTint);
-        object.material.color.multiplyScalar(.88 + (meshIndex % 4) * .035);
+      if (preserveAuthoredCastleMaterial) {
+        object.material = Array.isArray(object.material)
+          ? object.material.map(tunedAuthoredCastleMaterial)
+          : tunedAuthoredCastleMaterial(object.material);
+      } else {
+        object.material = palette.clone();
+        if (object.material.color) {
+          if (palette === darkStoneMaterial) object.material.color.multiply(importedStoneTint);
+          else if (palette === worldWoodMaterial) object.material.color.multiply(importedWoodTint);
+          object.material.color.multiplyScalar(.88 + (meshIndex % 4) * .035);
+        }
       }
       meshIndex += 1;
     });
@@ -9248,6 +9400,7 @@
         landmarksDiscovered: landmarks.filter((landmark) => landmark.discovered).length,
         landmarksRevealed: landmarks.filter((landmark) => landmark.revealed).length,
         pbrBiomeMaterial: Boolean(visualAssets.biomeGround && visualAssets.biomeNormal && visualAssets.biomeRoughness),
+        biomeMaterialSource: visualAssets.biomeMaterialSource || "fallback",
         animatedWarden: Boolean(player.modelMixer), biomeGeometry: worldProfile.geometry,
         biomeEnemyModels: [worldProfile.lightEnemy[0], worldProfile.heavyEnemy[0]],
         biomeEnemyNames: [worldProfile.lightEnemy[1], worldProfile.heavyEnemy[1]],
