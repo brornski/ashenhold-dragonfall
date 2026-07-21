@@ -140,7 +140,7 @@ function inspectWorldOverrides(source) {
 }
 
 async function run() {
-  const [root, app, worldOverrides, monster, warden, normal, desertSkybox, moonSkybox, shoreSkybox, snowySkybox, mountainSkybox, manifest, ...moduleResponses] = await Promise.all([
+  const [root, app, worldOverrides, monster, warden, normal, desertSkybox, moonSkybox, shoreSkybox, snowySkybox, mountainSkybox, treeLod, treeGeometry, treeTexture, manifest, ...moduleResponses] = await Promise.all([
     request("/"),
     request("/app.js"),
     request("/world-overrides.js"),
@@ -152,6 +152,9 @@ async function run() {
     request("/assets/textures/skyboxes/drowned-coast-skybox-2k.png"),
     request("/assets/textures/skyboxes/frostbound-skyline-2k.png"),
     request("/assets/textures/skyboxes/skysunder-graveyard-skybox.jpg"),
+    request("/assets/models/tree-lods/tree_LOD0.gltf"),
+    request("/assets/models/tree-lods/tree_LOD0.bin"),
+    request("/assets/models/tree-lods/textures/leaves-color.webp"),
     request("/manifest.json"),
     ...multiplayerModules.map(([, path]) => request(path))
   ]);
@@ -200,6 +203,9 @@ async function run() {
     drownedCoastSkybox200: shoreSkybox.status === 200 && Number(shoreSkybox.headers["content-length"] || shoreSkybox.body.length) > 800000,
     frostboundSkybox200: snowySkybox.status === 200 && Number(snowySkybox.headers["content-length"] || snowySkybox.body.length) > 700000,
     skysunderSkybox200: mountainSkybox.status === 200 && Number(mountainSkybox.headers["content-length"] || mountainSkybox.body.length) > 140000,
+    treeLodPack200: treeLod.status === 200 && /"meshes"\s*:/.test(treeLod.body)
+      && treeGeometry.status === 200 && Number(treeGeometry.headers["content-length"] || treeGeometry.body.length) > 900000
+      && treeTexture.status === 200 && Number(treeTexture.headers["content-length"] || treeTexture.body.length) > 80000,
     manifest200: manifest.status === 200 && /Ashenhold/.test(manifest.body),
     secureOrigin: baseUrl.protocol === "https:",
     forbiddenFiles404: forbidden.every((result) => result.status === 404),
@@ -231,6 +237,9 @@ async function run() {
       normal: normal.status,
       desertSkybox: desertSkybox.status,
       moonSkybox: moonSkybox.status,
+      treeLod: treeLod.status,
+      treeGeometry: treeGeometry.status,
+      treeTexture: treeTexture.status,
       manifest: manifest.status,
       multiplayerModules: Object.fromEntries(Object.entries(moduleResults).map(([name, result]) => [name, result.status])),
       forbidden: Object.fromEntries(forbidden.map((result) => [result.path, result.status])),

@@ -98,7 +98,7 @@ async function boot(context, query, label) {
 }
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.ASHENHOLD_CHROMIUM_EXECUTABLE || undefined });
   const mainContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const legacyContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   let primary;
@@ -206,9 +206,17 @@ async function boot(context, query, label) {
       zonesHaveAuthoredCoordinates: zoneCentersValid && new Set(primaryZones.map((zone) => `${zone.center.x},${zone.center.z}`)).size === BIOMES.length,
       biomeDerivedFromPosition: traversedZones.length === BIOMES.length && traversedZones.every((entry) => normalizeBiome(entry.hookBiome) === entry.expected
         && normalizeBiome(entry.activeBiome) === entry.expected && entry.documentToken === documentToken),
-      emberDunesHaveZeroTrees: Boolean(primary.snapshot.world?.treePopulation?.total > 0
+      treeLodForestBiomePolicy: Boolean(primary.snapshot.world?.treePopulation?.total > 0
+        && primary.snapshot.world.forest?.profile === "owner-tree-lod-forest-v1"
+        && primary.snapshot.world.forest?.generatedSeed === false
+        && primary.snapshot.world.forest?.byBiome?.shore > 0
+        && primary.snapshot.world.forest?.byBiome?.jungle > 0
+        && primary.snapshot.world.forest?.byBiome?.snowy > 0
+        && primary.snapshot.world.forest?.byBiome?.mountains > 0
         && primary.snapshot.world.treePopulation.byBiome?.desert === 0
         && primary.snapshot.world.forest?.byBiome?.desert === 0
+        && primary.snapshot.world.forest?.byBiome?.moon === 0
+        && primary.snapshot.world.treePopulation.bySource?.["owner-tree-lod-pack"] === primary.snapshot.world.forest?.total
         && primary.snapshot.world.treePopulation.treelessBiomes?.includes("desert")
         && primary.snapshot.world.props?.byKind?.cactus > 0),
       noPublicSeedOrNextRealm: !("realm" in primary.snapshot) && !containsForbiddenPublicKey(primary.snapshot),

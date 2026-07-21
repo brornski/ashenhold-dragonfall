@@ -117,6 +117,14 @@ The previous Quaternius Warrior asset remains preserved in the repository under 
 - The source FBX meshes were converted to GLB, welded, and quantized for the browser build. Source textures were omitted so Ashenhold can apply its existing biome palette without adding the pack's 19 MB normal map to startup transfer.
 - FreeStylized grants royalty-free commercial and non-commercial project use and restricts standalone redistribution of its source content. Local source, adaptation, and terms notice: `assets/models/freestylized-foliage/LICENSE-FREESTYLIZED.md`.
 
+## User-supplied tree LOD forest
+
+- Runtime directory: `assets/models/tree-lods/`.
+- Source archive: `tree_lods.zip`, supplied by the project owner with three GLB levels of detail and no original author or license metadata.
+- The source geometry is retained at approximately 21,512, 8,968, and 4,346 triangles per tree. Repeated embedded textures were deduplicated and the two runtime color maps were transcoded to WebP.
+- The supplied tree is instantiated only in Drowned Coast, Verdant Ruins, Frostbound Wilds, and Sky-Sunder Peaks. Ember Dunes and Moonfall are excluded from this forest layer.
+- Local provenance and authorization notice: `assets/models/tree-lods/LICENSE-USER-SUPPLIED.md`.
+
 ## Project-created visual assets
 
 The sky, terrain, stone, cliff, interface artwork, procedural geometry, shaders, and synthesized audio in this repository were created or generated for the Ashenhold project and are shipped locally. The user-provided `assets/dragons.png` remains a local design reference only; it is no longer used by the game and is excluded from production deployments.

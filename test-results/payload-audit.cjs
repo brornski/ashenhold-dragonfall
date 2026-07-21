@@ -27,7 +27,7 @@ function isApprovedWssBackend(url) {
 }
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.ASHENHOLD_CHROMIUM_EXECUTABLE || undefined });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   const diagnostics = [];

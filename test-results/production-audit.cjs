@@ -29,7 +29,7 @@ async function boot(context, diagnostics, suffix) {
 }
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.ASHENHOLD_CHROMIUM_EXECUTABLE || undefined });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const diagnostics = { errors: [], warnings: [], http: [] };
   const zoneMatrix = [];
@@ -88,11 +88,15 @@ async function boot(context, diagnostics, suffix) {
         playerScaledCastle: zoneSnapshot.world.canonicalScale.structures.wall.height >= 9 && zoneSnapshot.world.canonicalScale.structures.wall.height <= 15
           && zoneSnapshot.world.canonicalScale.structures.gate.height >= 7 && zoneSnapshot.world.canonicalScale.structures.gate.height <= 10
           && zoneSnapshot.world.canonicalScale.structures.tower.height >= 18 && zoneSnapshot.world.canonicalScale.structures.tower.height <= 32,
-        proceduralForestRemoved: zoneSnapshot.world.forest.enabled === false && zoneSnapshot.world.forest.total === 0
-          && zoneSnapshot.world.forest.chunks === 0 && zoneSnapshot.world.forest.heroColliders === 0,
-        proceduralForestRenderStateCleared: zoneSnapshot.world.forest.visible === 0 && zoneSnapshot.world.forest.nearChunks === 0
-          && zoneSnapshot.world.forest.farChunks === 0 && zoneSnapshot.world.forest.culledChunks === 0
-          && zoneSnapshot.world.forest.instancedMeshes === 0,
+        ownerTreeLodForest: zoneSnapshot.world.forest.enabled && zoneSnapshot.world.forest.profile === "owner-tree-lod-forest-v1"
+          && zoneSnapshot.world.forest.fixedContinent && zoneSnapshot.world.forest.generatedSeed === false
+          && zoneSnapshot.world.forest.total >= 2000 && zoneSnapshot.world.forest.instancedMeshes > 0,
+        biomeTreePolicy: (["desert", "moon"].includes(biome) ? zoneSnapshot.world.forest.byBiome[biome] === 0
+          : zoneSnapshot.world.forest.byBiome[biome] > 0)
+          && zoneSnapshot.world.forest.byBiome.desert === 0 && zoneSnapshot.world.forest.byBiome.moon === 0,
+        treeLodRenderState: zoneSnapshot.world.forest.visible > 0
+          && zoneSnapshot.world.forest.nearChunks + zoneSnapshot.world.forest.midChunks + zoneSnapshot.world.forest.farChunks > 0
+          && zoneSnapshot.world.forest.lodTriangles.length === 3,
         infrastructureMicroLandmarks: zoneSnapshot.world.infrastructure.total >= 24 && Object.keys(zoneSnapshot.world.infrastructure.byKind).length >= 4,
         biomeSkyTransition: zoneSnapshot.world.skyProfile.features.length >= 3 && zoneSnapshot.world.skyProfile.featureCount > 0
           && (zoneSnapshot.world.skyProfile.gradientStops >= 5 || (zoneSnapshot.world.skyProfile.projection === "equirectangular"
@@ -404,8 +408,10 @@ async function boot(context, diagnostics, suffix) {
     reducedCoarseWater: mobile.snapshot.world.water.tier === "coarse" && mobile.snapshot.world.water.reducedMotion
       && !mobile.snapshot.world.water.animated && mobile.snapshot.world.water.rippleCapacity === 0
       && mobile.snapshot.world.water.activeRipples === 0,
-    proceduralForestDisabledOnCoarse: mobile.snapshot.world.forest.enabled === false
-      && mobile.snapshot.world.forest.total === 0 && mobile.snapshot.world.forest.instancedMeshes === 0
+    coarseTreeLodForest: mobile.snapshot.world.forest.enabled && mobile.snapshot.world.forest.profile === "owner-tree-lod-forest-v1"
+      && mobile.snapshot.world.forest.total >= 900 && mobile.snapshot.world.forest.total < 1200
+      && mobile.snapshot.world.forest.instancedMeshes > 0
+      && mobile.snapshot.world.forest.byBiome.desert === 0 && mobile.snapshot.world.forest.byBiome.moon === 0
   };
   await mobilePage.screenshot({ path: "test-results/mobile-landscape.png", timeout: 90000 });
   await mobileContext.close();
@@ -418,7 +424,8 @@ async function boot(context, diagnostics, suffix) {
     uniqueEnemyRosters: new Set(zoneMatrix.map((zone) => zone.enemyModels.join("/"))).size === 6,
     uniqueBiomeSkies: new Set(zoneMatrix.map((zone) => zone.sky.id)).size === 6
       && new Set(zoneMatrix.map((zone) => zone.sky.signature)).size === 6,
-    proceduralForestDisabledAcrossZones: zoneMatrix.every((zone) => zone.forest.profile === "procedural-forest-disabled" && zone.forest.total === 0),
+    ownerTreeLodForestAcrossZones: zoneMatrix.every((zone) => zone.forest.profile === "owner-tree-lod-forest-v1"
+      && zone.forest.total >= 2000 && zone.forest.byBiome.desert === 0 && zone.forest.byBiome.moon === 0),
     progression: Object.values(progression.checks).every(Boolean),
     combat: Object.values(combat.checks).every(Boolean),
     strongholds: Object.values(strongholds.checks).every(Boolean),

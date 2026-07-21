@@ -3,7 +3,7 @@ const BASE = (process.env.ASHENHOLD_BASE || "http://127.0.0.1:4173/").replace(/\
 const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components/tree/b182d81bff64531e584f50d71f046ae05fab3c87/src/components/waterFloor";
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.ASHENHOLD_CHROMIUM_EXECUTABLE || undefined });
   const page = await browser.newPage({ viewport: { width: 1600, height: 960 }, deviceScaleFactor: 1 });
   const consoleErrors = [];
   const consoleWarnings = [];
@@ -266,13 +266,20 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
     playerScaledCastles: titleSnapshot.world.canonicalScale.structures.wall.height >= 9 && titleSnapshot.world.canonicalScale.structures.wall.height <= 15
       && titleSnapshot.world.canonicalScale.structures.gate.height >= 7 && titleSnapshot.world.canonicalScale.structures.gate.height <= 10
       && titleSnapshot.world.canonicalScale.structures.tower.height >= 18 && titleSnapshot.world.canonicalScale.structures.tower.height <= 32,
-    canonicalRegistryMeasured: ["wall", "gate", "tower", "tavern", "homeA", "homeB", "ruinedHouse", "ancientTreeA", "ancientTreeB"]
+    canonicalRegistryMeasured: ["wall", "gate", "tower", "tavern", "homeA", "homeB", "ruinedHouse", "ancientTreeA", "ancientTreeB", "treeLod0", "treeLod1", "treeLod2"]
       .every((id) => worldDebug.scales[id]?.world?.height > 0)
       && worldDebug.scales.wall.targetHeight === 12.5 && worldDebug.scales.wall.verticalScale < worldDebug.scales.wall.scale,
-    proceduralForestsRemoved: titleSnapshot.world.forest.enabled === false && titleSnapshot.world.forest.total === 0
-      && titleSnapshot.world.forest.chunks === 0 && titleSnapshot.world.forest.heroColliders === 0,
-    proceduralForestRenderStateCleared: titleSnapshot.world.forest.instancedMeshes === 0
-      && titleSnapshot.world.forest.visible === 0 && worldDebug.forest.lodChunks.length === 0,
+    ownerTreeLodForest: titleSnapshot.world.forest.enabled && titleSnapshot.world.forest.profile === "owner-tree-lod-forest-v1"
+      && titleSnapshot.world.forest.fixedContinent && titleSnapshot.world.forest.generatedSeed === false
+      && titleSnapshot.world.forest.total >= 2000 && titleSnapshot.world.forest.byBiome.jungle > 0
+      && titleSnapshot.world.forest.byBiome.shore > 0 && titleSnapshot.world.forest.byBiome.snowy > 0
+      && titleSnapshot.world.forest.byBiome.mountains > 0 && titleSnapshot.world.forest.byBiome.desert === 0
+      && titleSnapshot.world.forest.byBiome.moon === 0 && titleSnapshot.world.treePopulation.bySource["owner-tree-lod-pack"] === titleSnapshot.world.forest.total,
+    treeLodRenderAndCulling: titleSnapshot.world.forest.instancedMeshes > 0
+      && titleSnapshot.world.forest.visible > 0 && titleSnapshot.world.forest.culledChunks > 0
+      && titleSnapshot.world.forest.lodTriangles.length === 3 && worldDebug.forest.lodChunks.length === titleSnapshot.world.forest.chunks
+      && worldDebug.forest.lodChunks.some((chunk) => chunk.lod === "LOD0")
+      && worldDebug.forest.lodChunks.some((chunk) => chunk.lod === "LOD2"),
     infrastructureMicroLandmarks: titleSnapshot.world.infrastructure.total >= 24
       && Object.keys(titleSnapshot.world.infrastructure.byKind).length >= 4
       && worldDebug.infrastructure.length === titleSnapshot.world.infrastructure.total,

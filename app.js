@@ -298,10 +298,14 @@
   const STYLIZED_WATER_STYLE = "cortiz-anime-voronoi";
   const WATER_RIPPLE_CAPACITY = isCoarse ? 0 : 6;
   const TREELESS_BIOME_IDS = new Set(["desert"]);
+  const TREE_LOD_FOREST_BIOME_IDS = Object.freeze(["shore", "jungle", "snowy", "mountains"]);
+  const TREE_LOD_FOREST_EXCLUDED_BIOME_IDS = new Set(["desert", "moon"]);
+  const TREE_LOD_FOREST_ENABLED = true;
   const PROCEDURAL_TREE_GENERATION_ENABLED = false;
+  const TREE_LOD_MODEL_IDS = new Set(["treeLod0", "treeLod1", "treeLod2"]);
   const TREE_MODEL_IDS = new Set([
     "tree", "treePalm", "treePalmBend", "treePineA", "treePineB",
-    "pineCrooked", "ancientTreeA", "ancientTreeB"
+    "pineCrooked", "ancientTreeA", "ancientTreeB", "treeLod0", "treeLod1", "treeLod2"
   ]);
   const TREE_PROP_KINDS = new Set(["snowPine", "broadleaf", "palm", "windPine", "darkPine"]);
 
@@ -319,6 +323,10 @@
 
   function biomeAllowsTreesAt(x, z) {
     return !TREELESS_BIOME_IDS.has(biomeIdAt(x, z));
+  }
+
+  function biomeAllowsTreeLodForestAt(x, z) {
+    return TREE_LOD_FOREST_BIOME_IDS.includes(biomeIdAt(x, z));
   }
 
   function waterLevelAt(x, z) {
@@ -484,8 +492,8 @@
   let biomePropMeshes = [];
   let forestVisibilityTimer = 0;
   let forestReport = {
-    profile: "procedural-forest-disabled", enabled: false, total: 0, heroes: 0, chunks: 0, visible: 0,
-    nearChunks: 0, farChunks: 0, culledChunks: 0, nearTrees: 0, farTrees: 0,
+    profile: "owner-tree-lods-pending", enabled: false, total: 0, heroes: 0, chunks: 0, visible: 0,
+    nearChunks: 0, midChunks: 0, farChunks: 0, culledChunks: 0, nearTrees: 0, midTrees: 0, farTrees: 0,
     instancedMeshes: 0, heroColliders: 0, maxTrunkDiameter: 0,
     assetHeroes: 0, proceduralHeroes: 0, heroVariants: []
   };
@@ -2628,8 +2636,7 @@
       const density = stored.treeDensity === undefined ? 1 : stored.treeDensity;
       const count = Math.min(chunk.baseCount, Math.max(0, Math.round(chunk.baseCount * density / chunk.baseDensity)));
       chunk.count = count;
-      chunk.nearMeshes.forEach((mesh) => { if (mesh.isInstancedMesh) mesh.count = count; });
-      if (chunk.farMesh) chunk.farMesh.count = count;
+      (chunk.lodMeshes || []).forEach((meshes) => meshes.forEach((mesh) => { if (mesh.isInstancedMesh) mesh.count = count; }));
     });
     biomePropMeshes.filter((entry) => entry.biomeId === id).forEach((entry) => {
       const density = stored.propDensity === undefined ? 1 : stored.propDensity;
@@ -4108,7 +4115,10 @@
     // trees. The instanced procedural forest remains the scalable fallback.
     Object.assign(modelPaths, {
       ancientTreeA: "assets/models/freestylized-foliage/F1_Tree1.glb",
-      ancientTreeB: "assets/models/freestylized-foliage/F1_Tree3.glb"
+      ancientTreeB: "assets/models/freestylized-foliage/F1_Tree3.glb",
+      treeLod0: "assets/models/tree-lods/tree_LOD0.gltf",
+      treeLod1: "assets/models/tree-lods/tree_LOD1.gltf",
+      treeLod2: "assets/models/tree-lods/tree_LOD2.gltf"
     });
     const graveyard = "assets/models/kenney-graveyard/";
     Object.assign(modelPaths, {
@@ -5245,12 +5255,12 @@
   }
 
   const FOREST_PROFILES = Object.freeze({
-    jungle: { id: "primeval-broadleaf", desktop: 3600, coarse: 2200, minHeight: 18, maxHeight: 38, heroMin: 50, heroMax: 82, heroChance: .016, trunk: 1.28, crown: "broad", leaf: 0x214d2d, bark: 0x2b2119 },
-    snowy: { id: "ancient-conifer", desktop: 3000, coarse: 1800, minHeight: 16, maxHeight: 34, heroMin: 43, heroMax: 68, heroChance: .013, trunk: 1.05, crown: "conifer", leaf: 0x526a68, bark: 0x332c29 },
-    shore: { id: "storm-coast-grove", desktop: 2500, coarse: 1500, minHeight: 15, maxHeight: 31, heroMin: 40, heroMax: 62, heroChance: .012, trunk: .92, crown: "broad", leaf: 0x3b6650, bark: 0x3c2c21 },
-    mountains: { id: "wind-carved-pine", desktop: 2200, coarse: 1400, minHeight: 13, maxHeight: 29, heroMin: 38, heroMax: 58, heroChance: .011, trunk: .9, crown: "conifer", leaf: 0x40574c, bark: 0x332b29 },
-    desert: { id: "treeless-dunes", desktop: 0, coarse: 0, minHeight: 0, maxHeight: 0, heroMin: 0, heroMax: 0, heroChance: 0, trunk: 0, crown: "none", leaf: 0x73543e, bark: 0x503727 },
-    moon: { id: "umbra-deadwood", desktop: 2200, coarse: 1200, minHeight: 11, maxHeight: 27, heroMin: 35, heroMax: 57, heroChance: .012, trunk: 1.06, crown: "crystal", leaf: 0x686a94, bark: 0x282638 }
+    shore: { id: "storm-coast-tree-lods", desktop: 430, coarse: 190, minHeight: 20, maxHeight: 34, giantHeight: 42, giantChance: .035, width: .88, spacing: 11, slope: 1.45, leafTint: 0x8cae93, barkTint: 0x9b8978 },
+    jungle: { id: "verdant-old-growth-tree-lods", desktop: 800, coarse: 360, minHeight: 27, maxHeight: 48, giantHeight: 62, giantChance: .055, width: 1.08, spacing: 9, slope: 1.55, leafTint: 0x74a36f, barkTint: 0x8e806b },
+    snowy: { id: "frostbound-tree-lods", desktop: 570, coarse: 260, minHeight: 23, maxHeight: 39, giantHeight: 49, giantChance: .035, width: .92, spacing: 10, slope: 1.7, leafTint: 0xb4c9bf, barkTint: 0xaba9a2 },
+    mountains: { id: "skysunder-tree-lods", desktop: 400, coarse: 180, minHeight: 18, maxHeight: 32, giantHeight: 40, giantChance: .025, width: .82, spacing: 12, slope: 2.1, leafTint: 0x829b86, barkTint: 0x91867a },
+    desert: { id: "ember-dunes-tree-exclusion", desktop: 0, coarse: 0, minHeight: 0, maxHeight: 0, giantHeight: 0, giantChance: 0, width: 0, slope: 0, leafTint: 0xffffff, barkTint: 0xffffff },
+    moon: { id: "moonfall-tree-exclusion", desktop: 0, coarse: 0, minHeight: 0, maxHeight: 0, giantHeight: 0, giantChance: 0, width: 0, slope: 0, leafTint: 0xffffff, barkTint: 0xffffff }
   });
 
   function forestPlacementClear(x, z, padding) {
@@ -5295,7 +5305,7 @@
     return root;
   }
 
-  function createAncientForest() {
+  function createLegacyProceduralForest() {
     if (!PROCEDURAL_TREE_GENERATION_ENABLED) {
       forestChunks = [];
       forestReport = {
@@ -5501,6 +5511,234 @@
     updateAncientForestVisibility(true);
   }
 
+  function treeLodSourceMeshes(assetId) {
+    const asset = visualAssets.models && visualAssets.models[assetId];
+    if (!asset || !asset.scene) return [];
+    asset.scene.updateMatrixWorld(true);
+    const inverseRoot = asset.scene.matrixWorld.clone().invert();
+    const sources = [];
+    asset.scene.traverse((object) => {
+      if (!object.isMesh || !object.geometry || !object.material) return;
+      sources.push({
+        name: object.name || assetId,
+        geometry: object.geometry,
+        material: Array.isArray(object.material) ? object.material[0] : object.material,
+        matrix: inverseRoot.clone().multiply(object.matrixWorld)
+      });
+    });
+    return sources;
+  }
+
+  function shareTreeLodTextures() {
+    const textureFields = ["map", "normalMap", "roughnessMap", "metalnessMap", "alphaMap", "aoMap", "emissiveMap"];
+    const shared = new Map();
+    ["treeLod0", "treeLod1", "treeLod2"].forEach((assetId, lodIndex) => {
+      const asset = visualAssets.models && visualAssets.models[assetId];
+      if (!asset || !asset.scene) return;
+      asset.scene.traverse((object) => {
+        if (!object.isMesh || !object.material) return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => {
+          const key = (material.name || object.name || "tree").toLowerCase();
+          if (lodIndex === 0) {
+            shared.set(key, Object.fromEntries(textureFields.map((field) => [field, material[field] || null])));
+            return;
+          }
+          const source = shared.get(key);
+          if (!source) return;
+          textureFields.forEach((field) => { if (source[field]) material[field] = source[field]; });
+          material.needsUpdate = true;
+        });
+      });
+    });
+  }
+
+  function treeLodMaterial(source, profile) {
+    const material = source.material.clone();
+    const foliage = /leav|foliage|crown/i.test(source.name + " " + (material.name || ""));
+    if (material.color) material.color.multiply(new THREE.Color(foliage ? profile.leafTint : profile.barkTint));
+    material.roughness = foliage ? .94 : .98;
+    material.metalness = 0;
+    material.envMapIntensity = foliage ? .24 : .18;
+    if (foliage) {
+      material.side = THREE.DoubleSide;
+      material.alphaTest = Math.max(.45, Number(material.alphaTest) || 0);
+      material.transparent = false;
+      material.depthWrite = true;
+    }
+    material.needsUpdate = true;
+    return material;
+  }
+
+  function fixedTreeRoll(biomeIndex, attempt, channel) {
+    return seeded(62000 + biomeIndex * 17003 + attempt * 37 + channel * 1009);
+  }
+
+  function createAncientForest() {
+    const lodIds = ["treeLod0", "treeLod1", "treeLod2"];
+    const lodSources = lodIds.map(treeLodSourceMeshes);
+    const missingAssets = lodIds.filter((id, index) => !lodSources[index].length);
+    if (!TREE_LOD_FOREST_ENABLED || missingAssets.length) {
+      forestChunks = [];
+      forestReport = {
+        profile: missingAssets.length ? "owner-tree-lods-unavailable" : "owner-tree-lods-disabled",
+        enabled: false, missingAssets, total: 0,
+        byBiome: Object.fromEntries(BIOME_IDS.map((id) => [id, 0])),
+        excludedBiomes: Array.from(TREE_LOD_FOREST_EXCLUDED_BIOME_IDS),
+        heroes: 0, assetHeroes: 0, proceduralHeroes: 0, heroVariants: [],
+        chunks: 0, visible: 0, nearChunks: 0, midChunks: 0, farChunks: 0, culledChunks: 0,
+        nearTrees: 0, midTrees: 0, farTrees: 0, instancedMeshes: 0, heroColliders: 0,
+        maxTrunkDiameter: 0, potentialDrawCalls: 0
+      };
+      updateAncientForestVisibility(true);
+      return;
+    }
+
+    shareTreeLodTextures();
+    const placements = [];
+    const byBiome = Object.fromEntries(BIOME_IDS.map((id) => [id, 0]));
+    const occupancy = new Map();
+    TREE_LOD_FOREST_BIOME_IDS.forEach((biomeId, biomeIndex) => {
+      const zone = CONTINENT_ZONE_BY_ID.get(biomeId);
+      const profile = FOREST_PROFILES[biomeId];
+      const density = clamp(editorDocument.biomes[biomeId] && editorDocument.biomes[biomeId].treeDensity !== undefined
+        ? editorDocument.biomes[biomeId].treeDensity : 1, 0, 3);
+      const target = Math.round((isCoarse ? profile.coarse : profile.desktop) * density);
+      const margin = 28;
+      for (let attempt = 0; byBiome[biomeId] < target && attempt < target * 24 + 200; attempt += 1) {
+        const x = lerp(zone.bounds.minX + margin, zone.bounds.maxX - margin, fixedTreeRoll(biomeIndex, attempt, 1));
+        const z = lerp(zone.bounds.minZ + margin, zone.bounds.maxZ - margin, fixedTreeRoll(biomeIndex, attempt, 2));
+        if (biomeIdAt(x, z) !== biomeId || !biomeAllowsTreeLodForestAt(x, z) || !forestPlacementClear(x, z, 4)) continue;
+        const y = terrainHeight(x, z);
+        if (y <= waterLevelAt(x, z) + .9) continue;
+        const sample = 2.4;
+        const slope = Math.max(
+          Math.abs(terrainHeight(x + sample, z) - y), Math.abs(terrainHeight(x - sample, z) - y),
+          Math.abs(terrainHeight(x, z + sample) - y), Math.abs(terrainHeight(x, z - sample) - y)
+        );
+        if (slope > profile.slope) continue;
+        const cellSize = profile.spacing;
+        const gx = Math.floor(x / cellSize);
+        const gz = Math.floor(z / cellSize);
+        let crowded = false;
+        for (let ox = -1; ox <= 1 && !crowded; ox += 1) for (let oz = -1; oz <= 1 && !crowded; oz += 1) {
+          const neighbors = occupancy.get(biomeId + ":" + (gx + ox) + ":" + (gz + oz)) || [];
+          crowded = neighbors.some((tree) => Math.hypot(tree.x - x, tree.z - z) < profile.spacing);
+        }
+        if (crowded) continue;
+        const giant = fixedTreeRoll(biomeIndex, attempt, 3) < profile.giantChance;
+        const height = giant
+          ? lerp(profile.maxHeight * 1.02, profile.giantHeight, fixedTreeRoll(biomeIndex, attempt, 4))
+          : lerp(profile.minHeight, profile.maxHeight, fixedTreeRoll(biomeIndex, attempt, 4));
+        const tree = {
+          x, y, z, height, giant, biomeId,
+          rotation: fixedTreeRoll(biomeIndex, attempt, 5) * Math.PI * 2,
+          widthX: profile.width * lerp(.86, 1.14, fixedTreeRoll(biomeIndex, attempt, 6)),
+          widthZ: profile.width * lerp(.86, 1.14, fixedTreeRoll(biomeIndex, attempt, 7)),
+          leanX: (fixedTreeRoll(biomeIndex, attempt, 8) - .5) * .055,
+          leanZ: (fixedTreeRoll(biomeIndex, attempt, 9) - .5) * .055,
+          tone: lerp(.82, 1.12, fixedTreeRoll(biomeIndex, attempt, 10)),
+          trunkDiameter: height * (giant ? .095 : .058) * profile.width
+        };
+        placements.push(tree);
+        byBiome[biomeId] += 1;
+        const cellKey = biomeId + ":" + gx + ":" + gz;
+        if (!occupancy.has(cellKey)) occupancy.set(cellKey, []);
+        occupancy.get(cellKey).push(tree);
+      }
+      recordTreePopulation(biomeId, byBiome[biomeId], "owner-tree-lod-pack");
+    });
+
+    const chunkSize = 180;
+    const buckets = new Map();
+    placements.forEach((tree) => {
+      const gx = Math.floor((tree.x + HALF_WORLD) / chunkSize);
+      const gz = Math.floor((tree.z + HALF_WORLD) / chunkSize);
+      const key = tree.biomeId + ":" + gx + ":" + gz;
+      if (!buckets.has(key)) buckets.set(key, { gx, gz, biomeId: tree.biomeId, trees: [] });
+      buckets.get(key).trees.push(tree);
+    });
+
+    forestChunks = [];
+    const materialCache = new Map();
+    const matrix = new THREE.Matrix4();
+    const treeMatrix = new THREE.Matrix4();
+    const quaternion = new THREE.Quaternion();
+    const euler = new THREE.Euler(0, 0, 0, "YXZ");
+    const instanceTone = new THREE.Color();
+    const colliderCountBefore = colliders.length;
+    let colliderBudget = isCoarse ? 18 : 48;
+    placements.filter((tree) => tree.giant).sort((a, b) => b.height - a.height).forEach((tree) => {
+      if (colliderBudget <= 0) return;
+      const radius = clamp(tree.trunkDiameter * .42, .75, 3.2);
+      addCollider(tree.x, tree.z, radius, radius, 0, tree.y, tree.y + tree.height);
+      colliderBudget -= 1;
+    });
+
+    buckets.forEach((bucket) => {
+      const centerX = -HALF_WORLD + (bucket.gx + .5) * chunkSize;
+      const centerZ = -HALF_WORLD + (bucket.gz + .5) * chunkSize;
+      const profile = FOREST_PROFILES[bucket.biomeId];
+      const metric = modelScaleRegistry.treeLod0;
+      const lodMeshes = lodSources.map((sources, lodIndex) => sources.map((source, sourceIndex) => {
+        const materialKey = bucket.biomeId + ":" + lodIndex + ":" + sourceIndex;
+        if (!materialCache.has(materialKey)) materialCache.set(materialKey, treeLodMaterial(source, profile));
+        const mesh = new THREE.InstancedMesh(source.geometry, materialCache.get(materialKey), bucket.trees.length);
+        mesh.name = "Tree LOD" + lodIndex + " " + bucket.biomeId + " " + source.name;
+        bucket.trees.forEach((tree, index) => {
+          const scaleY = tree.height / Math.max(.01, metric.sy);
+          euler.set(tree.leanX, tree.rotation, tree.leanZ, "YXZ");
+          quaternion.setFromEuler(euler);
+          treeMatrix.compose(
+            new THREE.Vector3(tree.x - centerX, tree.y - metric.minY * scaleY, tree.z - centerZ),
+            quaternion,
+            new THREE.Vector3(scaleY * tree.widthX, scaleY, scaleY * tree.widthZ)
+          );
+          matrix.multiplyMatrices(treeMatrix, source.matrix);
+          mesh.setMatrixAt(index, matrix);
+          instanceTone.setRGB(tree.tone, tree.tone, tree.tone);
+          mesh.setColorAt(index, instanceTone);
+        });
+        mesh.position.set(centerX, 0, centerZ);
+        mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        mesh.frustumCulled = false;
+        mesh.visible = false;
+        mesh.receiveShadow = lodIndex < 2;
+        mesh.castShadow = lodIndex === 0 && !isCoarse && !/leav|foliage|crown/i.test(source.name + " " + (source.material.name || ""));
+        scene.add(mesh);
+        return mesh;
+      }));
+      const baseDensity = Math.max(.001, editorDocument.biomes[bucket.biomeId] && editorDocument.biomes[bucket.biomeId].treeDensity !== undefined
+        ? editorDocument.biomes[bucket.biomeId].treeDensity : 1);
+      forestChunks.push({
+        centerX, centerZ, biomeId: bucket.biomeId,
+        baseDensity, radius: chunkSize * Math.SQRT1_2,
+        count: bucket.trees.length, baseCount: bucket.trees.length,
+        lodMeshes, activeLod: -1
+      });
+    });
+
+    const giantCount = placements.filter((tree) => tree.giant).length;
+    forestReport = {
+      profile: "owner-tree-lod-forest-v1", enabled: true, source: "tree_lods.zip",
+      fixedContinent: true, generatedSeed: false, total: placements.length, byBiome,
+      includedBiomes: TREE_LOD_FOREST_BIOME_IDS.slice(),
+      excludedBiomes: Array.from(TREE_LOD_FOREST_EXCLUDED_BIOME_IDS),
+      heroes: giantCount, assetHeroes: placements.length, proceduralHeroes: 0,
+      heroVariants: lodIds.slice(), lodTriangles: [21512, 8968, 4346],
+      chunks: forestChunks.length, visible: 0,
+      nearChunks: 0, midChunks: 0, farChunks: 0, culledChunks: forestChunks.length,
+      nearTrees: 0, midTrees: 0, farTrees: 0,
+      instancedMeshes: forestChunks.reduce((sum, chunk) => sum + chunk.lodMeshes.reduce((lodSum, meshes) => lodSum + meshes.length, 0), 0),
+      heroColliders: colliders.length - colliderCountBefore,
+      maxTrunkDiameter: placements.reduce((maximum, tree) => Math.max(maximum, tree.trunkDiameter), 0),
+      potentialDrawCalls: forestChunks.length * Math.max.apply(null, lodSources.map((sources) => sources.length))
+    };
+    updateAncientForestVisibility(true);
+  }
+
   function updateAncientForestVisibility(force) {
     if (!force) {
       forestVisibilityTimer -= .016;
@@ -5508,29 +5746,34 @@
     }
     forestVisibilityTimer = .35;
     const focus = player.root ? player.root.position : TITLE_VANTAGE;
-    const nearDistance = isCoarse ? 150 : 255;
-    const farDistance = (isCoarse ? 390 : 650) * Math.max(.72, qualityScale);
+    const nearDistance = isCoarse ? 22 : 34;
+    const midDistance = (isCoarse ? 105 : 145) * Math.max(.78, qualityScale);
+    const farDistance = (isCoarse ? 300 : 410) * Math.max(.72, qualityScale);
     let visible = 0;
     let nearChunks = 0;
+    let midChunks = 0;
     let farChunks = 0;
     let nearTrees = 0;
+    let midTrees = 0;
     let farTrees = 0;
     forestChunks.forEach((chunk) => {
       const centerDistance = Math.hypot(chunk.centerX - focus.x, chunk.centerZ - focus.z);
       const distance = Math.max(0, centerDistance - (chunk.radius || 0));
-      const near = distance < nearDistance;
-      const far = !near && distance < farDistance;
-      chunk.nearMeshes.forEach((mesh) => { mesh.visible = near; });
-      chunk.farMesh.visible = far;
-      if (near) { nearChunks += 1; nearTrees += chunk.count; }
-      else if (far) { farChunks += 1; farTrees += chunk.count; }
-      if (near || far) visible += chunk.count;
+      const lod = distance < nearDistance ? 0 : distance < midDistance ? 1 : distance < farDistance ? 2 : -1;
+      (chunk.lodMeshes || []).forEach((meshes, lodIndex) => meshes.forEach((mesh) => { mesh.visible = lod === lodIndex && chunk.count > 0; }));
+      chunk.activeLod = lod;
+      if (lod === 0) { nearChunks += 1; nearTrees += chunk.count; }
+      else if (lod === 1) { midChunks += 1; midTrees += chunk.count; }
+      else if (lod === 2) { farChunks += 1; farTrees += chunk.count; }
+      if (lod >= 0) visible += chunk.count;
     });
     forestReport.visible = visible;
     forestReport.nearChunks = nearChunks;
+    forestReport.midChunks = midChunks;
     forestReport.farChunks = farChunks;
-    forestReport.culledChunks = Math.max(0, forestChunks.length - nearChunks - farChunks);
+    forestReport.culledChunks = Math.max(0, forestChunks.length - nearChunks - midChunks - farChunks);
     forestReport.nearTrees = nearTrees;
+    forestReport.midTrees = midTrees;
     forestReport.farTrees = farTrees;
   }
 
@@ -5603,6 +5846,7 @@
   function importedModel(id, x, z, scale, rotation, yOffset, collider, baseY) {
     const adminId = placedAdminModelId(id, x, z, rotation, yOffset, scale);
     if (TREE_MODEL_IDS.has(id) && !biomeAllowsTreesAt(x, z)) return null;
+    if (TREE_LOD_MODEL_IDS.has(id) && !biomeAllowsTreeLodForestAt(x, z)) return null;
     const asset = visualAssets.models && visualAssets.models[id];
     if (!asset) return null;
     const root = asset.scene.clone(true);
@@ -5665,6 +5909,7 @@
     const options = opts || {};
     const adminId = placedAdminModelId(key, x, z, rotation, options.yOffset, scale);
     if (TREE_MODEL_IDS.has(key) && !biomeAllowsTreesAt(x, z)) return null;
+    if (TREE_LOD_MODEL_IDS.has(key) && !biomeAllowsTreeLodForestAt(x, z)) return null;
     const asset = visualAssets.models && visualAssets.models[key];
     if (!asset) return null;
     const root = asset.scene.clone(true);
@@ -12668,7 +12913,8 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
       forestDebug: () => Object.assign({}, forestReport, {
         lodChunks: forestChunks.map((chunk) => ({
           x: chunk.centerX, z: chunk.centerZ, count: chunk.count,
-          lod: chunk.nearMeshes[0].visible ? "near" : chunk.farMesh.visible ? "far" : "culled"
+          biome: chunk.biomeId,
+          lod: chunk.activeLod === 0 ? "LOD0" : chunk.activeLod === 1 ? "LOD1" : chunk.activeLod === 2 ? "LOD2" : "culled"
         }))
       }),
       infrastructureDebug: () => (worldLayout.infrastructure || []).map((site) => Object.assign({}, site)),
