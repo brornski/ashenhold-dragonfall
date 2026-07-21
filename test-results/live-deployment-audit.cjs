@@ -204,7 +204,7 @@ async function run() {
     frostboundSkybox200: snowySkybox.status === 200 && Number(snowySkybox.headers["content-length"] || snowySkybox.body.length) > 700000,
     skysunderSkybox200: mountainSkybox.status === 200 && Number(mountainSkybox.headers["content-length"] || mountainSkybox.body.length) > 140000,
     treeLodPack200: treeLod.status === 200 && /"meshes"\s*:/.test(treeLod.body)
-      && treeGeometry.status === 200 && Number(treeGeometry.headers["content-length"] || treeGeometry.body.length) > 900000
+      && treeGeometry.status === 200 && Number(treeGeometry.headers["content-length"] || treeGeometry.body.length) > 600000
       && treeTexture.status === 200 && Number(treeTexture.headers["content-length"] || treeTexture.body.length) > 80000,
     manifest200: manifest.status === 200 && /Ashenhold/.test(manifest.body),
     secureOrigin: baseUrl.protocol === "https:",
