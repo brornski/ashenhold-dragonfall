@@ -274,7 +274,8 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
       && titleSnapshot.world.forest.total >= 2000 && titleSnapshot.world.forest.byBiome.jungle > 0
       && titleSnapshot.world.forest.byBiome.shore > 0 && titleSnapshot.world.forest.byBiome.snowy > 0
       && titleSnapshot.world.forest.byBiome.mountains > 0 && titleSnapshot.world.forest.byBiome.desert === 0
-      && titleSnapshot.world.forest.byBiome.moon === 0 && titleSnapshot.world.treePopulation.bySource["owner-tree-lod-pack"] === titleSnapshot.world.forest.total,
+      && titleSnapshot.world.forest.byBiome.moon === 0 && titleSnapshot.world.treePopulation.bySource["owner-tree-lod-pack"] === titleSnapshot.world.forest.total
+      && titleSnapshot.world.forest.frostboundVariants.christmas > 0 && titleSnapshot.world.forest.frostboundVariants.yellow > 0,
     treeLodRenderAndCulling: titleSnapshot.world.forest.instancedMeshes > 0
       && titleSnapshot.world.forest.visible > 0 && titleSnapshot.world.forest.culledChunks > 0
       && titleSnapshot.world.forest.lodTriangles.length === 3 && worldDebug.forest.lodChunks.length === titleSnapshot.world.forest.chunks
@@ -298,6 +299,11 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
     biomeGrass: titleSnapshot.world.grassInstances >= 1200,
     platforms: titleSnapshot.world.platforms >= 10,
     expandedSkillTrees: titleSnapshot.skillBranches >= 12 && titleSnapshot.skillNodes >= 66,
+    suppliedWeaponPack: titleSnapshot.world.assetPacks.medievalWeapons.modelSlots.length === 5
+      && titleSnapshot.world.assetPacks.medievalWeapons.equipped.length === 4,
+    suppliedFlagPack: titleSnapshot.world.assetPacks.flags.modelSlots.length === 3
+      && titleSnapshot.world.assetPacks.flags.capturedUsingAssets > 0
+      && titleSnapshot.world.assetPacks.flags.hostileBannerPlacements >= 4,
     overShoulderCamera: initial.camera.overShoulder && initial.camera.shoulderSide === "right" && initial.camera.playerScreen.x < -.08,
     bladeKilledCloseEnemy: afterBlade.kills >= initial.kills + 1,
     bowKilledLongEnemy: afterBow.kills >= afterBlade.kills + 1,
@@ -309,7 +315,7 @@ const STYLIZED_WATER_SOURCE = "https://github.com/cortiz2894/stylized-components
     clearGrantsBonus: strongholdResult.clearedAfter === strongholdResult.clearedBefore + 1 && strongholdResult.xpChanged,
     shrineCaptureFlag: Boolean(captureFlagResult.found && captureFlagResult.before && !captureFlagResult.before.visible
       && captureFlagResult.cleared && captureFlagResult.after && captureFlagResult.after.visible
-      && captureFlagResult.after.raised === 1 && captureFlagResult.after.minimapMarker),
+      && captureFlagResult.after.raised === 1 && captureFlagResult.after.minimapMarker && captureFlagResult.after.assetModel),
     higherJump: jumpPeak - jumpStart > 4.5,
     superSprint: superSprint.superSprinting && sprintDistance > 7,
     sprintHysteresis: !lowStaminaSprint.superSprinting && lowStaminaSprint.sprinting && !exhaustedSprint.superSprinting && !exhaustedSprint.sprinting,

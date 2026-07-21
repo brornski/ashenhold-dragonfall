@@ -88,9 +88,15 @@ async function boot(context, diagnostics, suffix) {
         playerScaledCastle: zoneSnapshot.world.canonicalScale.structures.wall.height >= 9 && zoneSnapshot.world.canonicalScale.structures.wall.height <= 15
           && zoneSnapshot.world.canonicalScale.structures.gate.height >= 7 && zoneSnapshot.world.canonicalScale.structures.gate.height <= 10
           && zoneSnapshot.world.canonicalScale.structures.tower.height >= 18 && zoneSnapshot.world.canonicalScale.structures.tower.height <= 32,
+        suppliedWeaponsAndFlags: zoneSnapshot.world.assetPacks.medievalWeapons.modelSlots.length === 5
+          && zoneSnapshot.world.assetPacks.medievalWeapons.equipped.length === 4
+          && zoneSnapshot.world.assetPacks.flags.modelSlots.length === 3
+          && zoneSnapshot.world.assetPacks.flags.capturedUsingAssets > 0
+          && zoneSnapshot.world.assetPacks.flags.hostileBannerPlacements >= 4,
         ownerTreeLodForest: zoneSnapshot.world.forest.enabled && zoneSnapshot.world.forest.profile === "owner-tree-lod-forest-v1"
           && zoneSnapshot.world.forest.fixedContinent && zoneSnapshot.world.forest.generatedSeed === false
-          && zoneSnapshot.world.forest.total >= 2000 && zoneSnapshot.world.forest.instancedMeshes > 0,
+          && zoneSnapshot.world.forest.total >= 2000 && zoneSnapshot.world.forest.instancedMeshes > 0
+          && zoneSnapshot.world.forest.frostboundVariants.christmas > 0 && zoneSnapshot.world.forest.frostboundVariants.yellow > 0,
         biomeTreePolicy: (["desert", "moon"].includes(biome) ? zoneSnapshot.world.forest.byBiome[biome] === 0
           : zoneSnapshot.world.forest.byBiome[biome] > 0)
           && zoneSnapshot.world.forest.byBiome.desert === 0 && zoneSnapshot.world.forest.byBiome.moon === 0,

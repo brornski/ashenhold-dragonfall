@@ -91,7 +91,15 @@
     treePineA: { role: "conifer", targetHeight: 27 }, treePineB: { role: "conifer", targetHeight: 30 },
     pineCrooked: { role: "crooked pine", targetHeight: 24 },
     ancientTreeA: { role: "ancient broadleaf hero", targetHeight: 58 },
-    ancientTreeB: { role: "ancient broadleaf hero", targetHeight: 64 }
+    ancientTreeB: { role: "ancient broadleaf hero", targetHeight: 64 },
+    weaponBlade: { role: "Warden blade", targetHeight: 1.8 },
+    weaponBow: { role: "Warden bow", targetHeight: 1.65 },
+    weaponArrow: { role: "Warden arrow", targetSpan: 1.3 },
+    weaponAxe: { role: "Warden axe", targetHeight: 1.9 },
+    weaponStaff: { role: "Warden staff", targetHeight: 2.2 },
+    flagPackCloth: { role: "captured Warden flag", targetHeight: 2.8 },
+    flagPackBanner: { role: "hostile stronghold banner", targetHeight: 6 },
+    flagPackEmblem: { role: "Warden flag emblem", targetHeight: 1.25 }
   });
   const AUTHORED_CASTLE_MATERIAL_IDS = new Set([
     "bridge", "bridgePillar", "gate", "stairs", "tower", "towerTop",
@@ -302,10 +310,14 @@
   const TREE_LOD_FOREST_EXCLUDED_BIOME_IDS = new Set(["desert", "moon"]);
   const TREE_LOD_FOREST_ENABLED = true;
   const PROCEDURAL_TREE_GENERATION_ENABLED = false;
-  const TREE_LOD_MODEL_IDS = new Set(["treeLod0", "treeLod1", "treeLod2"]);
+  const TREE_LOD_MODEL_IDS = new Set([
+    "treeLod0", "treeLod1", "treeLod2",
+    "frostChristmasTreeLod0", "frostChristmasTreeLod1", "frostChristmasTreeLod2",
+    "frostYellowTreeLod0", "frostYellowTreeLod1", "frostYellowTreeLod2"
+  ]);
   const TREE_MODEL_IDS = new Set([
     "tree", "treePalm", "treePalmBend", "treePineA", "treePineB",
-    "pineCrooked", "ancientTreeA", "ancientTreeB", "treeLod0", "treeLod1", "treeLod2"
+    "pineCrooked", "ancientTreeA", "ancientTreeB", ...TREE_LOD_MODEL_IDS
   ]);
   const TREE_PROP_KINDS = new Set(["snowPine", "broadleaf", "palm", "windPine", "darkPine"]);
 
@@ -486,6 +498,7 @@
   let verticalRouteReports = [];
   let biomePropsReport = { kind: "none", total: 0, byKind: {} };
   let importedModelInstances = 0;
+  const assetPackUsage = { hostileBannerPlacements: 0 };
   let modelScaleRegistry = {};
   let skyReport = { id: "unbuilt", signature: "", features: [], featureCount: 0, gradientStops: 0, horizonBlend: false };
   let forestChunks = [];
@@ -3838,6 +3851,17 @@
     return texture;
   }
 
+  function configureAssetPackTexture(texture) {
+    if (!texture) return null;
+    texture.encoding = THREE.sRGBEncoding;
+    texture.flipY = false;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.anisotropy = Math.min(isCoarse ? 4 : 12, renderer.capabilities.getMaxAnisotropy());
+    texture.needsUpdate = true;
+    return texture;
+  }
+
   function cloneTiledTexture(source, repeatX, repeatY) {
     if (!source) return null;
     const texture = source.clone();
@@ -4024,6 +4048,35 @@
     return horizontalScale * metric.canonicalScaleY / metric.canonicalScale;
   }
 
+  function cloneAssetPackModel(id, options) {
+    const asset = visualAssets.models && visualAssets.models[id];
+    if (!asset || !asset.scene) return null;
+    const settings = options || {};
+    const root = asset.scene.clone(true);
+    const scale = canonicalModelScale(id, settings.scale == null ? 1 : settings.scale);
+    root.name = settings.name || "Asset pack " + id;
+    root.scale.setScalar(scale);
+    if (settings.rotation) root.rotation.set(settings.rotation.x || 0, settings.rotation.y || 0, settings.rotation.z || 0);
+    root.updateMatrixWorld(true);
+    if (settings.center || Number.isFinite(settings.alignTop)) {
+      const box = new THREE.Box3().setFromObject(root);
+      if (settings.center) {
+        const center = box.getCenter(new THREE.Vector3());
+        root.position.sub(center);
+      }
+      if (Number.isFinite(settings.alignTop)) root.position.y += settings.alignTop - box.max.y;
+    }
+    if (settings.position) root.position.add(settings.position);
+    root.traverse((object) => {
+      if (!object.isMesh) return;
+      object.castShadow = settings.castShadow == null ? !isCoarse : Boolean(settings.castShadow);
+      object.receiveShadow = settings.receiveShadow == null ? true : Boolean(settings.receiveShadow);
+    });
+    root.userData.assetPack = settings.assetPack || "user-supplied";
+    root.userData.assetModelSlot = id;
+    return root;
+  }
+
   function scaledModelCollider(id, scale, heightLimit) {
     const metric = modelScaleRegistry[id];
     if (!metric) return null;
@@ -4118,7 +4171,21 @@
       ancientTreeB: "assets/models/freestylized-foliage/F1_Tree3.glb",
       treeLod0: "assets/models/tree-lods/tree_LOD0.gltf",
       treeLod1: "assets/models/tree-lods/tree_LOD1.gltf",
-      treeLod2: "assets/models/tree-lods/tree_LOD2.gltf"
+      treeLod2: "assets/models/tree-lods/tree_LOD2.gltf",
+      frostChristmasTreeLod0: "assets/models/frostbound-trees/christmas/tree_LOD0.gltf",
+      frostChristmasTreeLod1: "assets/models/frostbound-trees/christmas/tree_LOD1.gltf",
+      frostChristmasTreeLod2: "assets/models/frostbound-trees/christmas/tree_LOD2.gltf",
+      frostYellowTreeLod0: "assets/models/frostbound-trees/yellow/tree_LOD0.gltf",
+      frostYellowTreeLod1: "assets/models/frostbound-trees/yellow/tree_LOD1.gltf",
+      frostYellowTreeLod2: "assets/models/frostbound-trees/yellow/tree_LOD2.gltf",
+      weaponBlade: "assets/models/medieval-weapons-pack/weapon-blade.glb",
+      weaponBow: "assets/models/medieval-weapons-pack/weapon-bow.glb",
+      weaponArrow: "assets/models/medieval-weapons-pack/weapon-arrow.glb",
+      weaponAxe: "assets/models/medieval-weapons-pack/weapon-axe.glb",
+      weaponStaff: "assets/models/medieval-weapons-pack/weapon-staff.glb",
+      flagPackCloth: "assets/models/flags-pack/flag-cloth.glb",
+      flagPackBanner: "assets/models/flags-pack/flag-banner.glb",
+      flagPackEmblem: "assets/models/flags-pack/flag-emblem.glb"
     });
     const graveyard = "assets/models/kenney-graveyard/";
     Object.assign(modelPaths, {
@@ -4140,12 +4207,56 @@
     visualAssets.modelPaths = Object.assign({}, modelPaths);
     const loader = new THREE.GLTFLoader();
     visualAssets.modelLoader = loader;
+    const packTexturePaths = {
+      weaponAtlasA1: "assets/models/medieval-weapons-pack/textures/weapon-atlas-a1.webp",
+      weaponAtlasA2: "assets/models/medieval-weapons-pack/textures/weapon-atlas-a2.webp",
+      weaponAtlasA3: "assets/models/medieval-weapons-pack/textures/weapon-atlas-a3.webp",
+      hostileBanner: "assets/models/flags-pack/textures/hostile-banner.webp",
+      wardenFlag: "assets/models/flags-pack/textures/warden-flag.webp",
+      wardenEmblem: "assets/models/flags-pack/textures/warden-emblem.webp"
+    };
+    visualAssets.assetPackTexturePaths = Object.assign({}, packTexturePaths);
+    const textureEntries = Object.entries(packTexturePaths);
+    const packTexturePromise = Promise.allSettled(textureEntries.map((entry) => textureFrom(entry[1])));
     const entries = Object.entries(modelPaths).filter(([id]) => !/^biome(?:Light|Heavy)_/.test(id) || id.endsWith("_" + currentBiomeId));
     const loaded = await Promise.allSettled(entries.map((entry) => loader.loadAsync(entry[1])));
     loaded.forEach((result, index) => {
       const id = entries[index][0];
       if (result.status === "fulfilled") visualAssets.models[id] = result.value;
       else console.warn("3D model failed to load:", entries[index][1], result.reason);
+    });
+    const packTextureResults = await packTexturePromise;
+    visualAssets.assetPackTextures = {};
+    packTextureResults.forEach((result, index) => {
+      const key = textureEntries[index][0];
+      if (result.status === "fulfilled") visualAssets.assetPackTextures[key] = configureAssetPackTexture(result.value);
+      else console.warn("Asset-pack texture failed to load:", textureEntries[index][1], result.reason);
+    });
+    const packMaterials = {
+      weaponAtlasA1: new THREE.MeshStandardMaterial({ map: visualAssets.assetPackTextures.weaponAtlasA1 || null, color: 0xffffff, roughness: .52, metalness: .38, envMapIntensity: .5 }),
+      weaponAtlasA2: new THREE.MeshStandardMaterial({ map: visualAssets.assetPackTextures.weaponAtlasA2 || null, color: 0xffffff, roughness: .5, metalness: .42, envMapIntensity: .5 }),
+      weaponAtlasA3: new THREE.MeshStandardMaterial({ map: visualAssets.assetPackTextures.weaponAtlasA3 || null, color: 0xffffff, roughness: .48, metalness: .34, envMapIntensity: .54 }),
+      hostileBanner: new THREE.MeshStandardMaterial({ map: visualAssets.assetPackTextures.hostileBanner || null, color: 0xffffff, roughness: .82, metalness: 0, side: THREE.DoubleSide }),
+      wardenFlag: new THREE.MeshStandardMaterial({ map: visualAssets.assetPackTextures.wardenFlag || null, color: 0xffffff, roughness: .78, metalness: 0, side: THREE.DoubleSide }),
+      wardenEmblem: new THREE.MeshStandardMaterial({ map: visualAssets.assetPackTextures.wardenEmblem || null, color: 0xffffff, roughness: .72, metalness: .02, side: THREE.DoubleSide, transparent: true })
+    };
+    visualAssets.assetPackMaterials = packMaterials;
+    const materialAssignments = {
+      weaponBlade: packMaterials.weaponAtlasA1,
+      weaponBow: packMaterials.weaponAtlasA1,
+      weaponArrow: packMaterials.weaponAtlasA1,
+      weaponAxe: packMaterials.weaponAtlasA2,
+      weaponStaff: packMaterials.weaponAtlasA3,
+      flagPackCloth: packMaterials.wardenFlag,
+      flagPackBanner: packMaterials.hostileBanner,
+      flagPackEmblem: packMaterials.wardenEmblem
+    };
+    Object.keys(materialAssignments).forEach((id) => {
+      const asset = visualAssets.models[id];
+      if (!asset || !asset.scene) return;
+      asset.scene.traverse((object) => {
+        if (object.isMesh) object.material = materialAssignments[id];
+      });
     });
     visualAssets.models.biomeLight = visualAssets.models.biomeLight_jungle || null;
     visualAssets.models.biomeHeavy = visualAssets.models.biomeHeavy_jungle || null;
@@ -5529,10 +5640,10 @@
     return sources;
   }
 
-  function shareTreeLodTextures() {
+  function shareTreeLodTextures(lodIds) {
     const textureFields = ["map", "normalMap", "roughnessMap", "metalnessMap", "alphaMap", "aoMap", "emissiveMap"];
     const shared = new Map();
-    ["treeLod0", "treeLod1", "treeLod2"].forEach((assetId, lodIndex) => {
+    (lodIds || ["treeLod0", "treeLod1", "treeLod2"]).forEach((assetId, lodIndex) => {
       const asset = visualAssets.models && visualAssets.models[assetId];
       if (!asset || !asset.scene) return;
       asset.scene.traverse((object) => {
@@ -5577,6 +5688,21 @@
   function createAncientForest() {
     const lodIds = ["treeLod0", "treeLod1", "treeLod2"];
     const lodSources = lodIds.map(treeLodSourceMeshes);
+    const frostboundFamilySpecs = [
+      { id: "christmas", lodIds: ["frostChristmasTreeLod0", "frostChristmasTreeLod1", "frostChristmasTreeLod2"] },
+      { id: "yellow", lodIds: ["frostYellowTreeLod0", "frostYellowTreeLod1", "frostYellowTreeLod2"] }
+    ];
+    const lodFamilies = {
+      base: { id: "base", lodIds, lodSources, metricId: lodIds[0] }
+    };
+    const missingFrostboundAssets = [];
+    frostboundFamilySpecs.forEach((family) => {
+      const sources = family.lodIds.map(treeLodSourceMeshes);
+      const missing = family.lodIds.filter((id, index) => !sources[index].length);
+      if (missing.length) missingFrostboundAssets.push(...missing);
+      else lodFamilies[family.id] = { id: family.id, lodIds: family.lodIds, lodSources: sources, metricId: family.lodIds[0] };
+    });
+    const frostboundVariants = Object.keys(lodFamilies).filter((id) => id !== "base");
     const missingAssets = lodIds.filter((id, index) => !lodSources[index].length);
     if (!TREE_LOD_FOREST_ENABLED || missingAssets.length) {
       forestChunks = [];
@@ -5594,7 +5720,8 @@
       return;
     }
 
-    shareTreeLodTextures();
+    shareTreeLodTextures(lodIds);
+    frostboundFamilySpecs.forEach((family) => shareTreeLodTextures(family.lodIds));
     const placements = [];
     const byBiome = Object.fromEntries(BIOME_IDS.map((id) => [id, 0]));
     const occupancy = new Map();
@@ -5632,6 +5759,9 @@
           : lerp(profile.minHeight, profile.maxHeight, fixedTreeRoll(biomeIndex, attempt, 4));
         const tree = {
           x, y, z, height, giant, biomeId,
+          variant: biomeId === "snowy" && frostboundVariants.length
+            ? frostboundVariants[Math.floor(fixedTreeRoll(biomeIndex, attempt, 11) * frostboundVariants.length)]
+            : "base",
           rotation: fixedTreeRoll(biomeIndex, attempt, 5) * Math.PI * 2,
           widthX: profile.width * lerp(.86, 1.14, fixedTreeRoll(biomeIndex, attempt, 6)),
           widthZ: profile.width * lerp(.86, 1.14, fixedTreeRoll(biomeIndex, attempt, 7)),
@@ -5654,8 +5784,8 @@
     placements.forEach((tree) => {
       const gx = Math.floor((tree.x + HALF_WORLD) / chunkSize);
       const gz = Math.floor((tree.z + HALF_WORLD) / chunkSize);
-      const key = tree.biomeId + ":" + gx + ":" + gz;
-      if (!buckets.has(key)) buckets.set(key, { gx, gz, biomeId: tree.biomeId, trees: [] });
+      const key = tree.biomeId + ":" + tree.variant + ":" + gx + ":" + gz;
+      if (!buckets.has(key)) buckets.set(key, { gx, gz, biomeId: tree.biomeId, variant: tree.variant, trees: [] });
       buckets.get(key).trees.push(tree);
     });
 
@@ -5679,12 +5809,13 @@
       const centerX = -HALF_WORLD + (bucket.gx + .5) * chunkSize;
       const centerZ = -HALF_WORLD + (bucket.gz + .5) * chunkSize;
       const profile = FOREST_PROFILES[bucket.biomeId];
-      const metric = modelScaleRegistry.treeLod0;
-      const lodMeshes = lodSources.map((sources, lodIndex) => sources.map((source, sourceIndex) => {
-        const materialKey = bucket.biomeId + ":" + lodIndex + ":" + sourceIndex;
+      const family = lodFamilies[bucket.variant] || lodFamilies.base;
+      const metric = modelScaleRegistry[family.metricId];
+      const lodMeshes = family.lodSources.map((sources, lodIndex) => sources.map((source, sourceIndex) => {
+        const materialKey = bucket.biomeId + ":" + family.id + ":" + lodIndex + ":" + sourceIndex;
         if (!materialCache.has(materialKey)) materialCache.set(materialKey, treeLodMaterial(source, profile));
         const mesh = new THREE.InstancedMesh(source.geometry, materialCache.get(materialKey), bucket.trees.length);
-        mesh.name = "Tree LOD" + lodIndex + " " + bucket.biomeId + " " + source.name;
+        mesh.name = "Tree LOD" + lodIndex + " " + bucket.biomeId + " " + family.id + " " + source.name;
         bucket.trees.forEach((tree, index) => {
           const scaleY = tree.height / Math.max(.01, metric.sy);
           euler.set(tree.leanX, tree.rotation, tree.leanZ, "YXZ");
@@ -5713,7 +5844,7 @@
       const baseDensity = Math.max(.001, editorDocument.biomes[bucket.biomeId] && editorDocument.biomes[bucket.biomeId].treeDensity !== undefined
         ? editorDocument.biomes[bucket.biomeId].treeDensity : 1);
       forestChunks.push({
-        centerX, centerZ, biomeId: bucket.biomeId,
+        centerX, centerZ, biomeId: bucket.biomeId, variant: family.id,
         baseDensity, radius: chunkSize * Math.SQRT1_2,
         count: bucket.trees.length, baseCount: bucket.trees.length,
         lodMeshes, activeLod: -1
@@ -5721,20 +5852,25 @@
     });
 
     const giantCount = placements.filter((tree) => tree.giant).length;
+    const frostboundVariantCounts = frostboundVariants.reduce((result, id) => {
+      result[id] = placements.filter((tree) => tree.biomeId === "snowy" && tree.variant === id).length;
+      return result;
+    }, {});
     forestReport = {
-      profile: "owner-tree-lod-forest-v1", enabled: true, source: "tree_lods.zip",
+      profile: "owner-tree-lod-forest-v1", enabled: true, source: "tree_lods.zip + Frostbound winter blend",
       fixedContinent: true, generatedSeed: false, total: placements.length, byBiome,
       includedBiomes: TREE_LOD_FOREST_BIOME_IDS.slice(),
       excludedBiomes: Array.from(TREE_LOD_FOREST_EXCLUDED_BIOME_IDS),
       heroes: giantCount, assetHeroes: placements.length, proceduralHeroes: 0,
-      heroVariants: lodIds.slice(), lodTriangles: [21512, 8968, 4346],
+      heroVariants: Object.values(lodFamilies).flatMap((family) => family.lodIds), lodTriangles: [21512, 8968, 4346],
+      frostboundVariants: frostboundVariantCounts, missingFrostboundAssets,
       chunks: forestChunks.length, visible: 0,
       nearChunks: 0, midChunks: 0, farChunks: 0, culledChunks: forestChunks.length,
       nearTrees: 0, midTrees: 0, farTrees: 0,
       instancedMeshes: forestChunks.reduce((sum, chunk) => sum + chunk.lodMeshes.reduce((lodSum, meshes) => lodSum + meshes.length, 0), 0),
       heroColliders: colliders.length - colliderCountBefore,
       maxTrunkDiameter: placements.reduce((maximum, tree) => Math.max(maximum, tree.trunkDiameter), 0),
-      potentialDrawCalls: forestChunks.length * Math.max.apply(null, lodSources.map((sources) => sources.length))
+      potentialDrawCalls: forestChunks.length * Math.max.apply(null, Object.values(lodFamilies).flatMap((family) => family.lodSources.map((sources) => sources.length)))
     };
     updateAncientForestVisibility(true);
   }
@@ -5928,6 +6064,7 @@
     });
     scene.add(root);
     importedModelInstances += 1;
+    if (key === "flagPackBanner") assetPackUsage.hostileBannerPlacements += 1;
     if (TREE_MODEL_IDS.has(key)) recordTreePopulation(biomeIdAt(x, z), 1, "pack-model");
     registerAdminEntity(root, {
       id: adminId, label: root.name, type: "model", category: "Models", modelSlot: key
@@ -6612,24 +6749,59 @@
     const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(.045, .045, 4.9, 6), poleMaterial);
     crossbar.rotation.z = Math.PI / 2;
     crossbar.position.set(2.25, height - 1.05, 0);
-    const clothGeometry = new THREE.PlaneGeometry(4.7, 2.8, 8, 4);
-    const clothMaterial = new THREE.MeshStandardMaterial({
-      color: 0x367fd3, emissive: 0x12365f, emissiveIntensity: .42,
-      roughness: .74, metalness: .03, side: THREE.DoubleSide
+    let cloth = null;
+    let clothAssembly = null;
+    let basePositions = null;
+    let assetModel = false;
+    const suppliedCloth = cloneAssetPackModel("flagPackCloth", {
+      name: "Supplied Warden flag cloth",
+      scale: .92,
+      rotation: { y: Math.PI / 2 },
+      center: true,
+      assetPack: "Flags1_(AssetPack3).zip"
     });
-    const cloth = new THREE.Mesh(clothGeometry, clothMaterial);
-    cloth.position.set(2.42, height - 2.52, 0);
-    cloth.castShadow = !isCoarse;
-    const sigilMaterial = new THREE.MeshBasicMaterial({ color: 0xc7efff, transparent: true, opacity: .88, side: THREE.DoubleSide, depthWrite: false });
-    const sigil = new THREE.Mesh(new THREE.RingGeometry(.36, .49, 4), sigilMaterial);
-    sigil.position.set(2.12, height - 2.48, .025);
-    sigil.rotation.z = Math.PI / 4;
-    root.add(foot, pole, finial, crossbar, cloth, sigil);
+    if (suppliedCloth) {
+      assetModel = true;
+      clothAssembly = new THREE.Group();
+      clothAssembly.name = "Supplied Warden flag assembly";
+      clothAssembly.position.set(2.55, height - 2.5, 0);
+      clothAssembly.add(suppliedCloth);
+      cloth = suppliedCloth;
+      const suppliedEmblem = cloneAssetPackModel("flagPackEmblem", {
+        name: "Supplied Warden flag emblem",
+        rotation: { y: Math.PI / 2 },
+        center: true,
+        assetPack: "Flags1_(AssetPack3).zip"
+      });
+      if (suppliedEmblem) {
+        suppliedEmblem.position.set(-.34, -.02, .035);
+        clothAssembly.add(suppliedEmblem);
+        importedModelInstances += 1;
+      }
+      root.add(clothAssembly);
+      importedModelInstances += 1;
+    } else {
+      const clothGeometry = new THREE.PlaneGeometry(4.7, 2.8, 8, 4);
+      const clothMaterial = new THREE.MeshStandardMaterial({
+        color: 0x367fd3, emissive: 0x12365f, emissiveIntensity: .42,
+        roughness: .74, metalness: .03, side: THREE.DoubleSide
+      });
+      cloth = new THREE.Mesh(clothGeometry, clothMaterial);
+      cloth.position.set(2.42, height - 2.52, 0);
+      cloth.castShadow = !isCoarse;
+      basePositions = new Float32Array(clothGeometry.attributes.position.array);
+      const sigilMaterial = new THREE.MeshBasicMaterial({ color: 0xc7efff, transparent: true, opacity: .88, side: THREE.DoubleSide, depthWrite: false });
+      const sigil = new THREE.Mesh(new THREE.RingGeometry(.36, .49, 4), sigilMaterial);
+      sigil.position.set(2.12, height - 2.48, .025);
+      sigil.rotation.z = Math.PI / 4;
+      root.add(cloth, sigil);
+    }
+    root.add(foot, pole, finial, crossbar);
     scene.add(root);
     const flag = {
-      strongholdId: stronghold.id, root, cloth, baseY, height, raise: 0, target: 0,
+      strongholdId: stronghold.id, root, cloth, clothAssembly, assetModel, clothHeight: 2.8, baseY, height, raise: 0, target: 0,
       phase: seeded(salt + 3) * Math.PI * 2,
-      basePositions: new Float32Array(clothGeometry.attributes.position.array)
+      basePositions
     };
     root.visible = false;
     stronghold.captureFlag = flag;
@@ -6657,6 +6829,11 @@
       if (flag.raise < flag.target) flag.raise = Math.min(flag.target, flag.raise + dt / 1.65);
       const eased = 1 - Math.pow(1 - flag.raise, 3);
       flag.root.position.y = flag.baseY - flag.height * (1 - eased);
+      if (flag.assetModel && flag.clothAssembly) {
+        flag.clothAssembly.rotation.y = Math.sin(elapsed * 2.35 + flag.phase) * .045;
+        flag.clothAssembly.rotation.x = Math.sin(elapsed * 3.1 + flag.phase * .7) * .025;
+        return;
+      }
       const positions = flag.cloth.geometry.attributes.position;
       for (let index = 0; index < positions.count; index += 1) {
         const baseX = flag.basePositions[index * 3];
@@ -6672,15 +6849,28 @@
     const models = visualAssets.models || {};
     const choices = stronghold.kind === "camp" ? ["crateBig", "weaponrack", "tent"]
       : stronghold.kind === "ruin" || stronghold.kind === "shrine" || stronghold.kind === "graveyard" ? ["dngColumn", "statueColumnDamaged", "crateOpen"]
-      : ["flagRed", "bannerRed", "crateBig", "weaponrack"];
+      : ["flagPackBanner", "flagRed", "bannerRed", "crateBig", "weaponrack"];
     const available = choices.filter((key) => models[key]);
     if (!available.length) { endAdminPlacementContext(previousPlacementContext); return; }
+    if ((stronghold.kind === "keep" || stronghold.kind === "fort") && models.flagPackBanner) {
+      const bannerAngle = seeded(salt + 81) * Math.PI * 2;
+      const bannerRadius = stronghold.kind === "keep" ? 9.4 : 7.8;
+      placePackModel(
+        "flagPackBanner",
+        stronghold.x + Math.cos(bannerAngle) * bannerRadius,
+        stronghold.z + Math.sin(bannerAngle) * bannerRadius,
+        canonicalModelScale("flagPackBanner"),
+        bannerAngle + Math.PI / 2,
+        {}
+      );
+    }
     const count = stronghold.kind === "keep" || stronghold.kind === "fort" ? 4 : 2;
     for (let index = 0; index < count; index += 1) {
       const key = available[Math.floor(seeded(salt + 90 + index * 5) * available.length)];
       const angle = seeded(salt + 91 + index * 5) * Math.PI * 2;
       const radius = 3.8 + seeded(salt + 92 + index * 5) * 3.4;
-      const scale = key.indexOf("dng") === 0 ? POI_SCALES.dungeon : key.indexOf("statue") === 0 ? POI_SCALES.nature : key.indexOf("banner") === 0 ? POI_SCALES.town : POI_SCALES.medieval;
+      const scale = key === "flagPackBanner" ? canonicalModelScale("flagPackBanner", .9)
+        : key.indexOf("dng") === 0 ? POI_SCALES.dungeon : key.indexOf("statue") === 0 ? POI_SCALES.nature : key.indexOf("banner") === 0 ? POI_SCALES.town : POI_SCALES.medieval;
       placePackModel(key, stronghold.x + Math.cos(angle) * radius, stronghold.z + Math.sin(angle) * radius, scale, seeded(salt + 93 + index * 5) * Math.PI * 2, {});
     }
     endAdminPlacementContext(previousPlacementContext);
@@ -7902,6 +8092,25 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
     staff.add(shaft, crystal, crown);
     weaponModels.staff = staff;
 
+    const suppliedWeaponSpecs = {
+      blade: { modelId: "weaponBlade", rotation: { z: Math.PI }, alignTop: -.28 },
+      bow: { modelId: "weaponBow", center: true, position: new THREE.Vector3(0, -1.08, 0), rotation: { z: -.08 } },
+      axe: { modelId: "weaponAxe", rotation: { z: Math.PI }, alignTop: -.25 },
+      staff: { modelId: "weaponStaff", alignTop: -.08 }
+    };
+    Object.keys(suppliedWeaponSpecs).forEach((weaponId) => {
+      const spec = suppliedWeaponSpecs[weaponId];
+      const supplied = cloneAssetPackModel(spec.modelId, {
+        name: "Supplied " + weaponId + " weapon",
+        rotation: spec.rotation,
+        center: spec.center,
+        position: spec.position,
+        alignTop: spec.alignTop,
+        assetPack: "MedievalWeapons1_(AssetPack10).zip"
+      });
+      if (supplied) weaponModels[weaponId] = supplied;
+    });
+
     WEAPON_IDS.forEach((id) => { weaponModels[id].visible = id === player.activeWeapon; weaponMount.add(weaponModels[id]); });
 
     const capeGeometry = new THREE.BufferGeometry();
@@ -7967,7 +8176,7 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
     player.rightLeg = rightLeg;
     player.leftArm = leftArm;
     player.rightArm = rightArm;
-    player.sword = sword;
+    player.sword = weaponModels.blade;
     player.weaponModels = weaponModels;
     player.weaponMount = weaponMount;
     player.cape = cape;
@@ -10723,7 +10932,7 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
     capePosition.setZ(2, .61 + sway);
     capePosition.setZ(3, .61 + sway);
     capePosition.needsUpdate = true;
-    if (player.weaponModels.staff) player.weaponModels.staff.children.forEach((part, index) => { if (index > 0) part.rotation.y += dt * (1.4 + index * .25); });
+    if (player.weaponModels.staff && !player.weaponModels.staff.userData.assetPack) player.weaponModels.staff.children.forEach((part, index) => { if (index > 0) part.rotation.y += dt * (1.4 + index * .25); });
     if (player.modelMixer) {
       let modelState = "idle";
       if (player.dodgeTime > 0) modelState = "roll";
@@ -10915,6 +11124,22 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
   function createWeaponProjectile(weaponId, weapon) {
     const material = new THREE.MeshBasicMaterial({ color: weapon.color, transparent: true, opacity: .96 });
     if (weaponId === "bow") {
+      const suppliedArrow = cloneAssetPackModel("weaponArrow", {
+        name: "Supplied arrow projectile",
+        rotation: { y: Math.PI },
+        center: true,
+        castShadow: false,
+        receiveShadow: false,
+        assetPack: "MedievalWeapons1_(AssetPack10).zip"
+      });
+      if (suppliedArrow) {
+        const projectile = new THREE.Group();
+        projectile.name = "Supplied arrow projectile root";
+        projectile.userData.assetPack = "MedievalWeapons1_(AssetPack10).zip";
+        projectile.userData.assetModelSlot = "weaponArrow";
+        projectile.add(suppliedArrow);
+        return projectile;
+      }
       const arrow = new THREE.Group();
       const shaft = new THREE.Mesh(new THREE.CylinderGeometry(.018, .018, 1.3, 5), material);
       shaft.rotation.x = Math.PI / 2;
@@ -10925,6 +11150,23 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
       return arrow;
     }
     if (weaponId === "axe") {
+      const suppliedAxe = cloneAssetPackModel("weaponAxe", {
+        name: "Supplied thrown axe",
+        scale: .58,
+        rotation: { z: Math.PI },
+        center: true,
+        castShadow: false,
+        receiveShadow: false,
+        assetPack: "MedievalWeapons1_(AssetPack10).zip"
+      });
+      if (suppliedAxe) {
+        const projectile = new THREE.Group();
+        projectile.name = "Supplied thrown axe root";
+        projectile.userData.assetPack = "MedievalWeapons1_(AssetPack10).zip";
+        projectile.userData.assetModelSlot = "weaponAxe";
+        projectile.add(suppliedAxe);
+        return projectile;
+      }
       const projectile = new THREE.Group();
       const handle = new THREE.Mesh(new THREE.BoxGeometry(.065, .8, .065), material);
       const head = new THREE.Mesh(new THREE.ConeGeometry(.22, .48, 4), material);
@@ -12531,6 +12773,17 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
         importedModels: visualAssets.models ? Object.keys(visualAssets.models).length : 0,
         importedModelInstances,
         modelSlots: visualAssets.modelPaths ? Object.keys(visualAssets.modelPaths) : [],
+        assetPacks: {
+          medievalWeapons: {
+            modelSlots: ["weaponBlade", "weaponBow", "weaponArrow", "weaponAxe", "weaponStaff"].filter((id) => Boolean(visualAssets.models && visualAssets.models[id])),
+            equipped: WEAPON_IDS.filter((id) => Boolean(player.weaponModels[id] && player.weaponModels[id].userData.assetPack))
+          },
+          flags: {
+            modelSlots: ["flagPackCloth", "flagPackBanner", "flagPackEmblem"].filter((id) => Boolean(visualAssets.models && visualAssets.models[id])),
+            capturedUsingAssets: captureFlags.filter((flag) => flag.assetModel).length,
+            hostileBannerPlacements: assetPackUsage.hostileBannerPlacements
+          }
+        },
         canonicalScale: {
           unitMeters: CANONICAL_WORLD_SCALE.unitMeters,
           wardenHeight: CANONICAL_WORLD_SCALE.wardenHeight,
@@ -12913,7 +13166,7 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
       forestDebug: () => Object.assign({}, forestReport, {
         lodChunks: forestChunks.map((chunk) => ({
           x: chunk.centerX, z: chunk.centerZ, count: chunk.count,
-          biome: chunk.biomeId,
+          biome: chunk.biomeId, variant: chunk.variant || "base",
           lod: chunk.activeLod === 0 ? "LOD0" : chunk.activeLod === 1 ? "LOD1" : chunk.activeLod === 2 ? "LOD2" : "culled"
         }))
       }),
@@ -12972,7 +13225,7 @@ transformed = mix(transformed, wardenArmPosition, wardenArmMask);`);
         strongholdId: flag.strongholdId, visible: flag.root.visible, raised: flag.raise, target: flag.target,
         minimapMarker: Boolean(flag.root.visible && flag.target > 0),
         x: flag.root.position.x, y: flag.root.position.y, z: flag.root.position.z, baseY: flag.baseY,
-        height: flag.height, poleHeight: flag.height, clothHeight: flag.cloth.geometry.parameters.height
+        height: flag.height, poleHeight: flag.height, clothHeight: flag.clothHeight, assetModel: flag.assetModel
       })),
       skillSchema: () => skillTree.map((branch) => ({ id: branch.id, scope: branch.scope || "permanent", nodes: branch.nodes.map((node) => ({ id: node.id, scope: node.scope, maxRank: node.maxRank, cost: node.cost, requiredMastery: node.requiredMastery || null })) })),
       platformProbe: () => {

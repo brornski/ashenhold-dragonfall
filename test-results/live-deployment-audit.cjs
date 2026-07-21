@@ -140,7 +140,7 @@ function inspectWorldOverrides(source) {
 }
 
 async function run() {
-  const [root, app, worldOverrides, monster, warden, normal, desertSkybox, moonSkybox, shoreSkybox, snowySkybox, mountainSkybox, treeLod, treeGeometry, treeTexture, manifest, ...moduleResponses] = await Promise.all([
+  const [root, app, worldOverrides, monster, warden, normal, desertSkybox, moonSkybox, shoreSkybox, snowySkybox, mountainSkybox, treeLod, treeGeometry, treeTexture, weaponModel, weaponTexture, flagModel, flagTexture, manifest, ...moduleResponses] = await Promise.all([
     request("/"),
     request("/app.js"),
     request("/world-overrides.js"),
@@ -155,6 +155,10 @@ async function run() {
     request("/assets/models/tree-lods/tree_LOD0.gltf"),
     request("/assets/models/tree-lods/tree_LOD0.bin"),
     request("/assets/models/tree-lods/textures/leaves-color.webp"),
+    request("/assets/models/medieval-weapons-pack/weapon-blade.glb"),
+    request("/assets/models/medieval-weapons-pack/textures/weapon-atlas-a1.webp"),
+    request("/assets/models/flags-pack/flag-cloth.glb"),
+    request("/assets/models/flags-pack/textures/warden-flag.webp"),
     request("/manifest.json"),
     ...multiplayerModules.map(([, path]) => request(path))
   ]);
@@ -206,6 +210,10 @@ async function run() {
     treeLodPack200: treeLod.status === 200 && /"meshes"\s*:/.test(treeLod.body)
       && treeGeometry.status === 200 && Number(treeGeometry.headers["content-length"] || treeGeometry.body.length) > 600000
       && treeTexture.status === 200 && Number(treeTexture.headers["content-length"] || treeTexture.body.length) > 80000,
+    suppliedWeaponPack200: weaponModel.status === 200 && Number(weaponModel.headers["content-length"] || weaponModel.body.length) > 30000
+      && weaponTexture.status === 200 && Number(weaponTexture.headers["content-length"] || weaponTexture.body.length) > 100000,
+    suppliedFlagPack200: flagModel.status === 200 && Number(flagModel.headers["content-length"] || flagModel.body.length) > 9000
+      && flagTexture.status === 200 && Number(flagTexture.headers["content-length"] || flagTexture.body.length) > 5000,
     manifest200: manifest.status === 200 && /Ashenhold/.test(manifest.body),
     secureOrigin: baseUrl.protocol === "https:",
     forbiddenFiles404: forbidden.every((result) => result.status === 404),
@@ -240,6 +248,10 @@ async function run() {
       treeLod: treeLod.status,
       treeGeometry: treeGeometry.status,
       treeTexture: treeTexture.status,
+      weaponModel: weaponModel.status,
+      weaponTexture: weaponTexture.status,
+      flagModel: flagModel.status,
+      flagTexture: flagTexture.status,
       manifest: manifest.status,
       multiplayerModules: Object.fromEntries(Object.entries(moduleResults).map(([name, result]) => [name, result.status])),
       forbidden: Object.fromEntries(forbidden.map((result) => [result.path, result.status])),

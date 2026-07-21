@@ -125,6 +125,21 @@ The previous Quaternius Warrior asset remains preserved in the repository under 
 - The supplied tree is instantiated only in Drowned Coast, Verdant Ruins, Frostbound Wilds, and Sky-Sunder Peaks. Ember Dunes and Moonfall are excluded from this forest layer.
 - Local provenance and authorization notice: `assets/models/tree-lods/LICENSE-USER-SUPPLIED.md`.
 
+## User-supplied Frostbound tree blend
+
+- Runtime directory: `assets/models/frostbound-trees/`.
+- Source archives: `christmas trees.zip` and `winter tree yellow.zip`, supplied by the project owner with three GLB LODs apiece and no original author or license metadata.
+- Frostbound Wilds deterministically blends the green Christmas and yellow winter families across its existing fixed placements. Geometry is retained; repeated textures were externalized and transcoded to compact WebP. Drowned Coast, Verdant Ruins, Sky-Sunder Peaks, Ember Dunes, and Moonfall keep their prior tree policy.
+- Local provenance, adaptation, authorization, and redistribution caution: `assets/models/frostbound-trees/LICENSE-USER-SUPPLIED.md`.
+
+## User-supplied medieval weapons and flags
+
+- Runtime weapon directory: `assets/models/medieval-weapons-pack/`.
+- Source archive: `MedievalWeapons1_(AssetPack10).zip`, supplied by the project owner. Sword, bow, arrow, double axe, and staff FBX meshes were converted to compact GLB and paired with three downsampled WebP color atlases. These models replace the four equipped Warden weapon visuals, plus bow and thrown-axe projectiles, while procedural fallbacks remain available.
+- Runtime flag directory: `assets/models/flags-pack/`.
+- Source archive: `Flags1_(AssetPack3).zip`, supplied by the project owner. Flag, banner, and emblem FBX meshes were converted to compact GLB; selected blue/white Warden and red/black hostile textures were transcoded to WebP. Captured shrines/graveyards use the Warden flag and emblem, while hostile forts and the keep display the banner.
+- Neither source archive contained original author, storefront, or license metadata. Local provenance, adaptation, authorization, and redistribution cautions are retained at `assets/models/medieval-weapons-pack/LICENSE-USER-SUPPLIED.md` and `assets/models/flags-pack/LICENSE-USER-SUPPLIED.md`.
+
 ## Project-created visual assets
 
 The sky, terrain, stone, cliff, interface artwork, procedural geometry, shaders, and synthesized audio in this repository were created or generated for the Ashenhold project and are shipped locally. The user-provided `assets/dragons.png` remains a local design reference only; it is no longer used by the game and is excluded from production deployments.

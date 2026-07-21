@@ -18,16 +18,19 @@ async function boot(page) {
   await page.goto(`${BASE}?test`, { waitUntil: "networkidle", timeout: 90000 });
   await page.waitForFunction(() => window.ashenholdGame?.snapshot().state === "title", null, { timeout: 70000 });
   await page.evaluate(() => window.__ASHENHOLD_TEST__.start());
-  await page.waitForFunction(() => window.ashenholdGame.snapshot().state === "playing");
+  await page.waitForFunction(() => window.ashenholdGame.snapshot().state === "playing", null, { timeout: 70000 });
 }
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.ASHENHOLD_CHROMIUM_EXECUTABLE || undefined });
   const page = await browser.newPage({ viewport: { width: 1600, height: 960 } });
   const mobile = await browser.newPage({ viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true });
   const desktopDiagnostics = diagnostics(page);
   const mobileDiagnostics = diagnostics(mobile);
-  await Promise.all([boot(page), boot(mobile)]);
+  // The Warden source is intentionally high detail; hydrate one viewport at a time so
+  // this regression measures motion instead of racing two identical cold asset boots.
+  await boot(page);
+  await boot(mobile);
 
   const chest = await page.evaluate(() => {
     const test = window.__ASHENHOLD_TEST__;
@@ -48,7 +51,7 @@ async function boot(page) {
         return { before, after: test.waterDebug(), snapshot: window.ashenholdGame.snapshot() };
       }, { x: water.route.wet.x, z: water.route.wet.z })
     : null;
-  if (waterVisual) await page.screenshot({ path: "test-results/motion-stylized-water.png" });
+  if (waterVisual) await page.screenshot({ path: "test-results/motion-stylized-water.png", timeout: 90000 });
 
   const desktopSkillsButton = await page.locator("#skillsButton").boundingBox();
   await page.click("#skillsButton");
@@ -69,7 +72,7 @@ async function boot(page) {
       nodeHeight: node?.getBoundingClientRect().height || 0
     };
   });
-  await page.screenshot({ path: "test-results/motion-skills-desktop.png", fullPage: true });
+  await page.screenshot({ path: "test-results/motion-skills-desktop.png", fullPage: true, timeout: 90000 });
   await page.click("#closeSkillsButton");
   const returnedToGame = await page.evaluate(() => window.ashenholdGame.snapshot().state === "playing");
   await page.keyboard.press("k");
@@ -159,7 +162,7 @@ async function boot(page) {
       shellWithinViewport: shell.left >= 0 && shell.top >= 0 && shell.right <= innerWidth + 1 && shell.bottom <= innerHeight + 1
     };
   });
-  await mobile.screenshot({ path: "test-results/motion-skills-mobile.png" });
+  await mobile.screenshot({ path: "test-results/motion-skills-mobile.png", timeout: 90000 });
 
   const slideDistance = Math.hypot(acceleratedSlide.position.x - slideStart.x, acceleratedSlide.position.z - slideStart.z);
   const slideJumpDistance = Math.hypot(slideJump.position.x - preSlideJump.x, slideJump.position.z - preSlideJump.z);
